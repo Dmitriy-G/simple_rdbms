@@ -1,0 +1,18 @@
+[package]
+name = "executor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+common = { workspace = true }
+types = { workspace = true }
+catalog = { workspace = true }
+storage = { workspace = true }
+txn = { workspace = true }
+planner = { workspace = true }
+thiserror = { workspace = true }

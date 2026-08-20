@@ -1,0 +1,5 @@
+[build]
+# Keep workspace builds hermetic and fast; no target overrides needed yet.
+
+[term]
+color = "auto"

@@ -1,0 +1,42 @@
+graph TD
+    common[common]
+    types[types]
+    storage[storage]
+    catalog[catalog]
+    sql[sql]
+    txn[txn]
+    planner[planner]
+    executor[executor]
+    engine[engine]
+    cli[cli]
+
+    types --> common
+    storage --> common
+    storage --> types
+    catalog --> common
+    catalog --> types
+    catalog --> storage
+    sql --> common
+    sql --> types
+    txn --> common
+    txn --> storage
+    planner --> common
+    planner --> types
+    planner --> catalog
+    planner --> sql
+    executor --> common
+    executor --> types
+    executor --> catalog
+    executor --> storage
+    executor --> txn
+    executor --> planner
+    engine --> common
+    engine --> types
+    engine --> storage
+    engine --> catalog
+    engine --> sql
+    engine --> txn
+    engine --> planner
+    engine --> executor
+    cli --> engine
+    cli --> common
