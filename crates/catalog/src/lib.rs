@@ -10,6 +10,7 @@
 mod catalog;
 mod column;
 mod error;
+mod persist;
 mod schema;
 mod table_info;
 

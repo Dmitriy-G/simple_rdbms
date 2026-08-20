@@ -26,6 +26,16 @@ pub enum StorageError {
     /// The requested page does not exist in the database file.
     #[error("page {0} not found")]
     PageNotFound(u32),
+
+    /// A tuple's encoded bytes are larger than a single page can ever hold,
+    /// even empty, so no amount of retrying onto a fresh page would help.
+    #[error("tuple of {size} bytes exceeds the {max}-byte maximum for a single page")]
+    TupleTooLarge {
+        /// The tuple's encoded size, in bytes.
+        size: usize,
+        /// The largest tuple a single empty page can hold.
+        max: usize,
+    },
 }
 
 impl From<StorageError> for common::Error {

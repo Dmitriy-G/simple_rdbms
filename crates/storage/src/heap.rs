@@ -164,22 +164,29 @@ impl<'a> SlottedPage<'a> {
     }
 }
 
+/// The largest tuple a single, otherwise-empty page can ever hold: header,
+/// one slot entry, and the tuple's own bytes must all fit in `PAGE_SIZE`.
+/// A tuple larger than this can never be inserted, no matter how many pages
+/// are tried, so `TableHeap::insert_tuple` rejects it up front instead of
+/// looping forever allocating pages for it.
+pub const MAX_TUPLE_SIZE: usize = crate::page::PAGE_SIZE - HEADER_SIZE - SLOT_SIZE;
+
 /// The on-disk heap: an unordered collection of a table's tuples, stored as
 /// a singly-linked chain of slotted pages starting at `first_page_id`. This
 /// is the default storage for a table before (or in place of) any index.
-pub struct HeapFile<'pool> {
+pub struct TableHeap<'pool> {
     buffer_pool: &'pool BufferPool,
     first_page_id: PageId,
 }
 
-impl<'pool> HeapFile<'pool> {
-    /// Opens the heap file whose first page is `first_page_id`, backed by
+impl<'pool> TableHeap<'pool> {
+    /// Opens the table heap whose first page is `first_page_id`, backed by
     /// `buffer_pool`.
     pub fn open(buffer_pool: &'pool BufferPool, first_page_id: PageId) -> Self {
         Self { buffer_pool, first_page_id }
     }
 
-    /// Creates a brand-new, empty heap file (allocates its first page) and
+    /// Creates a brand-new, empty table heap (allocates its first page) and
     /// returns a handle to it.
     pub fn create(buffer_pool: &'pool BufferPool) -> Result<Self, StorageError> {
         let (page_id, mut guard) = buffer_pool.new_page()?;
@@ -195,9 +202,16 @@ impl<'pool> HeapFile<'pool> {
     }
 
     /// Inserts `tuple_bytes` into the heap, returning the `Rid` at which it
-    /// now lives. Walks the page chain for free space, appending a new page
-    /// if none is found.
-    pub fn insert(&mut self, tuple_bytes: &[u8]) -> Result<Rid, StorageError> {
+    /// now lives. Tries the last-known page first, allocating and linking a
+    /// new one if it doesn't fit there.
+    pub fn insert_tuple(&mut self, tuple_bytes: &[u8]) -> Result<Rid, StorageError> {
+        if tuple_bytes.len() > MAX_TUPLE_SIZE {
+            return Err(StorageError::TupleTooLarge {
+                size: tuple_bytes.len(),
+                max: MAX_TUPLE_SIZE,
+            });
+        }
+
         let mut current = self.first_page_id;
         loop {
             let mut guard = self.buffer_pool.fetch_page(current)?;
@@ -236,20 +250,18 @@ impl<'pool> HeapFile<'pool> {
         Ok(new_page_id)
     }
 
-    /// Reads the tuple bytes at `rid`.
-    pub fn get(&mut self, rid: Rid) -> Result<Vec<u8>, StorageError> {
+    /// Reads the tuple bytes at `rid`, or `None` if that slot holds no live
+    /// tuple (deleted, or never written).
+    pub fn get_tuple(&self, rid: Rid) -> Result<Option<Vec<u8>>, StorageError> {
         let guard = self.buffer_pool.fetch_page(rid.page_id)?;
         let bytes = slotted_read(guard.page().data(), rid.slot).map(|b| b.to_vec());
         drop(guard);
         self.buffer_pool.unpin_page(rid.page_id, false)?;
-        bytes.ok_or(StorageError::CorruptPage {
-            page_id: rid.page_id.0,
-            reason: format!("no live tuple at slot {}", rid.slot),
-        })
+        Ok(bytes)
     }
 
     /// Deletes the tuple at `rid`.
-    pub fn delete(&mut self, rid: Rid) -> Result<(), StorageError> {
+    pub fn delete_tuple(&mut self, rid: Rid) -> Result<(), StorageError> {
         let mut guard = self.buffer_pool.fetch_page(rid.page_id)?;
         SlottedPage::new(guard.page_mut()).delete(rid.slot);
         drop(guard);
@@ -258,26 +270,36 @@ impl<'pool> HeapFile<'pool> {
     }
 
     /// Returns an iterator over every live tuple in the heap, in physical
-    /// page/slot order.
-    pub fn iter(&mut self) -> HeapIterator<'_, 'pool> {
-        let first = self.first_page_id;
-        HeapIterator { heap: self, current_page: Some(first), slot: 0 }
+    /// page/slot order. Holds a page pinned only while reading that page's
+    /// tuples out, never across the whole scan.
+    pub fn iter(&self) -> TableIter<'_, 'pool> {
+        TableIter {
+            heap: self,
+            current_page: Some(self.first_page_id),
+            buffered: std::collections::VecDeque::new(),
+        }
     }
 }
 
-/// Walks a `HeapFile` page by page, slot by slot, yielding `(Rid, Vec<u8>)`
-/// pairs for every live tuple. Backs the executor's `SeqScan` operator.
-pub struct HeapIterator<'a, 'pool> {
-    heap: &'a mut HeapFile<'pool>,
+/// Walks a `TableHeap` page by page, yielding `(Rid, Vec<u8>)` pairs for
+/// every live tuple. Backs the executor's `SeqScan` operator. Each page is
+/// fetched once, its live tuples copied out, and unpinned before the next
+/// page is fetched — no page stays pinned across the whole scan.
+pub struct TableIter<'a, 'pool> {
+    heap: &'a TableHeap<'pool>,
     current_page: Option<PageId>,
-    slot: u16,
+    buffered: std::collections::VecDeque<(Rid, Vec<u8>)>,
 }
 
-impl Iterator for HeapIterator<'_, '_> {
+impl Iterator for TableIter<'_, '_> {
     type Item = Result<(Rid, Vec<u8>), StorageError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
+            if let Some(entry) = self.buffered.pop_front() {
+                return Some(Ok(entry));
+            }
+
             let page_id = self.current_page?;
             let guard = match self.heap.buffer_pool.fetch_page(page_id) {
                 Ok(guard) => guard,
@@ -285,28 +307,18 @@ impl Iterator for HeapIterator<'_, '_> {
             };
             let bytes = guard.page().data();
             let count = slotted_slot_count(bytes);
-
-            if self.slot >= count {
-                let next = slotted_next_page_id(bytes);
-                drop(guard);
-                if let Err(err) = self.heap.buffer_pool.unpin_page(page_id, false) {
-                    return Some(Err(err));
+            for slot in 0..count {
+                if let Some(data) = slotted_read(bytes, slot) {
+                    self.buffered.push_back((Rid::new(page_id, slot), data.to_vec()));
                 }
-                self.current_page = (next != NO_NEXT_PAGE).then_some(next);
-                self.slot = 0;
-                continue;
             }
-
-            let rid = Rid::new(page_id, self.slot);
-            let entry = slotted_read(bytes, self.slot).map(|b| b.to_vec());
-            self.slot += 1;
+            let next = slotted_next_page_id(bytes);
             drop(guard);
+
             if let Err(err) = self.heap.buffer_pool.unpin_page(page_id, false) {
                 return Some(Err(err));
             }
-            if let Some(data) = entry {
-                return Some(Ok((rid, data)));
-            }
+            self.current_page = (next != NO_NEXT_PAGE).then_some(next);
         }
     }
 }

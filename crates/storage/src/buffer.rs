@@ -119,6 +119,18 @@ impl BufferPool {
         Ok(())
     }
 
+    /// The catalog's first page, as recorded in the database header, or
+    /// `None` if the catalog has not been persisted yet.
+    pub fn catalog_first_page(&self) -> Option<PageId> {
+        self.disk_manager.borrow().catalog_first_page()
+    }
+
+    /// Records `page_id` as the catalog's first page in the database
+    /// header, so a reopen can find it again.
+    pub fn set_catalog_first_page(&self, page_id: PageId) -> Result<(), StorageError> {
+        self.disk_manager.borrow_mut().set_catalog_first_page(page_id)
+    }
+
     /// Finds a frame to hold a newly-fetched or newly-allocated page:
     /// reuses a never-used frame if one is free, otherwise asks the
     /// replacer for an evictable victim, flushing it first if dirty.

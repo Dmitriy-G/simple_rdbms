@@ -21,7 +21,7 @@ impl Schema {
 
     /// The ordinal position of the column named `name`, or `None` if no
     /// such column exists.
-    pub fn column_index(&self, _name: &str) -> Option<usize> {
-        todo!("linear scan columns for a case-sensitive name match")
+    pub fn column_index(&self, name: &str) -> Option<usize> {
+        self.columns.iter().position(|column| column.name == name)
     }
 }

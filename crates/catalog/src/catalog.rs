@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
-use common::TableId;
+use common::{PageId, TableId};
+use storage::buffer::BufferPool;
+use storage::heap::TableHeap;
 
 use crate::error::CatalogError;
+use crate::persist::{decode_table_info, encode_table_info};
 use crate::schema::Schema;
 use crate::table_info::TableInfo;
 
@@ -10,24 +13,70 @@ use crate::table_info::TableInfo;
 /// keyed by name. Sits between the planner/executor and `storage`,
 /// resolving table and column names to the physical locations operators
 /// read from and write to.
+///
+/// Persisted as an ordinary `TableHeap` of its own, rooted at the database
+/// header's `catalog_first_page`: every `create_table` call appends an
+/// encoded `TableInfo` row to that heap, and `open` replays it to rebuild
+/// the in-memory index. A `Catalog` built with `new` instead of `open` has
+/// no catalog heap yet; `create_table` provisions one (and records its
+/// root page in the header) the first time it's called with a live
+/// `BufferPool`.
 #[derive(Debug, Default)]
 pub struct Catalog {
     tables_by_name: HashMap<String, TableInfo>,
-    #[allow(dead_code)]
+    tables_by_id: HashMap<TableId, String>,
     next_table_id: u32,
+    catalog_first_page: Option<PageId>,
 }
 
 impl Catalog {
-    /// Creates an empty catalog.
+    /// Creates an empty catalog with no storage backing yet.
     pub fn new() -> Self {
-        Self { tables_by_name: HashMap::new(), next_table_id: 0 }
+        Self::default()
+    }
+
+    /// Opens the catalog backed by `buffer_pool`: finds (or provisions) its
+    /// persisted table heap and loads every `TableInfo` row from it into
+    /// memory.
+    pub fn open(buffer_pool: &BufferPool) -> Result<Self, CatalogError> {
+        let mut catalog = Self::new();
+        let catalog_first_page = catalog.ensure_catalog_heap(buffer_pool)?;
+
+        let heap = TableHeap::open(buffer_pool, catalog_first_page);
+        for entry in heap.iter() {
+            let (_, bytes) = entry?;
+            let info = decode_table_info(&bytes)?;
+            catalog.next_table_id = catalog.next_table_id.max(info.table_id.0 + 1);
+            catalog.tables_by_id.insert(info.table_id, info.name.clone());
+            catalog.tables_by_name.insert(info.name.clone(), info);
+        }
+        Ok(catalog)
     }
 
     /// Registers a new table with the given `name` and `schema`, allocating
-    /// its heap storage and a fresh `TableId`.
-    pub fn create_table(&mut self, name: &str, schema: Schema) -> Result<TableId, CatalogError> {
-        let _ = (name, schema);
-        todo!("check for a name collision, allocate the heap's first page, insert a TableInfo")
+    /// its heap storage and a fresh `TableId`, and persists its catalog row.
+    pub fn create_table(
+        &mut self,
+        buffer_pool: &BufferPool,
+        name: &str,
+        schema: Schema,
+    ) -> Result<&TableInfo, CatalogError> {
+        if self.tables_by_name.contains_key(name) {
+            return Err(CatalogError::TableAlreadyExists(name.to_string()));
+        }
+
+        let table_id = TableId(self.next_table_id);
+        let table_heap = TableHeap::create(buffer_pool)?;
+        let info = TableInfo::new(table_id, name, schema, table_heap.first_page_id());
+
+        let catalog_first_page = self.ensure_catalog_heap(buffer_pool)?;
+        let mut catalog_heap = TableHeap::open(buffer_pool, catalog_first_page);
+        catalog_heap.insert_tuple(&encode_table_info(&info))?;
+
+        self.next_table_id += 1;
+        self.tables_by_id.insert(table_id, name.to_string());
+        self.tables_by_name.insert(name.to_string(), info);
+        Ok(&self.tables_by_name[name])
     }
 
     /// Looks up a table's metadata by name.
@@ -35,10 +84,45 @@ impl Catalog {
         self.tables_by_name.get(name).ok_or_else(|| CatalogError::TableNotFound(name.to_string()))
     }
 
+    /// Looks up a table's metadata by its stable id.
+    pub fn get_table_by_id(&self, table_id: TableId) -> Result<&TableInfo, CatalogError> {
+        let name = self
+            .tables_by_id
+            .get(&table_id)
+            .ok_or_else(|| CatalogError::TableNotFound(format!("table id {}", table_id.0)))?;
+        self.tables_by_name.get(name).ok_or_else(|| CatalogError::TableNotFound(name.clone()))
+    }
+
+    /// Every registered table's name, sorted for a deterministic order.
+    pub fn table_names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.tables_by_name.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        names
+    }
+
     /// Removes a table's metadata from the catalog. Does not reclaim its
     /// heap storage.
     pub fn drop_table(&mut self, name: &str) -> Result<(), CatalogError> {
         let _ = name;
         todo!("remove the entry from tables_by_name, erroring if absent")
+    }
+
+    /// Returns the catalog's own table heap's root page, provisioning one
+    /// (and recording it in the database header) if this is the first call
+    /// against a catalog that didn't come from `open`.
+    fn ensure_catalog_heap(&mut self, buffer_pool: &BufferPool) -> Result<PageId, CatalogError> {
+        if let Some(page_id) = self.catalog_first_page {
+            return Ok(page_id);
+        }
+        if let Some(page_id) = buffer_pool.catalog_first_page() {
+            self.catalog_first_page = Some(page_id);
+            return Ok(page_id);
+        }
+
+        let heap = TableHeap::create(buffer_pool)?;
+        let page_id = heap.first_page_id();
+        buffer_pool.set_catalog_first_page(page_id)?;
+        self.catalog_first_page = Some(page_id);
+        Ok(page_id)
     }
 }

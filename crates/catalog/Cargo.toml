@@ -13,3 +13,6 @@ common = { workspace = true }
 types = { workspace = true }
 storage = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

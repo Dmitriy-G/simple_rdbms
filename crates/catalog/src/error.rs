@@ -20,6 +20,16 @@ pub enum CatalogError {
         /// The missing column's name.
         column: String,
     },
+
+    /// The storage layer failed while reading or writing the catalog's own
+    /// persisted table heap.
+    #[error("storage error: {0}")]
+    Storage(#[from] storage::StorageError),
+
+    /// A persisted catalog row could not be decoded back into a
+    /// `TableInfo` (truncated row, invalid schema blob, unknown type tag).
+    #[error("corrupt catalog data: {0}")]
+    Corrupt(String),
 }
 
 impl From<CatalogError> for common::Error {
