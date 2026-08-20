@@ -22,6 +22,12 @@ impl DataType {
     /// variable-length type like `Varchar`, which is stored out-of-line
     /// with a length prefix.
     pub fn fixed_width(&self) -> Option<usize> {
-        todo!("return Some(width) for fixed-size types, None for Varchar")
+        match self {
+            DataType::Boolean => Some(1),
+            DataType::Integer => Some(4),
+            DataType::BigInt => Some(8),
+            DataType::Double => Some(8),
+            DataType::Varchar(_) => None,
+        }
     }
 }

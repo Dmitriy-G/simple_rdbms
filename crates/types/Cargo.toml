@@ -11,3 +11,6 @@ workspace = true
 [dependencies]
 common = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

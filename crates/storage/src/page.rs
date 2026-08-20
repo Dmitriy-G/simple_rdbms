@@ -1,4 +1,4 @@
-use common::PageId;
+use common::{FrameId, PageId};
 
 /// The fixed size, in bytes, of every page in the database file and the
 /// write-ahead log. Matches `common::DbConfig::DEFAULT_PAGE_SIZE`; a
@@ -45,9 +45,10 @@ impl Page {
 /// pin count, and dropping it decrements that count, making the frame
 /// eligible for eviction again once nothing holds a guard to it.
 pub struct PageGuard<'pool> {
-    page_id: PageId,
-    #[allow(dead_code)]
-    pool: &'pool crate::buffer::BufferPool,
+    pub(crate) page_id: PageId,
+    /// The frame in the pool's frame table currently holding this page.
+    pub(crate) frame_id: FrameId,
+    pub(crate) pool: &'pool crate::buffer::BufferPool,
 }
 
 impl<'pool> PageGuard<'pool> {
@@ -55,14 +56,8 @@ impl<'pool> PageGuard<'pool> {
     pub fn page_id(&self) -> PageId {
         self.page_id
     }
-
-    /// Read-only access to the pinned page.
-    pub fn page(&self) -> &Page {
-        todo!("borrow the page from the pool's frame table")
-    }
-
-    /// Mutable access to the pinned page, marking the frame dirty.
-    pub fn page_mut(&mut self) -> &mut Page {
-        todo!("borrow the page mutably and mark the frame dirty")
-    }
 }
+
+// `page()`, `page_mut()`, and `Drop` live in `crate::buffer` alongside
+// `BufferPool`, since they need access to its private frame table, pin
+// counts, and dirty flags.
