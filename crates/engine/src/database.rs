@@ -103,10 +103,10 @@ impl Database {
     /// up yet (that arrives with M7), so each call runs under a throwaway,
     /// never-committed `Transaction` purely to satisfy `ExecutorContext`'s
     /// shape.
-    fn run(&mut self, physical: PhysicalPlan) -> Result<Vec<Tuple>> {
+    fn run(&self, physical: PhysicalPlan) -> Result<Vec<Tuple>> {
         let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted);
         let mut executor = build_executor(physical);
-        let mut ctx = ExecutorContext::new(&self.catalog, &mut self.buffer_pool, &txn);
+        let mut ctx = ExecutorContext::new(&self.catalog, &self.buffer_pool, &txn);
         executor.init(&mut ctx)?;
 
         let mut rows = Vec::new();

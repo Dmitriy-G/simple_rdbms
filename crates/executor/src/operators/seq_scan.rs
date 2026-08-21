@@ -1,7 +1,5 @@
-use std::collections::VecDeque;
-
-use common::TableId;
-use storage::heap::TableHeap;
+use common::{PageId, TableId};
+use storage::heap::{PageScan, TableHeap};
 use types::{DataType, Tuple};
 
 use crate::context::ExecutorContext;
@@ -11,23 +9,23 @@ use crate::executor::Executor;
 /// Reads every tuple of a table's heap file, in physical storage order.
 /// The leaf operator for any plan that reads a table without an index.
 ///
-/// `init` walks the whole heap and decodes every live tuple into `rows`;
-/// `next` then just drains that queue. A truly lazy, page-at-a-time scan
-/// would hold the `TableIter` itself across calls, but `TableIter` borrows
-/// the buffer pool for as long as it lives, and each `next` call only gets a
-/// fresh, short-lived borrow of the pool through `ExecutorContext` — there
-/// is no lifetime that outlives one call for it to borrow into. Eagerly
-/// decoding at `init` sidesteps that without needing the executor tree to
-/// carry a lifetime parameter of its own.
+/// Holds only a cursor (`current_page`, `next_slot`) rather than a
+/// materialized copy of the table: each `next` fetches the current page,
+/// reads the next live slot on it, decodes one tuple, and drops the page's
+/// guard before returning, following `next_page_id` once a page is
+/// exhausted. Memory use is therefore independent of table size, and no
+/// page stays pinned across a `next` call.
 pub struct SeqScanExecutor {
     table_id: TableId,
-    rows: VecDeque<Tuple>,
+    column_types: Vec<DataType>,
+    current_page: Option<PageId>,
+    next_slot: u16,
 }
 
 impl SeqScanExecutor {
     /// Creates a scan over `table_id`.
     pub fn new(table_id: TableId) -> Self {
-        Self { table_id, rows: VecDeque::new() }
+        Self { table_id, column_types: Vec::new(), current_page: None, next_slot: 0 }
     }
 }
 
@@ -37,22 +35,27 @@ impl Executor for SeqScanExecutor {
             .catalog
             .get_table_by_id(self.table_id)
             .map_err(|err| ExecutorError::Catalog(err.to_string()))?;
-        let column_types: Vec<DataType> =
-            table.schema.columns().iter().map(|column| column.data_type).collect();
-
-        let heap = TableHeap::open(ctx.buffer_pool, table.first_page_id);
-        self.rows.clear();
-        for entry in heap.iter() {
-            let (_, bytes) = entry?;
-            let tuple = Tuple::decode(&bytes, &column_types)
-                .map_err(|err| ExecutorError::Evaluation(err.to_string()))?;
-            self.rows.push_back(tuple);
-        }
+        self.column_types = table.schema.columns().iter().map(|column| column.data_type).collect();
+        self.current_page = Some(table.first_page_id);
+        self.next_slot = 0;
         Ok(())
     }
 
     fn next(&mut self, ctx: &mut ExecutorContext<'_>) -> Result<Option<Tuple>, ExecutorError> {
-        let _ = ctx;
-        Ok(self.rows.pop_front())
+        while let Some(page_id) = self.current_page {
+            match TableHeap::scan_page(ctx.buffer_pool, page_id, self.next_slot)? {
+                PageScan::Tuple { slot, bytes } => {
+                    self.next_slot = slot + 1;
+                    let tuple = Tuple::decode(&bytes, &self.column_types)
+                        .map_err(|err| ExecutorError::Evaluation(err.to_string()))?;
+                    return Ok(Some(tuple));
+                }
+                PageScan::EndOfPage { next_page_id } => {
+                    self.current_page = next_page_id;
+                    self.next_slot = 0;
+                }
+            }
+        }
+        Ok(None)
     }
 }

@@ -267,6 +267,49 @@ impl<'pool> TableHeap<'pool> {
             buffered: std::collections::VecDeque::new(),
         }
     }
+
+    /// Scans `page_id` for the next live tuple at or after `from_slot`,
+    /// fetching and releasing exactly one pin. This is the primitive a
+    /// caller drives one step at a time to build its own lazy, page-at-a-
+    /// time cursor over a heap (see `executor::SeqScanExecutor`) without
+    /// ever holding a page pinned across its own iteration boundary — this
+    /// method never holds a guard past its own return.
+    pub fn scan_page(
+        buffer_pool: &BufferPool,
+        page_id: PageId,
+        from_slot: u16,
+    ) -> Result<PageScan, StorageError> {
+        let guard = buffer_pool.fetch_page(page_id)?;
+        let bytes = guard.page().data();
+        let count = slotted_slot_count(bytes);
+        for slot in from_slot..count {
+            if let Some(data) = slotted_read(bytes, slot) {
+                return Ok(PageScan::Tuple { slot, bytes: data.to_vec() });
+            }
+        }
+        let next = slotted_next_page_id(bytes);
+        Ok(PageScan::EndOfPage { next_page_id: (next != NO_NEXT_PAGE).then_some(next) })
+    }
+}
+
+/// The outcome of `TableHeap::scan_page`.
+pub enum PageScan {
+    /// A live tuple at `slot`, with its raw bytes. The caller should resume
+    /// this same page at `slot + 1` on its next call.
+    Tuple {
+        /// The slot the tuple was found at.
+        slot: u16,
+        /// The tuple's raw, still-encoded bytes.
+        bytes: Vec<u8>,
+    },
+    /// No live tuple remains on this page at or after `from_slot`. The
+    /// caller should move on to `next_page_id` (`None` at the end of the
+    /// chain) and resume there at slot `0`.
+    EndOfPage {
+        /// The next page in the heap's chain, or `None` if this was the
+        /// last one.
+        next_page_id: Option<PageId>,
+    },
 }
 
 /// Walks a `TableHeap` page by page, yielding `(Rid, Vec<u8>)` pairs for

@@ -39,6 +39,11 @@ pub struct BufferPool {
     dirty: Vec<Cell<bool>>,
     free_list: RefCell<Vec<FrameId>>,
     replacer: RefCell<Box<dyn Replacer>>,
+    /// Counts `fetch_page` calls, for tests to assert on how many pages an
+    /// operation actually touched (e.g. that a lazy scan fetched only the
+    /// page it needed). Not present in ordinary builds.
+    #[cfg(any(test, feature = "test-util"))]
+    fetch_count: Cell<usize>,
 }
 
 impl BufferPool {
@@ -60,13 +65,29 @@ impl BufferPool {
             dirty,
             free_list,
             replacer: RefCell::new(replacer),
+            #[cfg(any(test, feature = "test-util"))]
+            fetch_count: Cell::new(0),
         }
+    }
+
+    /// The number of `fetch_page` calls made so far. Test-only.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn fetch_count(&self) -> usize {
+        self.fetch_count.get()
+    }
+
+    /// Resets the `fetch_page` call counter to zero. Test-only.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn reset_fetch_count(&self) {
+        self.fetch_count.set(0);
     }
 
     /// Fetches the page `page_id`, pinning it and returning a guard. If the
     /// page is not already resident, brings it in from disk, evicting a
     /// victim frame via the replacer if none is free.
     pub fn fetch_page(&self, page_id: PageId) -> Result<PageGuard<'_>, StorageError> {
+        #[cfg(any(test, feature = "test-util"))]
+        self.fetch_count.set(self.fetch_count.get() + 1);
         if let Some(&frame_id) = self.page_table.borrow().get(&page_id) {
             self.pin(frame_id);
             return Ok(PageGuard { page_id, frame_id, pool: self });

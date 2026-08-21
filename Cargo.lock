@@ -200,6 +200,7 @@ dependencies = [
  "common",
  "planner",
  "storage",
+ "tempfile",
  "thiserror",
  "txn",
  "types",

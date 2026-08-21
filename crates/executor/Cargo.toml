@@ -16,3 +16,7 @@ storage = { workspace = true }
 txn = { workspace = true }
 planner = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+storage = { workspace = true, features = ["test-util"] }
+tempfile = { workspace = true }

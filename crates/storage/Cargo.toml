@@ -8,6 +8,13 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Exposes `BufferPool`'s fetch counter to other crates' own tests, since
+# `#[cfg(test)]` alone only applies when compiling this crate's own test
+# binaries, not when it's pulled in as an ordinary dependency by another
+# crate's tests.
+test-util = []
+
 [dependencies]
 common = { workspace = true }
 types = { workspace = true }
