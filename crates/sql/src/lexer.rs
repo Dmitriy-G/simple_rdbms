@@ -1,25 +1,233 @@
 use crate::error::SqlError;
-use crate::token::Token;
+use crate::token::{Token, TokenKind};
 
 /// Turns SQL source text into a flat stream of `Token`s. Holds no
 /// knowledge of grammar; a `Parser` is what gives the token stream
 /// structure.
 pub struct Lexer<'a> {
-    #[allow(dead_code)]
     input: &'a str,
-    #[allow(dead_code)]
+    bytes: &'a [u8],
     offset: usize,
 }
 
 impl<'a> Lexer<'a> {
     /// Creates a lexer over `input`.
     pub fn new(input: &'a str) -> Self {
-        Self { input, offset: 0 }
+        Self { input, bytes: input.as_bytes(), offset: 0 }
     }
 
     /// Consumes the lexer, producing every token in `input` followed by a
     /// trailing `TokenKind::Eof`.
-    pub fn tokenize(self) -> Result<Vec<Token>, SqlError> {
-        todo!("scan input byte by byte, skipping whitespace/comments, emitting tokens")
+    pub fn tokenize(mut self) -> Result<Vec<Token>, SqlError> {
+        let mut tokens = Vec::new();
+        loop {
+            self.skip_trivia();
+            let start = self.offset;
+            let kind = match self.peek_byte() {
+                None => {
+                    tokens.push(Token::new(TokenKind::Eof, start));
+                    break;
+                }
+                Some(b) if b.is_ascii_digit() => self.lex_number(),
+                Some(b'\'') => self.lex_string(start)?,
+                Some(b) if b == b'_' || b.is_ascii_alphabetic() => self.lex_ident_or_keyword(),
+                Some(_) => self.lex_punct(start)?,
+            };
+            tokens.push(Token::new(kind, start));
+        }
+        Ok(tokens)
+    }
+
+    fn peek_byte(&self) -> Option<u8> {
+        self.bytes.get(self.offset).copied()
+    }
+
+    fn peek_byte_at(&self, delta: usize) -> Option<u8> {
+        self.bytes.get(self.offset + delta).copied()
+    }
+
+    /// Advances past whitespace and `--` line comments.
+    fn skip_trivia(&mut self) {
+        loop {
+            match self.peek_byte() {
+                Some(b) if b.is_ascii_whitespace() => self.offset += 1,
+                Some(b'-') if self.peek_byte_at(1) == Some(b'-') => {
+                    while let Some(b) = self.peek_byte() {
+                        if b == b'\n' {
+                            break;
+                        }
+                        self.offset += 1;
+                    }
+                }
+                _ => break,
+            }
+        }
+    }
+
+    /// Scans a run of digits, optionally followed by a `.` and more digits.
+    fn lex_number(&mut self) -> TokenKind {
+        let start = self.offset;
+        self.advance_while(|b| b.is_ascii_digit());
+
+        let mut is_float = false;
+        if self.peek_byte() == Some(b'.')
+            && matches!(self.peek_byte_at(1), Some(b) if b.is_ascii_digit())
+        {
+            is_float = true;
+            self.offset += 1;
+            self.advance_while(|b| b.is_ascii_digit());
+        }
+
+        let text = &self.input[start..self.offset];
+        if is_float {
+            TokenKind::FloatLiteral(text.parse().unwrap_or(f64::NAN))
+        } else {
+            TokenKind::IntegerLiteral(text.parse().unwrap_or(i64::MAX))
+        }
+    }
+
+    /// Scans a single-quoted string literal starting at the opening quote,
+    /// with `''` treated as an escaped single quote.
+    fn lex_string(&mut self, start: usize) -> Result<TokenKind, SqlError> {
+        self.offset += 1; // opening quote
+        let mut value = String::new();
+        loop {
+            match self.peek_byte() {
+                None => return Err(SqlError::UnterminatedString { offset: start }),
+                Some(b'\'') => {
+                    if self.peek_byte_at(1) == Some(b'\'') {
+                        value.push('\'');
+                        self.offset += 2;
+                    } else {
+                        self.offset += 1;
+                        break;
+                    }
+                }
+                Some(_) => {
+                    let ch = self.char_at(self.offset);
+                    value.push(ch);
+                    self.offset += ch.len_utf8();
+                }
+            }
+        }
+        Ok(TokenKind::StringLiteral(value))
+    }
+
+    /// Scans an identifier, matching it case-insensitively against the
+    /// keyword set; anything that doesn't match a keyword becomes an
+    /// `Identifier` carrying the original (case-sensitive) spelling.
+    fn lex_ident_or_keyword(&mut self) -> TokenKind {
+        let start = self.offset;
+        self.advance_while(|b| b == b'_' || b.is_ascii_alphanumeric());
+        let text = &self.input[start..self.offset];
+        match text.to_ascii_uppercase().as_str() {
+            "SELECT" => TokenKind::Select,
+            "FROM" => TokenKind::From,
+            "WHERE" => TokenKind::Where,
+            "INSERT" => TokenKind::Insert,
+            "INTO" => TokenKind::Into,
+            "VALUES" => TokenKind::Values,
+            "CREATE" => TokenKind::Create,
+            "TABLE" => TokenKind::Table,
+            "AND" => TokenKind::And,
+            "OR" => TokenKind::Or,
+            "NOT" => TokenKind::Not,
+            "NULL" => TokenKind::Null,
+            "TRUE" => TokenKind::True,
+            "FALSE" => TokenKind::False,
+            _ => TokenKind::Identifier(text.to_string()),
+        }
+    }
+
+    /// Scans one punctuation or operator token.
+    fn lex_punct(&mut self, start: usize) -> Result<TokenKind, SqlError> {
+        let b = match self.peek_byte() {
+            Some(b) => b,
+            None => unreachable!("caller only dispatches here when a byte is present"),
+        };
+        let kind = match b {
+            b',' => {
+                self.offset += 1;
+                TokenKind::Comma
+            }
+            b';' => {
+                self.offset += 1;
+                TokenKind::Semicolon
+            }
+            b'(' => {
+                self.offset += 1;
+                TokenKind::LParen
+            }
+            b')' => {
+                self.offset += 1;
+                TokenKind::RParen
+            }
+            b'*' => {
+                self.offset += 1;
+                TokenKind::Star
+            }
+            b'.' => {
+                self.offset += 1;
+                TokenKind::Dot
+            }
+            b'+' => {
+                self.offset += 1;
+                TokenKind::Plus
+            }
+            b'-' => {
+                self.offset += 1;
+                TokenKind::Minus
+            }
+            b'/' => {
+                self.offset += 1;
+                TokenKind::Slash
+            }
+            b'=' => {
+                self.offset += 1;
+                TokenKind::Eq
+            }
+            b'<' => {
+                self.offset += 1;
+                match self.peek_byte() {
+                    Some(b'=') => {
+                        self.offset += 1;
+                        TokenKind::LtEq
+                    }
+                    Some(b'>') => {
+                        self.offset += 1;
+                        TokenKind::NotEq
+                    }
+                    _ => TokenKind::Lt,
+                }
+            }
+            b'>' => {
+                self.offset += 1;
+                if self.peek_byte() == Some(b'=') {
+                    self.offset += 1;
+                    TokenKind::GtEq
+                } else {
+                    TokenKind::Gt
+                }
+            }
+            b'!' if self.peek_byte_at(1) == Some(b'=') => {
+                self.offset += 2;
+                TokenKind::NotEq
+            }
+            _ => return Err(SqlError::UnexpectedChar { ch: self.char_at(start), offset: start }),
+        };
+        Ok(kind)
+    }
+
+    fn advance_while(&mut self, pred: impl Fn(u8) -> bool) {
+        while matches!(self.peek_byte(), Some(b) if pred(b)) {
+            self.offset += 1;
+        }
+    }
+
+    fn char_at(&self, offset: usize) -> char {
+        match self.input[offset..].chars().next() {
+            Some(ch) => ch,
+            None => unreachable!("offset {offset} is within the source text"),
+        }
     }
 }

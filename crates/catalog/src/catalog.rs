@@ -35,6 +35,21 @@ impl Catalog {
         Self::default()
     }
 
+    /// Builds an in-memory catalog directly from already-constructed table
+    /// entries, with no storage backing at all. Intended for tests that
+    /// need a populated catalog (e.g. to exercise the planner's binder)
+    /// without provisioning a `BufferPool`; `create_table` remains the way
+    /// to register a table that needs real heap storage.
+    pub fn from_tables(tables: Vec<TableInfo>) -> Self {
+        let mut catalog = Self::new();
+        for info in tables {
+            catalog.next_table_id = catalog.next_table_id.max(info.table_id.0 + 1);
+            catalog.tables_by_id.insert(info.table_id, info.name.clone());
+            catalog.tables_by_name.insert(info.name.clone(), info);
+        }
+        catalog
+    }
+
     /// Opens the catalog backed by `buffer_pool`: finds (or provisions) its
     /// persisted table heap and loads every `TableInfo` row from it into
     /// memory.

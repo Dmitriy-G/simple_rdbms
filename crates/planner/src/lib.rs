@@ -16,6 +16,7 @@ mod error;
 mod logical_plan;
 mod optimizer;
 mod physical_plan;
+mod plan;
 
 pub use binder::{
     Binder, BoundColumnDef, BoundCreateTable, BoundExpr, BoundInsert, BoundSelect, BoundStatement,
@@ -24,3 +25,4 @@ pub use error::PlannerError;
 pub use logical_plan::LogicalPlan;
 pub use optimizer::{Optimizer, OptimizerRule};
 pub use physical_plan::PhysicalPlan;
+pub use plan::plan;

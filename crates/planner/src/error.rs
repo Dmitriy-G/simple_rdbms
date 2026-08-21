@@ -12,6 +12,17 @@ pub enum PlannerError {
     #[error("unknown column: {0}")]
     UnknownColumn(String),
 
+    /// An `INSERT` row supplied a different number of values than the
+    /// number of target columns (explicit or, if omitted, the table's
+    /// full column list).
+    #[error("column count mismatch: expected {expected}, found {found}")]
+    ColumnCountMismatch {
+        /// The number of target columns.
+        expected: usize,
+        /// The number of values actually supplied.
+        found: usize,
+    },
+
     /// An expression's operand types are incompatible with the operator
     /// applied to them.
     #[error("type mismatch in expression: {0}")]
