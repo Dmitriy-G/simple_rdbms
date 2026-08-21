@@ -73,7 +73,7 @@ fn run_repl(db: &mut Database) -> anyhow::Result<()> {
         buffer.push('\n');
 
         if trimmed.ends_with(';') {
-            let statement = buffer.trim().trim_end_matches(';').trim();
+            let statement = statement_from_buffer(&buffer);
             match db.execute(statement) {
                 Ok(result_set) => print_result(&result_set),
                 Err(err) => eprintln!("error: {err}"),
@@ -84,6 +84,16 @@ fn run_repl(db: &mut Database) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Strips the single `;` that terminates a buffered statement, along with
+/// surrounding whitespace. Uses `strip_suffix` rather than
+/// `trim_end_matches(';')` so a statement whose last token is itself a
+/// string literal ending in `;` (e.g. `WHERE s = ';'`) only loses the
+/// terminator, not the semicolon inside the literal.
+fn statement_from_buffer(buffer: &str) -> &str {
+    let trimmed = buffer.trim();
+    trimmed.strip_suffix(';').unwrap_or(trimmed).trim()
 }
 
 /// Writes the REPL's prompt and flushes it, since it is not followed by a
@@ -175,5 +185,22 @@ fn format_value(value: &Value) -> String {
         Value::BigInt(v) => v.to_string(),
         Value::Double(v) => v.to_string(),
         Value::Varchar(s) => s.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::statement_from_buffer;
+
+    #[test]
+    fn only_the_terminating_semicolon_is_stripped() {
+        let buffer = "SELECT * FROM t WHERE s = ';';\n";
+        assert_eq!(statement_from_buffer(buffer), "SELECT * FROM t WHERE s = ';'");
+    }
+
+    #[test]
+    fn a_statement_without_a_string_literal_still_strips_its_terminator() {
+        let buffer = "SELECT * FROM t;\n";
+        assert_eq!(statement_from_buffer(buffer), "SELECT * FROM t");
     }
 }

@@ -44,7 +44,7 @@ fn tag_to_type(tag: u8, varchar_len: u32) -> Result<DataType, CatalogError> {
 
 fn encode_schema_blob(schema: &Schema) -> String {
     let mut buf = Vec::new();
-    buf.push(schema.columns().len() as u8);
+    buf.extend_from_slice(&(schema.columns().len() as u32).to_le_bytes());
     for column in schema.columns() {
         let name_bytes = column.name.as_bytes();
         buf.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
@@ -62,9 +62,10 @@ fn decode_schema_blob(blob: &str) -> Result<Schema, CatalogError> {
     let bytes = from_hex(blob)?;
     let mut offset = 0usize;
 
+    let count_bytes = take(&bytes, offset, 4)?;
     let count =
-        *bytes.get(offset).ok_or_else(|| CatalogError::Corrupt("empty schema blob".to_string()))?;
-    offset += 1;
+        u32::from_le_bytes([count_bytes[0], count_bytes[1], count_bytes[2], count_bytes[3]]);
+    offset += 4;
 
     let mut columns = Vec::with_capacity(count as usize);
     for _ in 0..count {

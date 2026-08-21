@@ -12,15 +12,17 @@ use crate::page::Page;
 const MAGIC: &[u8; 8] = b"FERRODB\0";
 
 /// The on-disk header format version this build reads and writes.
-const HEADER_VERSION: u32 = 1;
+const HEADER_VERSION: u32 = 2;
 
 /// The byte layout of the page-0 header: magic (8) | version (4) |
-/// page_count (4) | catalog_first_page (4), zero-padded to a full page.
+/// page_count (4) | catalog_first_page (4) | page_size (4), zero-padded to
+/// a full page.
 mod header {
     pub const MAGIC_RANGE: std::ops::Range<usize> = 0..8;
     pub const VERSION_RANGE: std::ops::Range<usize> = 8..12;
     pub const PAGE_COUNT_RANGE: std::ops::Range<usize> = 12..16;
     pub const CATALOG_FIRST_PAGE_RANGE: std::ops::Range<usize> = 16..20;
+    pub const PAGE_SIZE_RANGE: std::ops::Range<usize> = 20..24;
 }
 
 /// Owns the database file and performs raw, page-granular I/O against it.
@@ -53,7 +55,11 @@ impl DiskManager {
             manager.write_header()?;
             Ok(manager)
         } else {
-            let mut header_buf = vec![0u8; page_size];
+            // Read only the header fields themselves, not a full `page_size`
+            // bytes: the file's actual page size is what we're about to
+            // validate, so we can't yet trust the caller's `page_size` to
+            // size this read.
+            let mut header_buf = vec![0u8; header::PAGE_SIZE_RANGE.end];
             file.seek(SeekFrom::Start(0))?;
             file.read_exact(&mut header_buf)?;
 
@@ -72,6 +78,16 @@ impl DiskManager {
             }
             let page_count = read_u32(&header_buf, header::PAGE_COUNT_RANGE.start);
             let catalog_first_page = read_u32(&header_buf, header::CATALOG_FIRST_PAGE_RANGE.start);
+            let stored_page_size = read_u32(&header_buf, header::PAGE_SIZE_RANGE.start);
+            if stored_page_size as usize != page_size {
+                return Err(StorageError::CorruptPage {
+                    page_id: 0,
+                    reason: format!(
+                        "page size mismatch: database was created with page_size \
+                         {stored_page_size}, but {page_size} was requested"
+                    ),
+                });
+            }
 
             Ok(Self { file, path, page_size, next_page_id: page_count, catalog_first_page })
         }
@@ -148,6 +164,7 @@ impl DiskManager {
         buf[header::PAGE_COUNT_RANGE].copy_from_slice(&self.next_page_id.to_le_bytes());
         buf[header::CATALOG_FIRST_PAGE_RANGE]
             .copy_from_slice(&self.catalog_first_page.to_le_bytes());
+        buf[header::PAGE_SIZE_RANGE].copy_from_slice(&(self.page_size as u32).to_le_bytes());
 
         self.file.seek(SeekFrom::Start(0))?;
         self.file.write_all(&buf)?;

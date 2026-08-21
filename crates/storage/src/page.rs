@@ -2,8 +2,10 @@ use common::{FrameId, PageId};
 
 /// The fixed size, in bytes, of every page in the database file and the
 /// write-ahead log. Matches `common::DbConfig::DEFAULT_PAGE_SIZE`; a
-/// database file's actual page size is recorded once at creation time and
-/// is not meant to vary per-page.
+/// database file's actual page size is recorded in the page-0 header at
+/// creation time, and `DiskManager::open` rejects a reopen whose requested
+/// page size disagrees with it, so it is not meant to vary per-page or
+/// across reopens of the same file.
 pub const PAGE_SIZE: usize = 4096;
 
 /// A single fixed-size page: the unit of I/O between the disk manager and

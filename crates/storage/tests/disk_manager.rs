@@ -43,6 +43,30 @@ fn pages_survive_close_and_reopen() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn reopening_with_a_different_page_size_is_a_clear_error() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.db");
+
+    {
+        let mut disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
+        disk.allocate_page()?;
+        disk.sync()?;
+    }
+
+    let other_page_size = PAGE_SIZE * 2;
+    let message = match DiskManager::open(path, other_page_size) {
+        Ok(_) => panic!("reopening with a mismatched page size must fail"),
+        Err(err) => err.to_string(),
+    };
+    assert!(
+        message.contains(&PAGE_SIZE.to_string()) && message.contains(&other_page_size.to_string()),
+        "error should name both the stored and requested page sizes: {message}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn reading_an_unallocated_page_is_an_error_not_zeros() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.db");

@@ -65,6 +65,34 @@ fn reopening_the_database_reloads_identical_schemas() -> Result<(), Box<dyn Erro
 }
 
 #[test]
+fn schemas_with_more_than_255_columns_round_trip() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.db");
+
+    const COLUMN_COUNT: usize = 256;
+    let wide_schema = Schema::new(
+        (0..COLUMN_COUNT).map(|_| Column::new("x", DataType::Integer, false)).collect(),
+    );
+
+    {
+        let pool = open_pool(&path)?;
+        let mut catalog = Catalog::open(&pool)?;
+        catalog.create_table(&pool, "wide", wide_schema.clone())?;
+        pool.flush_all()?;
+    }
+
+    {
+        let pool = open_pool(&path)?;
+        let catalog = Catalog::open(&pool)?;
+        let wide = catalog.get_table("wide")?;
+        assert_eq!(wide.schema.columns().len(), COLUMN_COUNT);
+        assert_eq!(wide.schema, wide_schema);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn duplicate_table_name_is_rejected() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.db");
