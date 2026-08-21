@@ -486,6 +486,7 @@ name = "storage"
 version = "0.1.0"
 dependencies = [
  "common",
+ "proptest",
  "tempfile",
  "thiserror",
  "types",

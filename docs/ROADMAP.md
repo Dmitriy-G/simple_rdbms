@@ -43,7 +43,18 @@ choose over a sequential scan.
 ## M6 — Surviving a crash
 **Problem:** a crash mid-write can leave pages on disk in a state that
 reflects neither the old nor the new value, or reflects writes from a
-transaction that never committed.
+transaction that never committed. Two concrete windows in `storage::heap`
+motivate this: `DiskManager::allocate_page` durably extends the file and
+rewrites the header while the new page's own initialization stays buffered
+in the pool, and `TableHeap::append_page_after` writes the new page and
+rewrites its predecessor's `next_page_id` link as two independently-buffered
+pages, either of which can reach disk without the other. A crash inside
+either window is what left a real page on disk all-zero (see
+`heap::NO_NEXT_PAGE` and `SlottedPage::init`'s doc comments) - tolerable
+today only because the on-disk format was changed to make an all-zero page
+a valid, empty one rather than corrupt. The WAL is what should actually
+close these windows, rather than every reader having to keep tolerating
+whatever a half-finished write leaves behind.
 **Solution:** a write-ahead log, periodic checkpointing, and ARIES-style
 analysis/redo/undo recovery on restart.
 

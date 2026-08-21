@@ -5,10 +5,12 @@
 use std::collections::HashMap;
 use std::error::Error;
 
+use proptest::prelude::*;
+use proptest::test_runner::{Config, RngAlgorithm, TestCaseError, TestRng, TestRunner};
 use storage::StorageError;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
-use storage::heap::{MAX_TUPLE_SIZE, TableHeap};
+use storage::heap::{MAX_SLOTS, MAX_TUPLE_SIZE, TableHeap};
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
 
@@ -74,32 +76,106 @@ fn get_tuple_returns_none_for_deleted_slot() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Regression test: a page allocated but never `SlottedPage::init`-ed (as
-/// happens when a process exits before flushing a freshly-created page)
-/// stays all-zero, so its `next_page_id` field decodes as page 0 - a real
-/// page id - rather than the `NO_NEXT_PAGE` sentinel. A scan must report
-/// that as corruption instead of misreading the page-0 file header as
-/// slotted-page bytes and running off the end of the page.
+/// A page allocated but never `SlottedPage::init`-ed (as happens when a
+/// process exits before flushing a freshly-created page) stays all-zero.
+/// `NO_NEXT_PAGE` being `PageId(0)` - the one page id a heap chain can
+/// never legitimately contain - means that decodes as a valid, empty,
+/// terminal page rather than corruption: an uninitialized page is usable,
+/// not merely non-fatal.
 #[test]
-fn scanning_a_page_whose_init_never_reached_disk_reports_corruption() -> Result<(), Box<dyn Error>>
-{
+fn scanning_a_page_whose_init_never_reached_disk_is_a_clean_empty_scan()
+-> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
     let (page_id, guard) = pool.new_page()?;
     drop(guard);
 
     let heap = TableHeap::open(&pool, page_id);
+    let tuples: Result<Vec<_>, StorageError> = heap.iter().collect();
+    assert_eq!(tuples?, Vec::new(), "an uninitialized page must scan as empty, not corrupt");
+    Ok(())
+}
+
+/// Proves an uninitialized (all-zero) page is genuinely usable, not just
+/// safe to read: inserting into a heap whose only page was never
+/// `SlottedPage::init`-ed must succeed, and the tuple must read back.
+#[test]
+fn inserting_into_a_never_initialized_page_still_works() -> Result<(), Box<dyn Error>> {
+    let (pool, _dir) = open_pool(4)?;
+    let (page_id, guard) = pool.new_page()?;
+    drop(guard);
+
+    let mut heap = TableHeap::open(&pool, page_id);
+    let rid = heap.insert_tuple(b"lost its init write, still usable")?;
+    assert_eq!(
+        heap.get_tuple(rid)?.as_deref(),
+        Some(b"lost its init write, still usable".as_slice())
+    );
+    Ok(())
+}
+
+/// `MAX_SLOTS` remains a backstop against a page whose slot count could
+/// never have come from `SlottedPage::insert` (a non-heap page misread as
+/// one, say) - written directly here since `SlottedPage::insert` itself
+/// can't be driven past it.
+#[test]
+fn slot_count_above_max_slots_still_reports_corruption() -> Result<(), Box<dyn Error>> {
+    let (pool, _dir) = open_pool(4)?;
+    let (page_id, mut guard) = pool.new_page()?;
+    guard.page_mut().data_mut()[0..2].copy_from_slice(&(MAX_SLOTS + 1).to_le_bytes());
+    drop(guard);
+
+    let heap = TableHeap::open(&pool, page_id);
     match heap.iter().next() {
-        Some(Err(StorageError::CorruptPage { page_id: offending, .. })) => {
-            assert_eq!(offending, 0, "the header page should be identified as the corrupt one");
-        }
-        other => panic!(
-            "expected a CorruptPage error naming page 0, got a different outcome: {}",
-            match other {
-                Some(Ok(_)) => "a tuple",
-                Some(Err(_)) => "a different error",
-                None => "a clean end of heap",
-            }
-        ),
+        Some(Err(StorageError::CorruptPage { .. })) => {}
+        Some(Ok(_)) => panic!("a bogus slot count must not yield a tuple"),
+        Some(Err(err)) => panic!("expected CorruptPage, got a different error: {err}"),
+        None => panic!("a bogus slot count must be reported, not read as a clean empty scan"),
     }
+    Ok(())
+}
+
+/// No sequence of page bytes - however implausible - may panic a reader.
+/// Installs 4096 fully random bytes as a heap page's raw content and drives
+/// every public entry point that parses page bytes through it: iterating
+/// the heap, looking up every possible slot by `Rid`, and inserting a
+/// tuple. This is the property the original all-zero-page bug was really
+/// an instance of - no on-disk byte pattern, whether from a lost write, a
+/// torn write, or outright disk corruption, should be able to crash the
+/// reader; proptest's own panic-catching (needed to shrink counterexamples)
+/// is what turns any surviving panic into a normal, reproducible test
+/// failure here rather than an aborted test binary. The RNG is seeded so a
+/// failure is reproducible across runs.
+#[test]
+fn no_page_content_can_panic_a_reader() -> Result<(), Box<dyn Error>> {
+    let mut runner = TestRunner::new_with_rng(
+        Config { cases: 64, ..Config::default() },
+        TestRng::from_seed(RngAlgorithm::ChaCha, &[0x5eu8; 32]),
+    );
+
+    let strategy = proptest::collection::vec(any::<u8>(), PAGE_SIZE);
+    let outcome = runner.run(&strategy, |raw| {
+        let (pool, _dir) = open_pool(2).map_err(|err| TestCaseError::fail(err.to_string()))?;
+        let (page_id, mut guard) =
+            pool.new_page().map_err(|err| TestCaseError::fail(err.to_string()))?;
+        guard.page_mut().data_mut().copy_from_slice(&raw);
+        drop(guard);
+
+        let mut heap = TableHeap::open(&pool, page_id);
+
+        // Bounded: an adversarial `next_page_id` that happens to loop back
+        // on itself would otherwise iterate forever rather than panic;
+        // astronomically unlikely from random bytes, but the bound keeps
+        // that outcome from hanging the test either way.
+        for entry in heap.iter().take(10_000) {
+            let _ = entry;
+        }
+        for slot in 0..=u16::MAX {
+            let _ = heap.get_tuple(common::Rid::new(page_id, slot));
+        }
+        let _ = heap.insert_tuple(b"probe");
+
+        Ok(())
+    });
+    outcome.map_err(|err| format!("no_page_content_can_panic_a_reader: {err}"))?;
     Ok(())
 }

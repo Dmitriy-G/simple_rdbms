@@ -61,8 +61,7 @@ instead of exiting, and the meta commands:
 ```
 simple_rdbms> CREATE TABLE users (id INTEGER, name TEXT, age INTEGER);
 OK
-simple_rdbms> INSERT INTO users (id, name, age)
-        ...> VALUES (1, 'Alice', 30), (2, 'Bob', 25), (3, 'Carol', NULL);
+simple_rdbms> INSERT INTO users (id, name, age) VALUES (1, 'Alice', 30), (2, 'Bob', 25), (3, 'Carol', NULL);
 OK (3 rows)
 simple_rdbms> SELECT * FROM users;
 id | name  | age 

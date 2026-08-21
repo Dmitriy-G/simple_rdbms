@@ -5,12 +5,19 @@ use crate::error::StorageError;
 use crate::page::Page;
 
 /// Sentinel stored in a slotted page's `next_page_id` field meaning "this is
-/// the last page in the chain."
-const NO_NEXT_PAGE: PageId = PageId(u32::MAX);
+/// the last page in the chain." Page 0 is permanently the database's own
+/// header page (see `disk::DiskManager`) and so can never legitimately be a
+/// heap page, which makes `PageId(0)` an unambiguous choice: it's also what
+/// a page's `next_page_id` field reads as when the page is all zero, so a
+/// page whose `init()` write never reached disk (e.g. a crash between
+/// allocating and initializing it) still decodes as a valid, terminal,
+/// empty page instead of corrupt.
+const NO_NEXT_PAGE: PageId = PageId(0);
 
 /// Byte layout of a slotted page's 8-byte header.
 const SLOT_COUNT_RANGE: std::ops::Range<usize> = 0..2;
-const FREE_SPACE_END_RANGE: std::ops::Range<usize> = 2..4;
+/// Bytes of tuple data currently used (see `slotted_data_used`).
+const DATA_USED_RANGE: std::ops::Range<usize> = 2..4;
 const NEXT_PAGE_ID_RANGE: std::ops::Range<usize> = 4..8;
 const HEADER_SIZE: usize = 8;
 /// Each slot is a (u16 offset, u16 len) pair.
@@ -18,12 +25,15 @@ const SLOT_SIZE: usize = 4;
 
 /// The largest number of slots a slot array can hold without running past
 /// the page: `(PAGE_SIZE - HEADER_SIZE) / SLOT_SIZE`. `SlottedPage::insert`
-/// never lets `slot_count` grow past this (its free-space check refuses the
-/// insert first), so a stored `slot_count` above it can only mean the bytes
-/// were never actually written as a slotted page - e.g. a page whose
-/// `init()` was lost before reaching disk, or a non-heap page (such as the
-/// page-0 file header) misread as one.
-const MAX_SLOTS: u16 = ((crate::page::PAGE_SIZE - HEADER_SIZE) / SLOT_SIZE) as u16;
+/// never lets `slot_count` grow past this, so a stored `slot_count` above it
+/// can only come from a page that was never actually written as a slotted
+/// page. With `NO_NEXT_PAGE` now `PageId(0)` (so an all-zero, uninitialized
+/// page is a valid empty page rather than corrupt) and `slotted_read`
+/// validating every tuple range it hands out, this is a last-resort guard
+/// against misreading some *other* kind of page (e.g. the page-0 file
+/// header) as a heap page - it should be unreachable in practice, not the
+/// primary defense it once was.
+pub const MAX_SLOTS: u16 = ((crate::page::PAGE_SIZE - HEADER_SIZE) / SLOT_SIZE) as u16;
 
 fn slot_offset(slot: u16) -> usize {
     HEADER_SIZE + slot as usize * SLOT_SIZE
@@ -43,10 +53,12 @@ fn slotted_slot_count(bytes: &[u8]) -> u16 {
     read_u16(bytes, SLOT_COUNT_RANGE.start)
 }
 
-/// Reads and validates the slot count for a page being scanned from disk,
-/// rejecting a page whose recorded `slot_count` is too large to have ever
-/// been written by `SlottedPage::insert` (see `MAX_SLOTS`) instead of
-/// letting a scan run off the end of the page.
+/// Reads and validates the slot count for a page being scanned from disk.
+/// A `slot_count` above `MAX_SLOTS` cannot come from a real slotted page
+/// (see its doc comment); this is a backstop against misreading some other
+/// kind of page as a heap page, not the mechanism that makes an ordinary
+/// uninitialized page safe - that comes from `NO_NEXT_PAGE` being
+/// `PageId(0)`, a value a zeroed page could never falsely produce.
 fn checked_slot_count(bytes: &[u8], page_id: PageId) -> Result<u16, StorageError> {
     let count = slotted_slot_count(bytes);
     if count > MAX_SLOTS {
@@ -61,10 +73,24 @@ fn checked_slot_count(bytes: &[u8], page_id: PageId) -> Result<u16, StorageError
     Ok(count)
 }
 
-/// Reads the offset (from the start of the page) at which tuple data
-/// currently begins on a slotted page's raw bytes.
-fn slotted_free_space_end(bytes: &[u8]) -> u16 {
-    read_u16(bytes, FREE_SPACE_END_RANGE.start)
+/// Reads the number of tuple-data bytes currently used on a slotted page's
+/// raw bytes. Tuple bytes are packed backward from the end of the page, so
+/// this grows from `0` as tuples are inserted, rather than storing an
+/// absolute offset - which is what makes an all-zero page decode as a
+/// valid, empty page instead of one with no free space at all.
+fn slotted_data_used(bytes: &[u8]) -> u16 {
+    read_u16(bytes, DATA_USED_RANGE.start)
+}
+
+/// The offset (from the start of the page) at which tuple data currently
+/// begins: `PAGE_SIZE` minus however many bytes are in use. Saturates at
+/// `0` rather than underflowing: a stored `data_used` above `PAGE_SIZE`
+/// cannot come from a real page (`SlottedPage::insert` never lets it grow
+/// that far), only a corrupt one, and reading `0` free space for such a
+/// page is the same safe "can't insert here" outcome `slotted_free_space`
+/// already produces for other kinds of corruption.
+fn slotted_data_start(bytes: &[u8]) -> usize {
+    crate::page::PAGE_SIZE.saturating_sub(slotted_data_used(bytes) as usize)
 }
 
 /// Reads the id of the next page in this heap's chain, or `NO_NEXT_PAGE`.
@@ -77,34 +103,61 @@ fn slotted_next_page_id(bytes: &[u8]) -> PageId {
     ]))
 }
 
-/// Looks up slot `slot`'s (offset, len) entry, or `None` if `slot` is past
-/// the allocated slot array, or the slot array's recorded length would
-/// itself run past the page (a corrupt or misread page - see `MAX_SLOTS`).
-fn slotted_slot_entry(bytes: &[u8], slot: u16) -> Option<(u16, u16)> {
-    if slot >= slotted_slot_count(bytes) {
-        return None;
+/// Looks up slot `slot`'s (offset, len) entry: `Ok(None)` if `slot` is past
+/// the allocated slot array. `Err(CorruptPage)` if the page's own slot
+/// count is invalid (see `checked_slot_count`), checked first so every
+/// entry this does return is guaranteed to sit within the page.
+fn slotted_slot_entry(
+    bytes: &[u8],
+    slot: u16,
+    page_id: PageId,
+) -> Result<Option<(u16, u16)>, StorageError> {
+    let count = checked_slot_count(bytes, page_id)?;
+    if slot >= count {
+        return Ok(None);
     }
     let at = slot_offset(slot);
-    if at + SLOT_SIZE > bytes.len() {
-        return None;
-    }
-    Some((read_u16(bytes, at), read_u16(bytes, at + 2)))
+    Ok(Some((read_u16(bytes, at), read_u16(bytes, at + 2))))
 }
 
-/// The raw bytes of the tuple in `slot` on a slotted page's raw bytes, or
-/// `None` if the slot doesn't exist or is tombstoned (`len == 0`).
-fn slotted_read(bytes: &[u8], slot: u16) -> Option<&[u8]> {
-    let (offset, len) = slotted_slot_entry(bytes, slot)?;
+/// The raw bytes of the tuple in `slot` on a slotted page's raw bytes.
+/// `Ok(None)` if the slot doesn't exist (past the allocated slot array) or
+/// is tombstoned (`len == 0`). `Err(CorruptPage)` if the slot's recorded
+/// `(offset, len)` doesn't describe a valid tuple - a range that runs past
+/// the page, or one that overlaps the slot array itself - bytes that
+/// `SlottedPage::insert` could never have produced.
+fn slotted_read(bytes: &[u8], slot: u16, page_id: PageId) -> Result<Option<&[u8]>, StorageError> {
+    let Some((offset, len)) = slotted_slot_entry(bytes, slot, page_id)? else {
+        return Ok(None);
+    };
     if len == 0 {
-        return None;
+        return Ok(None);
     }
-    Some(&bytes[offset as usize..offset as usize + len as usize])
+
+    let slots_end = slot_offset(checked_slot_count(bytes, page_id)?);
+    let start = offset as usize;
+    let end = start + len as usize;
+    if start < slots_end {
+        return Err(StorageError::CorruptPage {
+            page_id: page_id.0,
+            reason: format!(
+                "slot {slot}'s tuple at offset {start} overlaps the {slots_end}-byte slot array"
+            ),
+        });
+    }
+    bytes.get(start..end).map(Some).ok_or_else(|| StorageError::CorruptPage {
+        page_id: page_id.0,
+        reason: format!(
+            "slot {slot}'s tuple range {start}..{end} runs past the {}-byte page",
+            bytes.len()
+        ),
+    })
 }
 
 /// The number of free bytes available for a new slot plus its tuple data.
 fn slotted_free_space(bytes: &[u8]) -> usize {
     let slots_end = HEADER_SIZE + slotted_slot_count(bytes) as usize * SLOT_SIZE;
-    (slotted_free_space_end(bytes) as usize).saturating_sub(slots_end)
+    slotted_data_start(bytes).saturating_sub(slots_end)
 }
 
 /// A view over a `Page`'s bytes as a slotted page: a header, a slot array
@@ -123,12 +176,16 @@ impl<'a> SlottedPage<'a> {
         Self { page }
     }
 
-    /// Initializes an empty page's header: no slots, tuple data starts at
-    /// the end of the page, and no next page in the chain yet.
+    /// Initializes an empty page's header: no slots, no tuple data used
+    /// yet, and no next page in the chain. Every field's "empty" value is
+    /// `0` (`NO_NEXT_PAGE` is `PageId(0)`), so this is a no-op on a page
+    /// that's already all zero - kept for explicitness, since a page that
+    /// never gets this call (e.g. one whose initializing write was lost
+    /// before reaching disk) is still a valid empty page, not a corrupt one.
     pub fn init(&mut self) {
         let bytes = self.page.data_mut();
         write_u16(bytes, SLOT_COUNT_RANGE.start, 0);
-        write_u16(bytes, FREE_SPACE_END_RANGE.start, crate::page::PAGE_SIZE as u16);
+        write_u16(bytes, DATA_USED_RANGE.start, 0);
         bytes[NEXT_PAGE_ID_RANGE].copy_from_slice(&NO_NEXT_PAGE.0.to_le_bytes());
     }
 
@@ -139,9 +196,10 @@ impl<'a> SlottedPage<'a> {
     }
 
     /// The raw bytes of the tuple in `slot`, or `None` if the slot is empty
-    /// or tombstoned.
-    pub fn read(&self, slot: u16) -> Option<&[u8]> {
-        slotted_read(self.page.data(), slot)
+    /// or tombstoned, or `Err(CorruptPage)` if the slot's recorded range
+    /// isn't a valid tuple on this page.
+    pub fn read(&self, slot: u16) -> Result<Option<&[u8]>, StorageError> {
+        slotted_read(self.page.data(), slot, self.page.id())
     }
 
     /// The number of free bytes available for a new slot plus its tuple
@@ -157,8 +215,11 @@ impl<'a> SlottedPage<'a> {
         (id != NO_NEXT_PAGE).then_some(id)
     }
 
-    /// Links this page to `next` as the next page in the chain.
+    /// Links this page to `next` as the next page in the chain. `next` must
+    /// never be page 0: it's the database's reserved header page, and using
+    /// it as a heap page id would collide with `NO_NEXT_PAGE`.
     pub fn set_next_page_id(&mut self, next: PageId) {
+        debug_assert!(next != NO_NEXT_PAGE, "page 0 is the database header, never a heap page");
         self.page.data_mut()[NEXT_PAGE_ID_RANGE].copy_from_slice(&next.0.to_le_bytes());
     }
 
@@ -167,7 +228,7 @@ impl<'a> SlottedPage<'a> {
     pub fn insert(&mut self, data: &[u8]) -> Option<u16> {
         let slot_count = self.slot_count();
         let new_slots_end = HEADER_SIZE + (slot_count as usize + 1) * SLOT_SIZE;
-        let space_end = slotted_free_space_end(self.page.data()) as usize;
+        let space_end = slotted_data_start(self.page.data());
         if new_slots_end + data.len() > space_end {
             return None;
         }
@@ -175,7 +236,7 @@ impl<'a> SlottedPage<'a> {
         let data_start = space_end - data.len();
         let bytes = self.page.data_mut();
         bytes[data_start..space_end].copy_from_slice(data);
-        write_u16(bytes, FREE_SPACE_END_RANGE.start, data_start as u16);
+        write_u16(bytes, DATA_USED_RANGE.start, (crate::page::PAGE_SIZE - data_start) as u16);
         let slot_at = slot_offset(slot_count);
         write_u16(bytes, slot_at, data_start as u16);
         write_u16(bytes, slot_at + 2, data.len() as u16);
@@ -187,11 +248,13 @@ impl<'a> SlottedPage<'a> {
     /// Tombstones `slot`, freeing its bytes for future compaction without
     /// shifting other slots' numbers.
     // TODO(M5): vacuum - reclaim tombstoned tuple bytes via compaction.
-    pub fn delete(&mut self, slot: u16) {
-        if slotted_slot_entry(self.page.data(), slot).is_some() {
+    pub fn delete(&mut self, slot: u16) -> Result<(), StorageError> {
+        let page_id = self.page.id();
+        if slotted_slot_entry(self.page.data(), slot, page_id)?.is_some() {
             let at = slot_offset(slot);
             write_u16(self.page.data_mut(), at + 2, 0);
         }
+        Ok(())
     }
 }
 
@@ -277,15 +340,14 @@ impl<'pool> TableHeap<'pool> {
     /// tuple (deleted, or never written).
     pub fn get_tuple(&self, rid: Rid) -> Result<Option<Vec<u8>>, StorageError> {
         let guard = self.buffer_pool.fetch_page(rid.page_id)?;
-        let bytes = slotted_read(guard.page().data(), rid.slot).map(|b| b.to_vec());
+        let bytes = slotted_read(guard.page().data(), rid.slot, rid.page_id)?.map(|b| b.to_vec());
         Ok(bytes)
     }
 
     /// Deletes the tuple at `rid`.
     pub fn delete_tuple(&mut self, rid: Rid) -> Result<(), StorageError> {
         let mut guard = self.buffer_pool.fetch_page(rid.page_id)?;
-        SlottedPage::new(guard.page_mut()).delete(rid.slot);
-        Ok(())
+        SlottedPage::new(guard.page_mut()).delete(rid.slot)
     }
 
     /// Returns an iterator over every live tuple in the heap, in physical
@@ -314,7 +376,7 @@ impl<'pool> TableHeap<'pool> {
         let bytes = guard.page().data();
         let count = checked_slot_count(bytes, page_id)?;
         for slot in from_slot..count {
-            if let Some(data) = slotted_read(bytes, slot) {
+            if let Some(data) = slotted_read(bytes, slot, page_id)? {
                 return Ok(PageScan::Tuple { slot, bytes: data.to_vec() });
             }
         }
@@ -373,8 +435,12 @@ impl Iterator for TableIter<'_, '_> {
                 Err(err) => return Some(Err(err)),
             };
             for slot in 0..count {
-                if let Some(data) = slotted_read(bytes, slot) {
-                    self.buffered.push_back((Rid::new(page_id, slot), data.to_vec()));
+                match slotted_read(bytes, slot, page_id) {
+                    Ok(Some(data)) => {
+                        self.buffered.push_back((Rid::new(page_id, slot), data.to_vec()))
+                    }
+                    Ok(None) => {}
+                    Err(err) => return Some(Err(err)),
                 }
             }
             let next = slotted_next_page_id(bytes);

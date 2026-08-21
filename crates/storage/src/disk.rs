@@ -11,8 +11,18 @@ use crate::page::Page;
 /// the start of page 0.
 const MAGIC: &[u8; 8] = b"FERRODB\0";
 
-/// The on-disk header format version this build reads and writes.
-const HEADER_VERSION: u32 = 2;
+/// The on-disk format version this build reads and writes. Covers not just
+/// the page-0 header's own byte layout but the heap page layout too (see
+/// `heap::NO_NEXT_PAGE` and `heap::SlottedPage::init`): both are baked into
+/// every page already on disk, so a change to either must bump this,
+/// otherwise a file written by an older build gets silently misread rather
+/// than rejected with the clear error below. Bumped to `3` when
+/// `NO_NEXT_PAGE` changed from `PageId(u32::MAX)` to `PageId(0)` and the
+/// heap page header's second field changed from an absolute offset to a
+/// used-bytes count - an old file's terminal `0xFFFFFFFF` sentinel would
+/// otherwise decode as a real (and nonexistent) page id under the new
+/// scheme.
+const HEADER_VERSION: u32 = 3;
 
 /// The byte layout of the page-0 header: magic (8) | version (4) |
 /// page_count (4) | catalog_first_page (4) | page_size (4), zero-padded to
@@ -73,7 +83,10 @@ impl DiskManager {
             if version != HEADER_VERSION {
                 return Err(StorageError::CorruptPage {
                     page_id: 0,
-                    reason: format!("unsupported header version {version}"),
+                    reason: format!(
+                        "unsupported on-disk format version {version}: this build reads and \
+                         writes version {HEADER_VERSION}"
+                    ),
                 });
             }
             let page_count = read_u32(&header_buf, header::PAGE_COUNT_RANGE.start);
