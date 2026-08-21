@@ -28,7 +28,7 @@ impl<'a> Lexer<'a> {
                     tokens.push(Token::new(TokenKind::Eof, start));
                     break;
                 }
-                Some(b) if b.is_ascii_digit() => self.lex_number(),
+                Some(b) if b.is_ascii_digit() => self.lex_number()?,
                 Some(b'\'') => self.lex_string(start)?,
                 Some(b) if b == b'_' || b.is_ascii_alphabetic() => self.lex_ident_or_keyword(),
                 Some(_) => self.lex_punct(start)?,
@@ -65,7 +65,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Scans a run of digits, optionally followed by a `.` and more digits.
-    fn lex_number(&mut self) -> TokenKind {
+    fn lex_number(&mut self) -> Result<TokenKind, SqlError> {
         let start = self.offset;
         self.advance_while(|b| b.is_ascii_digit());
 
@@ -79,10 +79,11 @@ impl<'a> Lexer<'a> {
         }
 
         let text = &self.input[start..self.offset];
+        let invalid = || SqlError::InvalidNumericLiteral { text: text.to_string(), offset: start };
         if is_float {
-            TokenKind::FloatLiteral(text.parse().unwrap_or(f64::NAN))
+            Ok(TokenKind::FloatLiteral(text.parse().map_err(|_| invalid())?))
         } else {
-            TokenKind::IntegerLiteral(text.parse().unwrap_or(i64::MAX))
+            Ok(TokenKind::IntegerLiteral(text.parse().map_err(|_| invalid())?))
         }
     }
 

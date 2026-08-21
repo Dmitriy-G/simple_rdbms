@@ -84,11 +84,11 @@ fn parses_insert_with_explicit_columns_and_multiple_rows() {
             columns: vec!["a".to_string(), "b".to_string()],
             values: vec![
                 vec![
-                    Expr::Literal(Value::Integer(1)),
+                    Expr::Literal(Value::BigInt(1)),
                     Expr::Literal(Value::Varchar("x".to_string()))
                 ],
                 vec![
-                    Expr::Literal(Value::Integer(2)),
+                    Expr::Literal(Value::BigInt(2)),
                     Expr::Literal(Value::Varchar("y".to_string()))
                 ],
             ],
@@ -105,7 +105,7 @@ fn parses_insert_without_column_list() {
             table: "t".to_string(),
             columns: vec![],
             values: vec![vec![
-                Expr::Literal(Value::Integer(1)),
+                Expr::Literal(Value::BigInt(1)),
                 Expr::Literal(Value::Boolean(true)),
                 Expr::Literal(Value::Null),
             ]],
@@ -140,7 +140,7 @@ fn parses_select_list_and_where_clause() {
             where_clause: Some(Expr::BinaryOp {
                 left: Box::new(Expr::Column("a".to_string())),
                 op: BinaryOperator::Eq,
-                right: Box::new(Expr::Literal(Value::Integer(1))),
+                right: Box::new(Expr::Literal(Value::BigInt(1))),
             }),
         })
     );
@@ -152,10 +152,10 @@ fn precedence_or_binds_looser_than_and() {
     let stmt = parse("SELECT * FROM t WHERE a = 1 OR b = 2 AND c = 3");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
 
-    let eq = |col: &str, v: i32| Expr::BinaryOp {
+    let eq = |col: &str, v: i64| Expr::BinaryOp {
         left: Box::new(Expr::Column(col.to_string())),
         op: BinaryOperator::Eq,
-        right: Box::new(Expr::Literal(Value::Integer(v))),
+        right: Box::new(Expr::Literal(Value::BigInt(v))),
     };
     let expected = Expr::BinaryOp {
         left: Box::new(eq("a", 1)),
@@ -175,10 +175,10 @@ fn parentheses_override_precedence() {
     let stmt = parse("SELECT * FROM t WHERE (a = 1 OR b = 2) AND c = 3");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
 
-    let eq = |col: &str, v: i32| Expr::BinaryOp {
+    let eq = |col: &str, v: i64| Expr::BinaryOp {
         left: Box::new(Expr::Column(col.to_string())),
         op: BinaryOperator::Eq,
-        right: Box::new(Expr::Literal(Value::Integer(v))),
+        right: Box::new(Expr::Literal(Value::BigInt(v))),
     };
     let expected = Expr::BinaryOp {
         left: Box::new(Expr::BinaryOp {
@@ -207,7 +207,7 @@ fn unary_not_and_negate() {
             op: BinaryOperator::Eq,
             right: Box::new(Expr::UnaryOp {
                 op: UnaryOperator::Negate,
-                expr: Box::new(Expr::Literal(Value::Integer(1))),
+                expr: Box::new(Expr::Literal(Value::BigInt(1))),
             }),
         }),
     };
@@ -260,6 +260,48 @@ fn unterminated_string_errors_with_offset() {
 fn trailing_comma_in_select_list_errors_not_panics() {
     let err = parse_err("SELECT a, FROM t");
     assert!(matches!(err, SqlError::UnexpectedToken { .. }));
+}
+
+#[test]
+fn oversized_integer_literal_is_a_lexer_error_quoting_the_text() {
+    let source = "SELECT 99999999999999999999 FROM t";
+    match parse_err(source) {
+        SqlError::InvalidNumericLiteral { text, offset } => {
+            assert_eq!(text, "99999999999999999999");
+            assert_eq!(offset, byte_offset(source, '9'));
+        }
+        other => panic!("expected InvalidNumericLiteral, got {other:?}"),
+    }
+}
+
+#[test]
+fn float_literal_parses_as_a_double_value() {
+    let stmt = parse("SELECT * FROM t WHERE a = 1.5");
+    let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
+    assert_eq!(
+        select.where_clause,
+        Some(Expr::BinaryOp {
+            left: Box::new(Expr::Column("a".to_string())),
+            op: BinaryOperator::Eq,
+            right: Box::new(Expr::Literal(Value::Double(1.5))),
+        })
+    );
+}
+
+#[test]
+fn parses_bigint_and_double_column_types() {
+    let stmt = parse("CREATE TABLE t (a INTEGER, b BIGINT, c DOUBLE)");
+    assert_eq!(
+        stmt,
+        Statement::CreateTable(CreateTableStatement {
+            table: "t".to_string(),
+            columns: vec![
+                ColumnDef { name: "a".to_string(), data_type: DataType::Integer, nullable: true },
+                ColumnDef { name: "b".to_string(), data_type: DataType::BigInt, nullable: true },
+                ColumnDef { name: "c".to_string(), data_type: DataType::Double, nullable: true },
+            ],
+        })
+    );
 }
 
 #[test]

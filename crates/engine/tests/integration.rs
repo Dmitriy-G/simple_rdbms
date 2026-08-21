@@ -117,6 +117,75 @@ fn data_survives_close_and_reopen() {
 }
 
 #[test]
+fn integer_bigint_and_double_columns_round_trip_their_own_value_variants() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER, b BIGINT, c DOUBLE)").expect("create table");
+    db.execute("INSERT INTO t VALUES (1, 9999999999, 1.5)").expect("insert");
+
+    let (columns, rows) = rows_of(db.execute("SELECT * FROM t").expect("select"));
+    assert_eq!(columns, vec!["a", "b", "c"]);
+    assert_eq!(rows, vec![vec![Value::Integer(1), Value::BigInt(9999999999), Value::Double(1.5)]]);
+}
+
+#[test]
+fn where_clause_integer_literal_narrows_against_an_integer_column() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER)").expect("create table");
+    db.execute("INSERT INTO t VALUES (1), (2)").expect("insert");
+
+    let (_, rows) = rows_of(db.execute("SELECT a FROM t WHERE a = 1").expect("select"));
+    assert_eq!(rows, vec![vec![Value::Integer(1)]]);
+}
+
+#[test]
+fn oversized_literal_into_integer_column_is_an_out_of_range_error_not_a_type_mismatch() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER)").expect("create table");
+    let too_big = i64::from(i32::MAX) + 1;
+    let err = db
+        .execute(&format!("INSERT INTO t VALUES ({too_big})"))
+        .expect_err("expected an out-of-range error");
+    let message = err.to_string();
+    assert!(message.contains('a'), "expected the error to name column 'a', got: {message}");
+    assert!(
+        !message.to_lowercase().contains("type mismatch"),
+        "expected an out-of-range error, not a type mismatch, got: {message}"
+    );
+}
+
+#[test]
+fn comparing_integer_column_to_bigint_column_is_still_an_error() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER, b BIGINT)").expect("create table");
+    let result = db.execute("SELECT * FROM t WHERE a = b");
+    assert!(result.is_err(), "expected an error comparing INTEGER to BIGINT, got {result:?}");
+}
+
+#[test]
+fn oversized_integer_literal_is_a_lexer_error_quoting_the_text() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER)").expect("create table");
+    let err = db
+        .execute("INSERT INTO t VALUES (99999999999999999999)")
+        .expect_err("expected a lexer error");
+    let message = err.to_string();
+    assert!(
+        message.contains("99999999999999999999"),
+        "expected the error to quote the offending literal, got: {message}"
+    );
+}
+
+#[test]
 fn select_from_nonexistent_table_is_an_error() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let mut db = open(&dir);

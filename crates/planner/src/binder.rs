@@ -218,6 +218,15 @@ impl<'a> Binder<'a> {
             for (expr, &col_index) in row.iter().zip(target_indices.iter()) {
                 let column = &schema.columns()[col_index];
                 let (bound, data_type) = self.bind_expr(expr, &empty_schema)?;
+                let (bound, data_type) = match bound {
+                    BoundExpr::Literal(value) => {
+                        let coerced =
+                            coerce_literal_to_column(value, column.data_type, &column.name)?;
+                        let data_type = coerced.data_type();
+                        (BoundExpr::Literal(coerced), data_type)
+                    }
+                    other => (other, data_type),
+                };
                 if let Some(data_type) = data_type {
                     if !data_types_match(data_type, column.data_type) {
                         return Err(PlannerError::TypeMismatch(format!(
@@ -321,6 +330,8 @@ impl<'a> Binder<'a> {
 
         let (left_bound, left_type) = self.bind_expr(left, schema)?;
         let (right_bound, right_type) = self.bind_expr(right, schema)?;
+        let (left_bound, left_type, right_bound, right_type) =
+            coerce_comparison_operands(left_bound, left_type, right_bound, right_type, schema)?;
 
         match op {
             And | Or => {
@@ -370,9 +381,69 @@ fn is_numeric(data_type: DataType) -> bool {
 /// Whether two resolved types may appear together in a comparison or an
 /// assignment, ignoring a `Varchar`'s declared maximum length (an identity
 /// property of the column, not of the value being compared against it).
+///
+/// This is deliberately asymmetric in spirit even though the check itself
+/// is symmetric: literals adapt to columns (see `coerce_literal_to_column`,
+/// applied before this check ever runs), but two column references never
+/// adapt to each other. By the time a comparison reaches this function,
+/// either operand still carrying a type that differs from the other's is a
+/// genuine mismatch, not something coercion should paper over.
 fn data_types_match(a: DataType, b: DataType) -> bool {
     match (a, b) {
         (DataType::Varchar(_), DataType::Varchar(_)) => true,
         (a, b) => a == b,
+    }
+}
+
+/// If `value` is a literal whose type differs from `target` but can be
+/// exactly represented in it, narrows/widens it to `target`; otherwise
+/// returns `value` unchanged so the caller's normal type-mismatch check
+/// applies. Only a `BigInt` literal against an `Integer` target is
+/// coerced today (a literal integer that overflows `i32` in an `Integer`
+/// column), reported against `column_name` if it doesn't fit.
+fn coerce_literal_to_column(
+    value: Value,
+    target: DataType,
+    column_name: &str,
+) -> Result<Value, PlannerError> {
+    match (&value, target) {
+        (Value::BigInt(v), DataType::Integer) => {
+            i32::try_from(*v).map(Value::Integer).map_err(|_| PlannerError::LiteralOutOfRange {
+                column: column_name.to_string(),
+                value: v.to_string(),
+                data_type: target,
+            })
+        }
+        _ => Ok(value),
+    }
+}
+
+/// Applies literal-to-column coercion to a comparison's operands: when one
+/// side is a bound literal and the other a column reference, the literal is
+/// coerced towards the column's type before the comparison's own type check
+/// runs. Column-to-column comparisons are returned unchanged.
+fn coerce_comparison_operands(
+    left: BoundExpr,
+    left_type: Option<DataType>,
+    right: BoundExpr,
+    right_type: Option<DataType>,
+    schema: &Schema,
+) -> Result<(BoundExpr, Option<DataType>, BoundExpr, Option<DataType>), PlannerError> {
+    match (left, right) {
+        (BoundExpr::Literal(v), BoundExpr::ColumnRef { index, data_type: col_type }) => {
+            let column_name = &schema.columns()[index].name;
+            let coerced = coerce_literal_to_column(v, col_type, column_name)?;
+            let coerced_type = coerced.data_type();
+            let right = BoundExpr::ColumnRef { index, data_type: col_type };
+            Ok((BoundExpr::Literal(coerced), coerced_type, right, right_type))
+        }
+        (BoundExpr::ColumnRef { index, data_type: col_type }, BoundExpr::Literal(v)) => {
+            let column_name = &schema.columns()[index].name;
+            let coerced = coerce_literal_to_column(v, col_type, column_name)?;
+            let coerced_type = coerced.data_type();
+            let left = BoundExpr::ColumnRef { index, data_type: col_type };
+            Ok((left, left_type, BoundExpr::Literal(coerced), coerced_type))
+        }
+        (left, right) => Ok((left, left_type, right, right_type)),
     }
 }

@@ -135,19 +135,22 @@ impl Parser {
         Ok(ColumnDef { name, data_type, nullable: true })
     }
 
-    /// Parses a `type_name`: `INTEGER | INT | TEXT | BOOLEAN`, matched
-    /// case-insensitively against an identifier token.
+    /// Parses a `type_name`: `INTEGER | INT | BIGINT | DOUBLE | TEXT |
+    /// BOOLEAN`, matched case-insensitively against an identifier token.
     fn parse_type_name(&mut self) -> Result<DataType, SqlError> {
+        const EXPECTED: &str = "INTEGER, INT, BIGINT, DOUBLE, TEXT, or BOOLEAN";
         let token = self.current().clone();
         let name = match &token.kind {
             TokenKind::Identifier(name) => name.clone(),
-            _ => return Err(self.unexpected("INTEGER, INT, TEXT, or BOOLEAN")),
+            _ => return Err(self.unexpected(EXPECTED)),
         };
         let data_type = match name.to_ascii_uppercase().as_str() {
             "INTEGER" | "INT" => DataType::Integer,
+            "BIGINT" => DataType::BigInt,
+            "DOUBLE" => DataType::Double,
             "TEXT" => DataType::Varchar(u32::MAX),
             "BOOLEAN" => DataType::Boolean,
-            _ => return Err(self.unexpected("INTEGER, INT, TEXT, or BOOLEAN")),
+            _ => return Err(self.unexpected(EXPECTED)),
         };
         self.advance();
         Ok(data_type)
@@ -228,12 +231,11 @@ impl Parser {
         match token.kind {
             TokenKind::IntegerLiteral(v) => {
                 self.advance();
-                let v = i32::try_from(v).map_err(|_| SqlError::UnexpectedToken {
-                    expected: "an integer literal in range".to_string(),
-                    found: format!("{v}"),
-                    offset: token.offset,
-                })?;
-                Ok(Expr::Literal(Value::Integer(v)))
+                Ok(Expr::Literal(Value::BigInt(v)))
+            }
+            TokenKind::FloatLiteral(v) => {
+                self.advance();
+                Ok(Expr::Literal(Value::Double(v)))
             }
             TokenKind::StringLiteral(s) => {
                 self.advance();

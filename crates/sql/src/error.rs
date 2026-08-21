@@ -36,6 +36,18 @@ pub enum SqlError {
         /// A description of what the grammar expected next.
         expected: String,
     },
+
+    /// A numeric literal's text could not be parsed as the numeric type its
+    /// shape implies (an integer literal too large for `i64`, or a float
+    /// literal outside `f64`'s range), rather than being silently replaced
+    /// with a sentinel value.
+    #[error("invalid numeric literal '{text}' at offset {offset}")]
+    InvalidNumericLiteral {
+        /// The exact source text the user typed.
+        text: String,
+        /// The byte offset where the literal starts.
+        offset: usize,
+    },
 }
 
 impl SqlError {
@@ -46,7 +58,8 @@ impl SqlError {
         match self {
             SqlError::UnexpectedChar { offset, .. }
             | SqlError::UnterminatedString { offset }
-            | SqlError::UnexpectedToken { offset, .. } => *offset,
+            | SqlError::UnexpectedToken { offset, .. }
+            | SqlError::InvalidNumericLiteral { offset, .. } => *offset,
             SqlError::UnexpectedEof { .. } => source.len(),
         }
     }

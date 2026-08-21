@@ -3,9 +3,9 @@
 
 use catalog::{Catalog, Column, Schema, TableInfo};
 use common::{PageId, TableId};
-use planner::{Binder, BoundStatement, PlannerError};
+use planner::{Binder, BoundExpr, BoundStatement, PlannerError};
 use sql::{Lexer, Parser};
-use types::DataType;
+use types::{DataType, Value};
 
 fn catalog_with_users() -> Catalog {
     let schema = Schema::new(vec![
@@ -14,6 +14,14 @@ fn catalog_with_users() -> Catalog {
         Column::new("active", DataType::Boolean, true),
     ]);
     Catalog::from_tables(vec![TableInfo::new(TableId(1), "users", schema, PageId(0))])
+}
+
+fn catalog_with_numeric_columns() -> Catalog {
+    let schema = Schema::new(vec![
+        Column::new("id", DataType::Integer, true),
+        Column::new("big", DataType::BigInt, true),
+    ]);
+    Catalog::from_tables(vec![TableInfo::new(TableId(1), "nums", schema, PageId(0))])
 }
 
 fn parse(source: &str) -> sql::Statement {
@@ -140,6 +148,66 @@ fn insert_leaves_unlisted_columns_null() {
     };
     assert_eq!(insert.rows.len(), 1);
     assert_eq!(insert.rows[0].len(), 3);
+}
+
+#[test]
+fn integer_literal_narrows_to_the_integer_column_it_is_compared_against() {
+    let catalog = catalog_with_users();
+    let BoundStatement::Select(select) = bind_ok(&catalog, "SELECT * FROM users WHERE id = 1")
+    else {
+        panic!("expected a bound SELECT");
+    };
+    let Some(BoundExpr::BinaryOp { right, .. }) = &select.predicate else {
+        panic!("expected a bound comparison predicate, got {:?}", select.predicate);
+    };
+    match right.as_ref() {
+        BoundExpr::Literal(Value::Integer(1)) => {}
+        other => panic!("expected a narrowed Integer(1) literal, got {other:?}"),
+    }
+}
+
+#[test]
+fn integer_literal_narrows_to_the_integer_column_it_is_inserted_into() {
+    let catalog = catalog_with_users();
+    let BoundStatement::Insert(insert) = bind_ok(&catalog, "INSERT INTO users (id) VALUES (1)")
+    else {
+        panic!("expected a bound INSERT");
+    };
+    match &insert.rows[0][0] {
+        BoundExpr::Literal(Value::Integer(1)) => {}
+        other => panic!("expected a narrowed Integer(1) literal, got {other:?}"),
+    }
+}
+
+#[test]
+fn oversized_literal_into_integer_column_is_out_of_range_not_type_mismatch() {
+    let catalog = catalog_with_users();
+    let too_big = i64::from(i32::MAX) + 1;
+    let source = format!("INSERT INTO users (id) VALUES ({too_big})");
+    match bind(&catalog, &source) {
+        Err(PlannerError::LiteralOutOfRange { column, .. }) => assert_eq!(column, "id"),
+        other => panic!("expected LiteralOutOfRange, got {other:?}"),
+    }
+}
+
+#[test]
+fn oversized_literal_against_integer_column_in_where_clause_is_out_of_range() {
+    let catalog = catalog_with_users();
+    let too_big = i64::from(i32::MAX) + 1;
+    let source = format!("SELECT * FROM users WHERE id = {too_big}");
+    match bind(&catalog, &source) {
+        Err(PlannerError::LiteralOutOfRange { column, .. }) => assert_eq!(column, "id"),
+        other => panic!("expected LiteralOutOfRange, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_comparison_between_integer_and_bigint_columns() {
+    let catalog = catalog_with_numeric_columns();
+    match bind(&catalog, "SELECT * FROM nums WHERE id = big") {
+        Err(PlannerError::TypeMismatch(_)) => {}
+        other => panic!("expected TypeMismatch, got {other:?}"),
+    }
 }
 
 #[test]
