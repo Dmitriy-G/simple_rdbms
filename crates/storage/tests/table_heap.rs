@@ -73,3 +73,33 @@ fn get_tuple_returns_none_for_deleted_slot() -> Result<(), Box<dyn Error>> {
     assert_eq!(heap.get_tuple(rid)?, None);
     Ok(())
 }
+
+/// Regression test: a page allocated but never `SlottedPage::init`-ed (as
+/// happens when a process exits before flushing a freshly-created page)
+/// stays all-zero, so its `next_page_id` field decodes as page 0 - a real
+/// page id - rather than the `NO_NEXT_PAGE` sentinel. A scan must report
+/// that as corruption instead of misreading the page-0 file header as
+/// slotted-page bytes and running off the end of the page.
+#[test]
+fn scanning_a_page_whose_init_never_reached_disk_reports_corruption() -> Result<(), Box<dyn Error>>
+{
+    let (pool, _dir) = open_pool(4)?;
+    let (page_id, guard) = pool.new_page()?;
+    drop(guard);
+
+    let heap = TableHeap::open(&pool, page_id);
+    match heap.iter().next() {
+        Some(Err(StorageError::CorruptPage { page_id: offending, .. })) => {
+            assert_eq!(offending, 0, "the header page should be identified as the corrupt one");
+        }
+        other => panic!(
+            "expected a CorruptPage error naming page 0, got a different outcome: {}",
+            match other {
+                Some(Ok(_)) => "a tuple",
+                Some(Err(_)) => "a different error",
+                None => "a clean end of heap",
+            }
+        ),
+    }
+    Ok(())
+}

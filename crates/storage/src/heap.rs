@@ -16,6 +16,15 @@ const HEADER_SIZE: usize = 8;
 /// Each slot is a (u16 offset, u16 len) pair.
 const SLOT_SIZE: usize = 4;
 
+/// The largest number of slots a slot array can hold without running past
+/// the page: `(PAGE_SIZE - HEADER_SIZE) / SLOT_SIZE`. `SlottedPage::insert`
+/// never lets `slot_count` grow past this (its free-space check refuses the
+/// insert first), so a stored `slot_count` above it can only mean the bytes
+/// were never actually written as a slotted page - e.g. a page whose
+/// `init()` was lost before reaching disk, or a non-heap page (such as the
+/// page-0 file header) misread as one.
+const MAX_SLOTS: u16 = ((crate::page::PAGE_SIZE - HEADER_SIZE) / SLOT_SIZE) as u16;
+
 fn slot_offset(slot: u16) -> usize {
     HEADER_SIZE + slot as usize * SLOT_SIZE
 }
@@ -32,6 +41,24 @@ fn write_u16(bytes: &mut [u8], at: usize, value: u16) {
 /// page's raw bytes.
 fn slotted_slot_count(bytes: &[u8]) -> u16 {
     read_u16(bytes, SLOT_COUNT_RANGE.start)
+}
+
+/// Reads and validates the slot count for a page being scanned from disk,
+/// rejecting a page whose recorded `slot_count` is too large to have ever
+/// been written by `SlottedPage::insert` (see `MAX_SLOTS`) instead of
+/// letting a scan run off the end of the page.
+fn checked_slot_count(bytes: &[u8], page_id: PageId) -> Result<u16, StorageError> {
+    let count = slotted_slot_count(bytes);
+    if count > MAX_SLOTS {
+        return Err(StorageError::CorruptPage {
+            page_id: page_id.0,
+            reason: format!(
+                "slot count {count} exceeds the {MAX_SLOTS} slots a {}-byte page can hold",
+                crate::page::PAGE_SIZE
+            ),
+        });
+    }
+    Ok(count)
 }
 
 /// Reads the offset (from the start of the page) at which tuple data
@@ -51,12 +78,16 @@ fn slotted_next_page_id(bytes: &[u8]) -> PageId {
 }
 
 /// Looks up slot `slot`'s (offset, len) entry, or `None` if `slot` is past
-/// the allocated slot array.
+/// the allocated slot array, or the slot array's recorded length would
+/// itself run past the page (a corrupt or misread page - see `MAX_SLOTS`).
 fn slotted_slot_entry(bytes: &[u8], slot: u16) -> Option<(u16, u16)> {
     if slot >= slotted_slot_count(bytes) {
         return None;
     }
     let at = slot_offset(slot);
+    if at + SLOT_SIZE > bytes.len() {
+        return None;
+    }
     Some((read_u16(bytes, at), read_u16(bytes, at + 2)))
 }
 
@@ -281,7 +312,7 @@ impl<'pool> TableHeap<'pool> {
     ) -> Result<PageScan, StorageError> {
         let guard = buffer_pool.fetch_page(page_id)?;
         let bytes = guard.page().data();
-        let count = slotted_slot_count(bytes);
+        let count = checked_slot_count(bytes, page_id)?;
         for slot in from_slot..count {
             if let Some(data) = slotted_read(bytes, slot) {
                 return Ok(PageScan::Tuple { slot, bytes: data.to_vec() });
@@ -337,7 +368,10 @@ impl Iterator for TableIter<'_, '_> {
                 Err(err) => return Some(Err(err)),
             };
             let bytes = guard.page().data();
-            let count = slotted_slot_count(bytes);
+            let count = match checked_slot_count(bytes, page_id) {
+                Ok(count) => count,
+                Err(err) => return Some(Err(err)),
+            };
             for slot in 0..count {
                 if let Some(data) = slotted_read(bytes, slot) {
                     self.buffered.push_back((Rid::new(page_id, slot), data.to_vec()));
