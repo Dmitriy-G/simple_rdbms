@@ -10,7 +10,12 @@
 #![forbid(unsafe_code)]
 
 mod database;
+mod executor_factory;
 mod result_set;
 
 pub use database::Database;
 pub use result_set::ResultSet;
+// Re-exported so `cli` (which may depend only on `engine` and `common`, per
+// the workspace's dependency-edge rules) can name the types `ResultSet`'s
+// rows are made of without depending on `types` directly.
+pub use types::{DataType, Tuple, Value};

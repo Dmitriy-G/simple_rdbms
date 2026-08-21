@@ -17,6 +17,11 @@ pub enum ExecutorError {
     /// acquired.
     #[error("transaction error: {0}")]
     Transaction(String),
+
+    /// The catalog reported an error while an operator looked up a table's
+    /// metadata, e.g. a table id that no longer resolves.
+    #[error("catalog error: {0}")]
+    Catalog(String),
 }
 
 impl From<ExecutorError> for common::Error {

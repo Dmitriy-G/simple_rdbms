@@ -119,6 +119,13 @@ impl BufferPool {
         Ok(())
     }
 
+    /// Forces every write made so far to durable storage. Callers should
+    /// `flush_all` first; this only syncs whatever has already reached the
+    /// disk manager.
+    pub fn sync(&self) -> Result<(), StorageError> {
+        self.disk_manager.borrow_mut().sync()
+    }
+
     /// The catalog's first page, as recorded in the database header, or
     /// `None` if the catalog has not been persisted yet.
     pub fn catalog_first_page(&self) -> Option<PageId> {

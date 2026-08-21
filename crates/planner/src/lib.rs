@@ -24,5 +24,10 @@ pub use binder::{
 pub use error::PlannerError;
 pub use logical_plan::LogicalPlan;
 pub use optimizer::{Optimizer, OptimizerRule};
-pub use physical_plan::PhysicalPlan;
+pub use physical_plan::{PhysicalPlan, to_physical};
 pub use plan::plan;
+// Re-exported so downstream crates that only see `BoundExpr` (whose
+// `BinaryOp`/`UnaryOp` variants carry these operator types) can name them
+// without depending on `sql` directly, which the workspace's dependency-edge
+// rules do not allow for e.g. `executor`.
+pub use sql::{BinaryOperator, UnaryOperator};

@@ -1,6 +1,7 @@
 use common::TableId;
 
 use crate::binder::{BoundColumnDef, BoundExpr};
+use crate::logical_plan::LogicalPlan;
 
 /// A plan tree that has committed to concrete execution algorithms for
 /// every logical operation, ready for the `executor` to turn 1:1 into an
@@ -52,4 +53,30 @@ pub enum PhysicalPlan {
         /// The new table's columns.
         columns: Vec<BoundColumnDef>,
     },
+}
+
+/// Lowers a `LogicalPlan` into a `PhysicalPlan` by committing to the one
+/// execution algorithm each logical operator currently has (a sequential
+/// scan, a nested-loop join): a direct, unoptimized 1:1 mapping. Choosing
+/// between multiple algorithms for the same logical operator is future work
+/// for the cost-based optimizer (see `crate::optimizer`).
+pub fn to_physical(plan: LogicalPlan) -> PhysicalPlan {
+    match plan {
+        LogicalPlan::SeqScan { table_id } => PhysicalPlan::SeqScan { table_id },
+        LogicalPlan::Filter { predicate, input } => {
+            PhysicalPlan::Filter { predicate, input: Box::new(to_physical(*input)) }
+        }
+        LogicalPlan::Projection { expressions, input } => {
+            PhysicalPlan::Projection { expressions, input: Box::new(to_physical(*input)) }
+        }
+        LogicalPlan::Join { left, right, predicate } => PhysicalPlan::NestedLoopJoin {
+            left: Box::new(to_physical(*left)),
+            right: Box::new(to_physical(*right)),
+            predicate,
+        },
+        LogicalPlan::Insert { table_id, rows } => PhysicalPlan::Insert { table_id, rows },
+        LogicalPlan::CreateTable { table_name, columns } => {
+            PhysicalPlan::CreateTable { table_name, columns }
+        }
+    }
 }

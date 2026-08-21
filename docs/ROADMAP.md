@@ -4,7 +4,7 @@ Each milestone is named after the database problem it solves, not the
 feature it adds — the feature is just how the problem gets solved this
 time. Milestones build on each other in order.
 
-## M1 — Durable, fixed-size storage
+## M1 — Durable, fixed-size storage ✅ Done
 **Problem:** a database needs a way to persist bytes to disk in units the
 rest of the engine can reason about, and to pack many variable-sized rows
 into those units without wasting space or losing track of where each one
@@ -13,7 +13,7 @@ is.
 slotted-page layout for packing variable-length tuples into a page with a
 stable per-tuple address (`Rid`).
 
-## M2 — Bounded memory over an unbounded database
+## M2 — Bounded memory over an unbounded database ✅ Done
 **Problem:** the database file will not fit in memory, but every operator
 needs page-granular access as if it did, without each caller managing raw
 I/O or accidentally evicting a page another caller is actively using.
@@ -21,13 +21,13 @@ I/O or accidentally evicting a page another caller is actively using.
 in use, and evicts unpinned pages by a replacement policy (LRU-K) when
 space is needed.
 
-## M3 — Something to query, before there's a query language
+## M3 — Something to query, before there's a query language ✅ Done
 **Problem:** prove the storage engine can actually hold a table and answer
 a query end to end, without yet paying for a parser.
 **Solution:** a catalog holding table/column metadata, wired directly to a
 hardcoded `CREATE`/`INSERT`/`SELECT` path.
 
-## M4 — Accepting SQL text instead of hardcoded calls
+## M4 — Accepting SQL text instead of hardcoded calls ✅ Done
 **Problem:** users write SQL, not Rust function calls; the engine needs to
 turn arbitrary query text into the same execution path M3 proved out.
 **Solution:** a lexer and hand-written recursive-descent parser producing
