@@ -90,17 +90,6 @@ impl BufferPool {
         Ok((page_id, PageGuard { page_id, frame_id, pool: self }))
     }
 
-    /// Unpins `page_id`, optionally marking its frame dirty. A page becomes
-    /// eligible for eviction once its pin count drops to zero.
-    pub fn unpin_page(&self, page_id: PageId, is_dirty: bool) -> Result<(), StorageError> {
-        let frame_id = self.frame_of(page_id)?;
-        if is_dirty {
-            self.dirty[frame_id.0 as usize].set(true);
-        }
-        self.unpin_frame(frame_id);
-        Ok(())
-    }
-
     /// Flushes `page_id` to disk if its frame is dirty.
     pub fn flush_page(&self, page_id: PageId) -> Result<(), StorageError> {
         let frame_id = self.frame_of(page_id)?;
@@ -187,6 +176,7 @@ impl BufferPool {
     fn unpin_frame(&self, frame_id: FrameId) {
         let idx = frame_id.0 as usize;
         let count = self.pin_counts[idx].get();
+        debug_assert!(count > 0, "pin count underflow on frame {frame_id:?}");
         if count == 0 {
             return;
         }
@@ -238,6 +228,15 @@ impl<'pool> PageGuard<'pool> {
         // the pool will never evict or reassign it while this borrow is
         // live.
         unsafe { &mut *self.pool.frames[idx].get() }
+    }
+
+    /// Marks this guard's frame dirty without requiring mutable access to
+    /// the page, for callers that mutate page bytes some other way (e.g.
+    /// through a layout view already borrowed from `page_mut`) and just
+    /// need to flag the frame afterward.
+    pub fn mark_dirty(&self) {
+        let idx = self.frame_id.0 as usize;
+        self.pool.dirty[idx].set(true);
     }
 }
 

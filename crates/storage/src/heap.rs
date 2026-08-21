@@ -191,8 +191,6 @@ impl<'pool> TableHeap<'pool> {
     pub fn create(buffer_pool: &'pool BufferPool) -> Result<Self, StorageError> {
         let (page_id, mut guard) = buffer_pool.new_page()?;
         SlottedPage::new(guard.page_mut()).init();
-        drop(guard);
-        buffer_pool.unpin_page(page_id, true)?;
         Ok(Self { buffer_pool, first_page_id: page_id })
     }
 
@@ -217,13 +215,10 @@ impl<'pool> TableHeap<'pool> {
             let mut guard = self.buffer_pool.fetch_page(current)?;
             let mut slotted = SlottedPage::new(guard.page_mut());
             if let Some(slot) = slotted.insert(tuple_bytes) {
-                drop(guard);
-                self.buffer_pool.unpin_page(current, true)?;
                 return Ok(Rid::new(current, slot));
             }
             let next = slotted.next_page_id();
             drop(guard);
-            self.buffer_pool.unpin_page(current, false)?;
 
             if let Some(next) = next {
                 current = next;
@@ -240,12 +235,9 @@ impl<'pool> TableHeap<'pool> {
         let (new_page_id, mut new_guard) = self.buffer_pool.new_page()?;
         SlottedPage::new(new_guard.page_mut()).init();
         drop(new_guard);
-        self.buffer_pool.unpin_page(new_page_id, true)?;
 
         let mut link_guard = self.buffer_pool.fetch_page(after)?;
         SlottedPage::new(link_guard.page_mut()).set_next_page_id(new_page_id);
-        drop(link_guard);
-        self.buffer_pool.unpin_page(after, true)?;
 
         Ok(new_page_id)
     }
@@ -255,8 +247,6 @@ impl<'pool> TableHeap<'pool> {
     pub fn get_tuple(&self, rid: Rid) -> Result<Option<Vec<u8>>, StorageError> {
         let guard = self.buffer_pool.fetch_page(rid.page_id)?;
         let bytes = slotted_read(guard.page().data(), rid.slot).map(|b| b.to_vec());
-        drop(guard);
-        self.buffer_pool.unpin_page(rid.page_id, false)?;
         Ok(bytes)
     }
 
@@ -264,8 +254,6 @@ impl<'pool> TableHeap<'pool> {
     pub fn delete_tuple(&mut self, rid: Rid) -> Result<(), StorageError> {
         let mut guard = self.buffer_pool.fetch_page(rid.page_id)?;
         SlottedPage::new(guard.page_mut()).delete(rid.slot);
-        drop(guard);
-        self.buffer_pool.unpin_page(rid.page_id, true)?;
         Ok(())
     }
 
@@ -313,11 +301,6 @@ impl Iterator for TableIter<'_, '_> {
                 }
             }
             let next = slotted_next_page_id(bytes);
-            drop(guard);
-
-            if let Err(err) = self.heap.buffer_pool.unpin_page(page_id, false) {
-                return Some(Err(err));
-            }
             self.current_page = (next != NO_NEXT_PAGE).then_some(next);
         }
     }

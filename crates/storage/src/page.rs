@@ -44,6 +44,24 @@ impl Page {
 /// buffer pool track pin counts: acquiring a guard increments the frame's
 /// pin count, and dropping it decrements that count, making the frame
 /// eligible for eviction again once nothing holds a guard to it.
+///
+/// `PageGuard` is the *only* way to release a pin: it has no public
+/// constructor (its fields are `pub(crate)`) and `BufferPool` exposes no
+/// manual unpin method, so the sole way to release a pin is to drop the
+/// guard that holds it. A caller cannot double-release a pin, because
+/// there is no second operation left to call:
+///
+/// ```compile_fail
+/// # use storage::buffer::BufferPool;
+/// # use storage::disk::DiskManager;
+/// # use storage::replacer::LruKReplacer;
+/// # let dir = tempfile::tempdir().unwrap();
+/// # let disk = DiskManager::open(dir.path().join("t.db"), storage::page::PAGE_SIZE).unwrap();
+/// # let pool = BufferPool::new(disk, 4, Box::new(LruKReplacer::new(4, 2)));
+/// let (page_id, guard) = pool.new_page().unwrap();
+/// drop(guard);
+/// pool.unpin_page(page_id, false).unwrap(); // no such method on `BufferPool`
+/// ```
 pub struct PageGuard<'pool> {
     pub(crate) page_id: PageId,
     /// The frame in the pool's frame table currently holding this page.
@@ -58,6 +76,6 @@ impl<'pool> PageGuard<'pool> {
     }
 }
 
-// `page()`, `page_mut()`, and `Drop` live in `crate::buffer` alongside
-// `BufferPool`, since they need access to its private frame table, pin
-// counts, and dirty flags.
+// `page()`, `page_mut()`, `mark_dirty()`, and `Drop` live in `crate::buffer`
+// alongside `BufferPool`, since they need access to its private frame
+// table, pin counts, and dirty flags.

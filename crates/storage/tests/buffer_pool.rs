@@ -1,6 +1,8 @@
 //! Buffer pool behavior: eviction under pressure, dirty data surviving a
-//! flush and refetch, and pinning every frame forcing a clean error instead
-//! of a panic.
+//! flush and refetch, pinning every frame forcing a clean error instead of
+//! a panic, and the pin-count protocol itself (a page stays resident for as
+//! long as *any* `PageGuard` on it is alive, and only becomes evictable
+//! once the last one drops).
 
 use std::error::Error;
 
@@ -15,6 +17,27 @@ fn open_pool(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dy
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
     let replacer = Box::new(LruKReplacer::new(pool_size, 2));
     Ok((BufferPool::new(disk, pool_size, replacer), dir))
+}
+
+/// Like `open_pool`, but with `k = 1` so the replacer's victim choice is
+/// plain LRU (oldest access wins) instead of LRU-K's "prefer evicting
+/// frames with less than `k` accesses" heuristic, which otherwise makes
+/// eviction order hard to predict in a short-lived test.
+fn open_pool_lru(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+    let replacer = Box::new(LruKReplacer::new(pool_size, 1));
+    Ok((BufferPool::new(disk, pool_size, replacer), dir))
+}
+
+/// Allocates and immediately releases `n` throwaway pages, to apply
+/// eviction pressure on whatever else is currently unpinned in the pool.
+fn apply_pressure(pool: &BufferPool, n: u8) -> Result<(), Box<dyn Error>> {
+    for marker in 0..n {
+        let (_id, mut guard) = pool.new_page()?;
+        guard.page_mut().data_mut()[0] = marker;
+    }
+    Ok(())
 }
 
 #[test]
@@ -36,14 +59,12 @@ fn evicts_under_pressure_and_dirty_data_survives_flush_and_refetch() -> Result<(
     let guard = pool.fetch_page(page_ids[0])?;
     assert_eq!(guard.page().data()[0], 0);
     drop(guard);
-    pool.unpin_page(page_ids[0], false)?;
 
     pool.flush_all()?;
 
     let guard = pool.fetch_page(page_ids[9])?;
     assert_eq!(guard.page().data()[0], 9);
     drop(guard);
-    pool.unpin_page(page_ids[9], false)?;
 
     Ok(())
 }
@@ -63,5 +84,66 @@ fn fetch_errors_rather_than_panics_when_every_frame_is_pinned() -> Result<(), Bo
 
     drop(guard_a);
     drop(guard_b);
+    Ok(())
+}
+
+#[test]
+fn second_live_guard_keeps_page_pinned_under_eviction_pressure() -> Result<(), Box<dyn Error>> {
+    let (pool, _dir) = open_pool_lru(2)?;
+
+    let (p, mut guard1) = pool.new_page()?;
+    guard1.page_mut().data_mut()[0] = 42;
+    let guard2 = pool.fetch_page(p)?;
+
+    // Releasing the first guard must not release the pin held by the
+    // second: `PageGuard` is the sole owner of its own pin, not a shared
+    // handle to "the page is pinned or not".
+    drop(guard1);
+
+    // Enough throwaway allocations to cycle every other frame in the pool
+    // through eviction several times over.
+    apply_pressure(&pool, 20)?;
+
+    assert_eq!(
+        guard2.page().data()[0],
+        42,
+        "page P must not have been evicted while guard2 was still alive"
+    );
+    drop(guard2);
+    Ok(())
+}
+
+#[test]
+fn pin_count_reaches_zero_only_after_the_last_guard_drops() -> Result<(), Box<dyn Error>> {
+    const N: usize = 4;
+    let (pool, _dir) = open_pool_lru(2)?;
+
+    let (p, mut first) = pool.new_page()?;
+    first.page_mut().data_mut()[0] = 7;
+    let mut guards = vec![first];
+    for _ in 1..N {
+        guards.push(pool.fetch_page(p)?);
+    }
+    assert_eq!(guards.len(), N);
+
+    // Drop guards one at a time; after each drop except the last, at least
+    // one guard is still alive, so P must survive eviction pressure.
+    while guards.len() > 1 {
+        guards.remove(0);
+        apply_pressure(&pool, 5)?;
+        if let Some(last) = guards.last() {
+            assert_eq!(
+                last.page().data()[0],
+                7,
+                "page P was evicted while {} guard(s) were still alive",
+                guards.len()
+            );
+        }
+    }
+
+    // Dropping the final guard does release the pin: P becomes evictable
+    // and a fresh round of pressure is free to reclaim its frame.
+    guards.clear();
+    apply_pressure(&pool, 5)?;
     Ok(())
 }
