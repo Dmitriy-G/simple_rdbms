@@ -9,12 +9,6 @@ use crate::persist::{decode_table_info, encode_table_info};
 use crate::schema::Schema;
 use crate::table_info::TableInfo;
 
-/// The transaction id `Catalog::open` provisions a brand-new catalog heap
-/// under, for the case where no caller-supplied transaction exists yet
-/// (there is no transaction manager integration in this milestone - every
-/// DDL operation runs under this fixed id instead).
-const SYSTEM_TXN: TxnId = TxnId(0);
-
 /// The system catalog: an in-memory registry of every table's metadata,
 /// keyed by name. Sits between the planner/executor and `storage`,
 /// resolving table and column names to the physical locations operators
@@ -58,10 +52,14 @@ impl Catalog {
 
     /// Opens the catalog backed by `buffer_pool`: finds (or provisions) its
     /// persisted table heap and loads every `TableInfo` row from it into
-    /// memory.
-    pub fn open(buffer_pool: &BufferPool) -> Result<Self, CatalogError> {
+    /// memory. `txn_id` is the transaction the catalog's own bootstrap heap
+    /// allocation (the first time a database is ever opened) is attributed
+    /// to; the caller is responsible for committing it, so that this
+    /// bootstrap write is a real, committed transaction rather than one
+    /// crash recovery would undo as a loser.
+    pub fn open(buffer_pool: &BufferPool, txn_id: TxnId) -> Result<Self, CatalogError> {
         let mut catalog = Self::new();
-        let catalog_first_page = catalog.ensure_catalog_heap(buffer_pool, SYSTEM_TXN)?;
+        let catalog_first_page = catalog.ensure_catalog_heap(buffer_pool, txn_id)?;
 
         let heap = TableHeap::open(buffer_pool, catalog_first_page);
         for entry in heap.iter() {

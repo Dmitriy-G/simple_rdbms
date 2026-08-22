@@ -1,12 +1,18 @@
 use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 
 use common::crc::crc32;
 use common::{Lsn, PageId, TxnId};
 
+use crate::block_device::{BlockDevice, FileDevice};
 use crate::error::StorageError;
+
+/// The `txn_id` every `CheckpointBegin`/`CheckpointEnd` record is logged
+/// under. Reserved so it can never collide with a real, caller-assigned
+/// transaction id (those start at `0` and count up); recovery's Analysis
+/// pass special-cases this id out of the Active Transaction Table.
+pub const CHECKPOINT_TXN: TxnId = TxnId(u64::MAX);
 
 /// The fixed-size portion of a serialized record: front `total_len` (4
 /// bytes), `lsn` (8), `prev_lsn` (8), `txn_id` (8), `kind` tag (1), `crc32`
@@ -53,8 +59,7 @@ pub enum LogRecordKind {
     /// that a second crash during undo does not undo the same change
     /// twice. `undo_next_lsn` points at the next record still to be undone
     /// for this transaction, skipping over the one this CLR compensates
-    /// for. Not written until M7 (recovery); defined now so the record
-    /// format is settled.
+    /// for.
     Clr {
         /// The page the compensating write applies to.
         page_id: PageId,
@@ -64,8 +69,22 @@ pub enum LogRecordKind {
         /// of the `Update` being undone).
         after: Vec<u8>,
         /// The LSN undo should continue from after this CLR, skipping the
-        /// record it compensates for.
+        /// record it compensates for. `Lsn(0)` means the chain is
+        /// exhausted (mirrors `prev_lsn`'s own `None`-as-`0` encoding).
         undo_next_lsn: Lsn,
+    },
+    /// Marks the start of a fuzzy checkpoint. Logged under `CHECKPOINT_TXN`.
+    /// Its own LSN is recorded in the page-0 header so recovery's Analysis
+    /// pass knows where to start scanning.
+    CheckpointBegin,
+    /// Carries the Active Transaction Table and Dirty Page Table snapshots
+    /// captured at (approximately) the matching `CheckpointBegin`. Logged
+    /// under `CHECKPOINT_TXN`.
+    CheckpointEnd {
+        /// Every transaction active at checkpoint time, with its `last_lsn`.
+        att: Vec<(TxnId, Lsn)>,
+        /// Every dirty page at checkpoint time, with its `recovery_lsn`.
+        dpt: Vec<(PageId, Lsn)>,
     },
 }
 
@@ -79,6 +98,8 @@ impl LogRecordKind {
             LogRecordKind::Update { .. } => 4,
             LogRecordKind::AllocPage { .. } => 5,
             LogRecordKind::Clr { .. } => 6,
+            LogRecordKind::CheckpointBegin => 7,
+            LogRecordKind::CheckpointEnd { .. } => 8,
         }
     }
 
@@ -87,7 +108,8 @@ impl LogRecordKind {
             LogRecordKind::Begin
             | LogRecordKind::Commit
             | LogRecordKind::Abort
-            | LogRecordKind::End => {}
+            | LogRecordKind::End
+            | LogRecordKind::CheckpointBegin => {}
             LogRecordKind::Update { page_id, offset, before, after } => {
                 buf.extend_from_slice(&page_id.0.to_le_bytes());
                 buf.extend_from_slice(&offset.to_le_bytes());
@@ -105,6 +127,18 @@ impl LogRecordKind {
                 buf.extend_from_slice(&(after.len() as u32).to_le_bytes());
                 buf.extend_from_slice(after);
                 buf.extend_from_slice(&undo_next_lsn.0.to_le_bytes());
+            }
+            LogRecordKind::CheckpointEnd { att, dpt } => {
+                buf.extend_from_slice(&(att.len() as u32).to_le_bytes());
+                for (txn_id, lsn) in att {
+                    buf.extend_from_slice(&txn_id.0.to_le_bytes());
+                    buf.extend_from_slice(&lsn.0.to_le_bytes());
+                }
+                buf.extend_from_slice(&(dpt.len() as u32).to_le_bytes());
+                for (page_id, lsn) in dpt {
+                    buf.extend_from_slice(&page_id.0.to_le_bytes());
+                    buf.extend_from_slice(&lsn.0.to_le_bytes());
+                }
             }
         }
     }
@@ -137,6 +171,24 @@ impl LogRecordKind {
                 let after = cursor.take_len_prefixed()?;
                 let undo_next_lsn = Lsn(cursor.take_u64()?);
                 LogRecordKind::Clr { page_id, offset, after, undo_next_lsn }
+            }
+            7 => LogRecordKind::CheckpointBegin,
+            8 => {
+                let att_len = cursor.take_u32()? as usize;
+                let mut att = Vec::with_capacity(att_len);
+                for _ in 0..att_len {
+                    let txn_id = TxnId(cursor.take_u64()?);
+                    let lsn = Lsn(cursor.take_u64()?);
+                    att.push((txn_id, lsn));
+                }
+                let dpt_len = cursor.take_u32()? as usize;
+                let mut dpt = Vec::with_capacity(dpt_len);
+                for _ in 0..dpt_len {
+                    let page_id = PageId(cursor.take_u32()?);
+                    let lsn = Lsn(cursor.take_u64()?);
+                    dpt.push((page_id, lsn));
+                }
+                LogRecordKind::CheckpointEnd { att, dpt }
             }
             _ => return None,
         };
@@ -284,11 +336,9 @@ fn decode_record(bytes: &[u8], pos: usize) -> Option<(LoggedRecord, usize)> {
 /// its transaction commits) and "no-force" (not flushing a transaction's
 /// pages at commit) both safe: redo replays every logged `Update`
 /// regardless of commit status, and undo rolls back anything that never
-/// committed - both arrive in M7, but the logging discipline that makes
-/// them possible starts here.
+/// committed - both driven by `storage::recovery`.
 pub struct LogManager {
-    file: File,
-    path: PathBuf,
+    device: Box<dyn BlockDevice>,
     /// Records appended but not yet flushed to disk.
     buffer: Vec<u8>,
     /// The LSN the next `append` will assign.
@@ -299,22 +349,32 @@ pub struct LogManager {
     /// Each transaction's most recently appended LSN, consulted by
     /// `append` to fill in a new record's `prev_lsn`.
     last_lsn_by_txn: HashMap<TxnId, u64>,
+    /// Cumulative bytes appended since this `LogManager` was opened, for
+    /// the checkpoint byte-threshold trigger. Not reset by a checkpoint;
+    /// callers compare against the value observed at the last checkpoint.
+    bytes_appended: u64,
 }
 
 impl LogManager {
-    /// Opens (creating if necessary) the log file at `path`. An existing
-    /// file is scanned forward, validating each record's CRC, to find
-    /// `next_lsn` and rebuild the per-transaction `prev_lsn` chain; any
-    /// trailing bytes past the last valid record (a torn write from a
-    /// crash mid-append) are truncated away, so appends after reopening
-    /// always start from a clean boundary.
+    /// Opens (creating if necessary) the log file at `path`.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StorageError> {
         let path = path.into();
-        let mut file =
+        let file =
             OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
+        Self::open_with_device(Box::new(FileDevice::new(file)))
+    }
 
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
+    /// Opens a log backed by an arbitrary `BlockDevice`, for tests and
+    /// crash-injection fault wrapping. An existing device is scanned
+    /// forward, validating each record's CRC, to find `next_lsn` and
+    /// rebuild the per-transaction `prev_lsn` chain; any trailing bytes
+    /// past the last valid record (a torn write from a crash mid-append)
+    /// are truncated away, so appends after reopening always start from a
+    /// clean boundary.
+    pub fn open_with_device(mut device: Box<dyn BlockDevice>) -> Result<Self, StorageError> {
+        let len = device.size()?;
+        let mut bytes = vec![0u8; len as usize];
+        device.read_at(0, &mut bytes)?;
 
         let mut pos = 0usize;
         let mut last_lsn = 0u64;
@@ -324,15 +384,15 @@ impl LogManager {
             last_lsn_by_txn.insert(record.txn_id, record.lsn.0);
             pos += len;
         }
-        file.set_len(pos as u64)?;
+        device.set_len(pos as u64)?;
 
         Ok(Self {
-            file,
-            path,
+            device,
             buffer: Vec::new(),
             next_lsn: last_lsn + 1,
             durable_lsn: last_lsn,
             last_lsn_by_txn,
+            bytes_appended: 0,
         })
     }
 
@@ -343,6 +403,7 @@ impl LogManager {
         self.next_lsn += 1;
         let prev_lsn = self.last_lsn_by_txn.get(&record.txn_id).copied().map(Lsn);
         let bytes = encode_record(lsn, prev_lsn, record.txn_id, &record.kind);
+        self.bytes_appended += bytes.len() as u64;
         self.buffer.extend_from_slice(&bytes);
         self.last_lsn_by_txn.insert(record.txn_id, lsn.0);
         Ok(lsn)
@@ -354,9 +415,9 @@ impl LogManager {
         if self.durable_lsn >= up_to.0 {
             return Ok(());
         }
-        self.file.seek(SeekFrom::End(0))?;
-        self.file.write_all(&self.buffer)?;
-        self.file.sync_all()?;
+        let offset = self.device.size()?;
+        self.device.write_at(offset, &self.buffer)?;
+        self.device.sync_all()?;
         self.buffer.clear();
         self.durable_lsn = self.next_lsn - 1;
         Ok(())
@@ -377,16 +438,39 @@ impl LogManager {
         Lsn(self.durable_lsn)
     }
 
-    /// Returns a forward iterator over every durable record with LSN
-    /// `>= from`, reading directly from disk (unflushed, buffered records
-    /// are not visible). Validates each record's CRC as it goes and stops
-    /// cleanly - yielding no further records, not an error - at the first
-    /// invalid or truncated one, since a crash mid-append leaves exactly
-    /// that shape and is not corruption.
-    pub fn iter_from(&self, from: Lsn) -> Result<LogIterator, StorageError> {
-        let mut file = File::open(&self.path)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
+    /// Cumulative bytes appended since this `LogManager` was opened.
+    pub fn bytes_appended(&self) -> u64 {
+        self.bytes_appended
+    }
+
+    /// `txn_id`'s most recently appended LSN, or `None` if it has never
+    /// appended a record. This is the authoritative source for a
+    /// transaction's tail of the log - unlike a value cached at `begin`
+    /// time, it reflects every record appended since, including ones
+    /// appended through paths that never see a `TransactionManager`, such
+    /// as `PageGuard::write`'s own `Update` records.
+    pub fn last_lsn_for(&self, txn_id: TxnId) -> Option<Lsn> {
+        self.last_lsn_by_txn.get(&txn_id).copied().map(Lsn)
+    }
+
+    /// Returns a forward iterator over every record with LSN `>= from`,
+    /// whether durably on disk or still sitting in the not-yet-flushed
+    /// in-memory buffer. The buffer's bytes are exactly what `flush` would
+    /// write immediately after the durable region, so appending them here
+    /// gives the same stream `flush`-then-read would - which is what lets
+    /// a runtime `abort` (see `txn::TransactionManager::abort`) find and
+    /// undo a transaction's own records before they have ever been
+    /// flushed, not just after a crash (where nothing is left unflushed
+    /// anyway, since a fresh process starts with an empty buffer).
+    /// Validates each durable record's CRC as it goes and stops cleanly -
+    /// yielding no further records, not an error - at the first invalid or
+    /// truncated one, since a crash mid-append leaves exactly that shape
+    /// and is not corruption.
+    pub fn iter_from(&mut self, from: Lsn) -> Result<LogIterator, StorageError> {
+        let len = self.device.size()?;
+        let mut bytes = vec![0u8; len as usize];
+        self.device.read_at(0, &mut bytes)?;
+        bytes.extend_from_slice(&self.buffer);
         Ok(LogIterator { bytes, pos: 0, from })
     }
 }

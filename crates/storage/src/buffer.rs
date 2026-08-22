@@ -41,7 +41,11 @@ pub struct BufferPool {
     page_table: RefCell<HashMap<PageId, FrameId>>,
     frame_page: Vec<Cell<Option<PageId>>>,
     pin_counts: Vec<Cell<usize>>,
-    dirty: Vec<Cell<bool>>,
+    /// `Some(lsn)` for a dirty frame, where `lsn` is the LSN of the record
+    /// that *first* dirtied it since its last flush - the `recovery_lsn`
+    /// ARIES's Dirty Page Table needs (see `dirty_page_table`). `None` for
+    /// a clean frame.
+    dirty_since_lsn: Vec<Cell<Option<Lsn>>>,
     free_list: RefCell<Vec<FrameId>>,
     replacer: RefCell<Box<dyn Replacer>>,
     /// Counts `fetch_page` calls, for tests to assert on how many pages an
@@ -85,7 +89,7 @@ impl BufferPool {
         let frames = (0..pool_size).map(|_| UnsafeCell::new(Page::new(PageId(0)))).collect();
         let frame_page = (0..pool_size).map(|_| Cell::new(None)).collect();
         let pin_counts = (0..pool_size).map(|_| Cell::new(0)).collect();
-        let dirty = (0..pool_size).map(|_| Cell::new(false)).collect();
+        let dirty_since_lsn = (0..pool_size).map(|_| Cell::new(None)).collect();
         let free_list = RefCell::new((0..pool_size as u32).map(FrameId).collect());
 
         Self {
@@ -95,7 +99,7 @@ impl BufferPool {
             page_table: RefCell::new(HashMap::new()),
             frame_page,
             pin_counts,
-            dirty,
+            dirty_since_lsn,
             free_list,
             replacer: RefCell::new(replacer),
             #[cfg(any(test, feature = "test-util"))]
@@ -138,7 +142,7 @@ impl BufferPool {
         let frame_id = self.allocate_frame()?;
         let mut page = Page::new(page_id);
         self.disk_manager.borrow_mut().read_page(page_id, &mut page)?;
-        self.install(frame_id, page_id, page, false);
+        self.install(frame_id, page_id, page, None);
         self.pin(frame_id);
         Ok(PageGuard { page_id, frame_id, pool: self })
     }
@@ -148,9 +152,9 @@ impl BufferPool {
     /// of `txn_id` before installing the page.
     pub fn new_page(&self, txn_id: TxnId) -> Result<(PageId, PageGuard<'_>), StorageError> {
         let page_id = self.disk_manager.borrow_mut().allocate_page()?;
-        self.append_log(txn_id, LogRecordKind::AllocPage { page_id })?;
+        let lsn = self.append_log(txn_id, LogRecordKind::AllocPage { page_id })?;
         let frame_id = self.allocate_frame()?;
-        self.install(frame_id, page_id, Page::new(page_id), true);
+        self.install(frame_id, page_id, Page::new(page_id), Some(lsn));
         self.pin(frame_id);
         Ok((page_id, PageGuard { page_id, frame_id, pool: self }))
     }
@@ -158,7 +162,7 @@ impl BufferPool {
     /// Flushes `page_id` to disk if its frame is dirty.
     pub fn flush_page(&self, page_id: PageId) -> Result<(), StorageError> {
         let frame_id = self.frame_of(page_id)?;
-        if self.dirty[frame_id.0 as usize].get() {
+        if self.dirty_since_lsn[frame_id.0 as usize].get().is_some() {
             self.flush_frame(frame_id, page_id)?;
         }
         Ok(())
@@ -228,7 +232,7 @@ impl BufferPool {
 
         let idx = frame_id.0 as usize;
         if let Some(victim_page_id) = self.frame_page[idx].get() {
-            if self.dirty[idx].get() {
+            if self.dirty_since_lsn[idx].get().is_some() {
                 self.flush_frame(frame_id, victim_page_id)?;
             }
             self.page_table.borrow_mut().remove(&victim_page_id);
@@ -240,7 +244,16 @@ impl BufferPool {
     /// Installs `page` into `frame_id`'s slot and records it under
     /// `page_id` in the page table. Only ever called on a frame that was
     /// just freed or evicted, so no live guard can be observing its bytes.
-    fn install(&self, frame_id: FrameId, page_id: PageId, page: Page, dirty: bool) {
+    /// `dirty_since_lsn` is `Some(lsn)` if the page is already dirty as of
+    /// installation (a brand-new page, dirtied by its own `AllocPage`
+    /// record), or `None` for a page freshly read from disk.
+    fn install(
+        &self,
+        frame_id: FrameId,
+        page_id: PageId,
+        page: Page,
+        dirty_since_lsn: Option<Lsn>,
+    ) {
         let idx = frame_id.0 as usize;
         // SAFETY: `frame_id` came from the free list or the replacer's
         // `evict`, both of which only hand back frames with a pin count of
@@ -250,7 +263,7 @@ impl BufferPool {
         }
         self.frame_page[idx].set(Some(page_id));
         self.page_table.borrow_mut().insert(page_id, frame_id);
-        self.dirty[idx].set(dirty);
+        self.dirty_since_lsn[idx].set(dirty_since_lsn);
     }
 
     fn pin(&self, frame_id: FrameId) {
@@ -302,12 +315,98 @@ impl BufferPool {
             durable_lsn,
         });
         self.disk_manager.borrow_mut().write_page(page_id, page)?;
-        self.dirty[idx].set(false);
+        self.dirty_since_lsn[idx].set(None);
         Ok(())
     }
 
     fn frame_of(&self, page_id: PageId) -> Result<FrameId, StorageError> {
         self.page_table.borrow().get(&page_id).copied().ok_or(StorageError::PageNotFound(page_id.0))
+    }
+
+    /// The Dirty Page Table: every currently-dirty resident page and its
+    /// `recovery_lsn` (the LSN of the record that first dirtied it since
+    /// its last flush). A checkpoint snapshot of this is what lets
+    /// recovery's Redo pass start from the oldest change that might still
+    /// be missing from disk, rather than the beginning of the log.
+    pub fn dirty_page_table(&self) -> Vec<(PageId, Lsn)> {
+        self.frame_page
+            .iter()
+            .zip(self.dirty_since_lsn.iter())
+            .filter_map(|(page_id, dirty_lsn)| Some((page_id.get()?, dirty_lsn.get()?)))
+            .collect()
+    }
+
+    /// The LSN of the most recent checkpoint's `CheckpointBegin` record, or
+    /// `None` if no checkpoint has been taken yet.
+    pub fn last_checkpoint_lsn(&self) -> Option<Lsn> {
+        self.disk_manager.borrow().last_checkpoint_lsn()
+    }
+
+    /// Records `lsn` as the most recent checkpoint's `CheckpointBegin` LSN,
+    /// so a future reopen's recovery knows where to start scanning.
+    pub fn set_last_checkpoint_lsn(&self, lsn: Lsn) -> Result<(), StorageError> {
+        self.disk_manager.borrow_mut().set_last_checkpoint_lsn(lsn)
+    }
+
+    /// Forward iterator over every durable write-ahead log record with LSN
+    /// `>= from`. Used by `storage::recovery` to scan the log.
+    pub fn log_iter_from(&self, from: Lsn) -> Result<crate::wal::LogIterator, StorageError> {
+        self.log_manager.borrow_mut().iter_from(from)
+    }
+
+    /// Extends the underlying file so `page_id` is allocated, if it is not
+    /// already - i.e. redoes an `AllocPage` record. Idempotent: a no-op if
+    /// `page_id` is already within the file's current extent.
+    pub fn ensure_page_allocated(&self, page_id: PageId) -> Result<(), StorageError> {
+        self.disk_manager.borrow_mut().ensure_allocated(page_id)
+    }
+
+    /// Cumulative bytes appended to the write-ahead log since it was
+    /// opened, for the checkpoint byte-threshold trigger.
+    pub fn log_bytes_appended(&self) -> u64 {
+        self.log_manager.borrow().bytes_appended()
+    }
+
+    /// `txn_id`'s most recently appended LSN, or `None` if it has never
+    /// appended a record. The authoritative way to find where a
+    /// transaction's undo chain starts - see `LogManager::last_lsn_for`.
+    pub fn last_lsn(&self, txn_id: TxnId) -> Option<Lsn> {
+        self.log_manager.borrow().last_lsn_for(txn_id)
+    }
+
+    /// The `page_lsn` of `page_id`, bringing it into the pool if not
+    /// already resident. Recovery-only: lets the Redo pass decide whether a
+    /// record needs replaying.
+    pub fn page_lsn(&self, page_id: PageId) -> Result<Lsn, StorageError> {
+        Ok(self.fetch_page(page_id)?.page().page_lsn())
+    }
+
+    /// Recovery-only: applies `bytes` at `offset` on `page_id` and stamps
+    /// its `page_lsn` to `lsn`, marking the frame dirty, *without*
+    /// appending a new WAL record. Bypasses the ordinary log-then-mutate
+    /// discipline `PageGuard::write` enforces, which is correct here only
+    /// because the caller is either replaying a record that is already
+    /// durably logged (Redo) or has just logged a `Clr` covering exactly
+    /// this write itself (Undo) - in both cases logging again would give
+    /// the log a false description of what happened.
+    pub fn stamp_write(
+        &self,
+        page_id: PageId,
+        offset: usize,
+        bytes: &[u8],
+        lsn: Lsn,
+    ) -> Result<(), StorageError> {
+        let guard = self.fetch_page(page_id)?;
+        let idx = guard.frame_id.0 as usize;
+        // SAFETY: `guard` pins this frame for the duration of this call, so
+        // the pool will not evict or reassign it while this borrow is live.
+        let page = unsafe { &mut *self.frames[idx].get() };
+        page.data_mut()[offset..offset + bytes.len()].copy_from_slice(bytes);
+        page.set_page_lsn(lsn);
+        if self.dirty_since_lsn[idx].get().is_none() {
+            self.dirty_since_lsn[idx].set(Some(lsn));
+        }
+        Ok(())
     }
 }
 
@@ -351,7 +450,9 @@ impl<'pool> PageGuard<'pool> {
         )?;
         page.data_mut()[offset..offset + bytes.len()].copy_from_slice(bytes);
         page.set_page_lsn(lsn);
-        self.pool.dirty[idx].set(true);
+        if self.pool.dirty_since_lsn[idx].get().is_none() {
+            self.pool.dirty_since_lsn[idx].set(Some(lsn));
+        }
         Ok(())
     }
 }

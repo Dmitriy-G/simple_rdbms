@@ -1,22 +1,20 @@
 //! Reproduces the M5 data-loss bug directly: a statement the REPL has
-//! already acknowledged must survive a hard kill of the process, because
-//! `Database::execute` syncs every mutating statement to disk before
-//! printing its result (see `Database::sync` and its call sites in
-//! `Database::execute`). Before that call existed, dirty pages only ever
-//! reached disk in `Database::close`/`Drop`, neither of which runs when a
-//! process is killed rather than exited normally.
+//! already acknowledged must survive a hard kill of the process. Every
+//! mutating statement commits its own transaction before `Database::execute`
+//! returns (see `TransactionManager::commit`'s force-at-commit flush), which
+//! makes the `Commit` record durable but deliberately leaves data pages
+//! dirty in the buffer pool (no-force) - they may not reach disk until a
+//! later eviction or `close`. That is safe because a crash can replay the
+//! log to redo whatever never made it to the data file: `Database::open`
+//! runs `storage::recovery::recover` before the catalog is even loaded (see
+//! M7, `task.MD`), so a hard kill right after an acknowledgment still
+//! leaves the statement fully recoverable from the WAL alone.
 //!
-//! M6 changed what `Database::sync` guarantees: it now forces the
-//! write-ahead log's `Commit` record to disk (force-at-commit) but
-//! deliberately leaves data pages dirty in the buffer pool (no-force), so
-//! they may not reach disk until a later eviction or `close`. That is safe
-//! *if* a crash can replay the log to redo whatever never made it to the
-//! data file - but redo is M7's work, not built yet. Until then, a hard
-//! kill genuinely can lose an acknowledged statement's data pages (while
-//! still leaving a durable record of it in the WAL), so this test is
-//! ignored rather than deleted: it documents the guarantee `Database::sync`
-//! is meant to restore once recovery exists, and should be un-ignored as
-//! part of implementing it.
+//! This is the "coarse subprocess SIGKILL sanity check" M7 asks for
+//! alongside the in-process crash-injection harness
+//! (`crates/engine/tests/crash_injection.rs`): it proves the in-process
+//! harness isn't lying about the real syscall path, by actually killing a
+//! real process rather than simulating a write failure.
 
 use std::error::Error;
 use std::io::{BufRead, BufReader, Write};
@@ -26,7 +24,6 @@ use common::DbConfig;
 use engine::Database;
 
 #[test]
-#[ignore = "requires WAL redo (M7); data pages are no-force until then, see module docs"]
 fn an_acknowledged_statement_survives_a_hard_kill() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("test.db");

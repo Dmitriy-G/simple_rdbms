@@ -1,4 +1,4 @@
-use common::{Lsn, TxnId};
+use common::TxnId;
 
 use crate::isolation::IsolationLevel;
 
@@ -27,15 +27,12 @@ pub struct Transaction {
     pub isolation_level: IsolationLevel,
     /// The transaction's current position in the 2PL protocol.
     pub state: TransactionState,
-    /// The LSN of this transaction's most recent log record, used to walk
-    /// its undo chain on abort.
-    pub last_lsn: Option<Lsn>,
 }
 
 impl Transaction {
     /// Begins a new transaction with the given id and isolation level, in
     /// the `Growing` state.
     pub fn new(txn_id: TxnId, isolation_level: IsolationLevel) -> Self {
-        Self { txn_id, isolation_level, state: TransactionState::Growing, last_lsn: None }
+        Self { txn_id, isolation_level, state: TransactionState::Growing }
     }
 }

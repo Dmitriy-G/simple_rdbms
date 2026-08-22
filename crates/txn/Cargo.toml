@@ -12,3 +12,6 @@ workspace = true
 common = { workspace = true }
 storage = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

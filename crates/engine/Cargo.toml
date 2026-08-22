@@ -8,6 +8,14 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Exposes `Database::open_with_devices`, for the crash-injection harness in
+# `tests/crash_injection.rs` to open a database against fault-injecting
+# `BlockDevice`s rather than real files. Same rationale as `storage`'s own
+# `test-util` feature: `#[cfg(test)]` alone doesn't apply when this crate's
+# integration tests link against a normal build of it.
+test-util = []
+
 [dependencies]
 common = { workspace = true }
 types = { workspace = true }
@@ -19,4 +27,5 @@ planner = { workspace = true }
 executor = { workspace = true }
 
 [dev-dependencies]
+engine = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }

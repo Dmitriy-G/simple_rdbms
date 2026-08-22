@@ -13,6 +13,10 @@ pub struct DbConfig {
     pub page_size: usize,
     /// Number of frames the buffer pool holds in memory.
     pub buffer_pool_size: usize,
+    /// A checkpoint is triggered once this many bytes have been appended to
+    /// the write-ahead log since the last one, bounding how much of the log
+    /// a future recovery's Analysis pass has to scan.
+    pub checkpoint_byte_threshold: u64,
 }
 
 impl DbConfig {
@@ -22,12 +26,16 @@ impl DbConfig {
     /// The default number of buffer pool frames.
     pub const DEFAULT_BUFFER_POOL_SIZE: usize = 64;
 
+    /// The default checkpoint trigger: 4 MiB of log growth.
+    pub const DEFAULT_CHECKPOINT_BYTE_THRESHOLD: u64 = 4 * 1024 * 1024;
+
     /// Builds a config pointing at `db_path` with default sizing.
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
             page_size: Self::DEFAULT_PAGE_SIZE,
             buffer_pool_size: Self::DEFAULT_BUFFER_POOL_SIZE,
+            checkpoint_byte_threshold: Self::DEFAULT_CHECKPOINT_BYTE_THRESHOLD,
         }
     }
 }

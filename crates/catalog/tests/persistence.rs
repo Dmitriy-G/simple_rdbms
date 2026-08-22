@@ -37,7 +37,7 @@ fn reopening_the_database_reloads_identical_schemas() -> Result<(), Box<dyn Erro
 
     {
         let pool = open_pool(&path)?;
-        let mut catalog = Catalog::open(&pool)?;
+        let mut catalog = Catalog::open(&pool, TXN)?;
         catalog.create_table(&pool, TXN, "users", users_schema())?;
         catalog.create_table(
             &pool,
@@ -53,7 +53,7 @@ fn reopening_the_database_reloads_identical_schemas() -> Result<(), Box<dyn Erro
 
     {
         let pool = open_pool(&path)?;
-        let catalog = Catalog::open(&pool)?;
+        let catalog = Catalog::open(&pool, TXN)?;
 
         assert_eq!(catalog.table_names(), vec!["orders", "users"]);
 
@@ -84,14 +84,14 @@ fn schemas_with_more_than_255_columns_round_trip() -> Result<(), Box<dyn Error>>
 
     {
         let pool = open_pool(&path)?;
-        let mut catalog = Catalog::open(&pool)?;
+        let mut catalog = Catalog::open(&pool, TXN)?;
         catalog.create_table(&pool, TXN, "wide", wide_schema.clone())?;
         pool.flush_all()?;
     }
 
     {
         let pool = open_pool(&path)?;
-        let catalog = Catalog::open(&pool)?;
+        let catalog = Catalog::open(&pool, TXN)?;
         let wide = catalog.get_table("wide")?;
         assert_eq!(wide.schema.columns().len(), COLUMN_COUNT);
         assert_eq!(wide.schema, wide_schema);
@@ -105,7 +105,7 @@ fn duplicate_table_name_is_rejected() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.db");
     let pool = open_pool(&path)?;
-    let mut catalog = Catalog::open(&pool)?;
+    let mut catalog = Catalog::open(&pool, TXN)?;
 
     catalog.create_table(&pool, TXN, "users", users_schema())?;
 

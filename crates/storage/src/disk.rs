@@ -1,9 +1,9 @@
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 
 use common::PageId;
 
+use crate::block_device::{BlockDevice, FileDevice};
 use crate::error::StorageError;
 use crate::page::Page;
 
@@ -25,19 +25,23 @@ const MAGIC: &[u8; 8] = b"FERRODB\0";
 /// `page_lsn` prefix (see `page::PAGE_LSN_RANGE`), which pushed the
 /// slotted-page header from `0..8` to `8..16` and shrank `MAX_SLOTS` and
 /// `MAX_TUPLE_SIZE` accordingly - a file written under version `4` has no
-/// `page_lsn` and would otherwise be misread as heap corruption. No
-/// migration: a version-`4` file must be deleted and recreated.
-const HEADER_VERSION: u32 = 5;
+/// `page_lsn` and would otherwise be misread as heap corruption. Bumped to
+/// `6` when the header gained `last_checkpoint_lsn` (see
+/// `header::LAST_CHECKPOINT_LSN_RANGE`), which recovery's Analysis pass
+/// reads to know where to start scanning the log. No migration: a file
+/// written under an older version must be deleted and recreated.
+const HEADER_VERSION: u32 = 6;
 
 /// The byte layout of the page-0 header: magic (8) | version (4) |
-/// catalog_first_page (4) | page_size (4), zero-padded to a full page.
-/// `page_count` is deliberately not part of this layout - see
-/// `HEADER_VERSION`'s doc comment.
+/// catalog_first_page (4) | page_size (4) | last_checkpoint_lsn (8),
+/// zero-padded to a full page.  `page_count` is deliberately not part of
+/// this layout - see `HEADER_VERSION`'s doc comment.
 mod header {
     pub const MAGIC_RANGE: std::ops::Range<usize> = 0..8;
     pub const VERSION_RANGE: std::ops::Range<usize> = 8..12;
     pub const CATALOG_FIRST_PAGE_RANGE: std::ops::Range<usize> = 12..16;
     pub const PAGE_SIZE_RANGE: std::ops::Range<usize> = 16..20;
+    pub const LAST_CHECKPOINT_LSN_RANGE: std::ops::Range<usize> = 20..28;
 }
 
 /// Owns the database file and performs raw, page-granular I/O against it.
@@ -45,38 +49,58 @@ mod header {
 /// database file; every layer above (buffer pool, heap, B+tree) reads and
 /// writes pages through here rather than touching the file directly.
 pub struct DiskManager {
-    file: File,
+    device: Box<dyn BlockDevice>,
     #[allow(dead_code)]
-    path: PathBuf,
+    path: Option<PathBuf>,
     page_size: usize,
     next_page_id: u32,
     catalog_first_page: u32,
+    /// The LSN of the most recent checkpoint's `CheckpointBegin` record, or
+    /// `0` if none has ever been taken. Recovery's Analysis pass starts
+    /// scanning the log here rather than from the beginning.
+    last_checkpoint_lsn: u64,
 }
 
 impl DiskManager {
     /// Opens (creating if necessary) the database file at `path`, using
-    /// `page_size`-byte pages. A brand-new file gets a fresh page-0 header
-    /// written to it; an existing file has its header validated (magic and
-    /// version) and `next_page_id` derived from the file's own length -
-    /// `file_len / page_size` - rather than from any stored count, so the
-    /// file's length is the single source of truth for how many pages have
-    /// been durably allocated.
+    /// `page_size`-byte pages.
     pub fn open(path: impl Into<PathBuf>, page_size: usize) -> Result<Self, StorageError> {
         let path = path.into();
-        let mut file =
+        let file =
             OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
-        let file_len = file.metadata()?.len();
+        Self::open_with_device(Box::new(FileDevice::new(file)), page_size, Some(path))
+    }
 
-        if file_len == 0 {
-            let mut manager =
-                Self { file, path, page_size, next_page_id: 1, catalog_first_page: u32::MAX };
+    /// Opens a database file backed by an arbitrary `BlockDevice`, for
+    /// tests and crash-injection fault wrapping. A brand-new (zero-length)
+    /// device gets a fresh page-0 header written to it; an existing one has
+    /// its header validated (magic and version) and `next_page_id` derived
+    /// from the device's own length - `device_len / page_size` - rather
+    /// than from any stored count, so the device's length is the single
+    /// source of truth for how many pages have been durably allocated.
+    pub fn open_with_device(
+        mut device: Box<dyn BlockDevice>,
+        page_size: usize,
+        path: Option<PathBuf>,
+    ) -> Result<Self, StorageError> {
+        let device_len = device.size()?;
+
+        if device_len == 0 {
+            let mut manager = Self {
+                device,
+                path,
+                page_size,
+                next_page_id: 1,
+                catalog_first_page: u32::MAX,
+                last_checkpoint_lsn: 0,
+            };
             manager.write_header()?;
             Ok(manager)
         } else {
-            if file_len % page_size as u64 != 0 {
-                let whole_pages = file_len / page_size as u64;
+            if device_len % page_size as u64 != 0 {
+                let whole_pages = device_len / page_size as u64;
                 return Err(StorageError::TruncatedFile {
-                    actual: file_len,
+                    actual: device_len,
                     expected: whole_pages * page_size as u64,
                     page_size,
                 });
@@ -86,9 +110,8 @@ impl DiskManager {
             // bytes: the file's actual page size is what we're about to
             // validate, so we can't yet trust the caller's `page_size` to
             // size this read.
-            let mut header_buf = vec![0u8; header::PAGE_SIZE_RANGE.end];
-            file.seek(SeekFrom::Start(0))?;
-            file.read_exact(&mut header_buf)?;
+            let mut header_buf = vec![0u8; header::LAST_CHECKPOINT_LSN_RANGE.end];
+            device.read_at(0, &mut header_buf)?;
 
             if &header_buf[header::MAGIC_RANGE] != MAGIC.as_slice() {
                 return Err(StorageError::CorruptPage {
@@ -117,9 +140,18 @@ impl DiskManager {
                     ),
                 });
             }
+            let last_checkpoint_lsn =
+                read_u64(&header_buf, header::LAST_CHECKPOINT_LSN_RANGE.start);
 
-            let next_page_id = (file_len / page_size as u64) as u32;
-            Ok(Self { file, path, page_size, next_page_id, catalog_first_page })
+            let next_page_id = (device_len / page_size as u64) as u32;
+            Ok(Self {
+                device,
+                path,
+                page_size,
+                next_page_id,
+                catalog_first_page,
+                last_checkpoint_lsn,
+            })
         }
     }
 
@@ -128,20 +160,18 @@ impl DiskManager {
     /// an error rather than yielding zeroed bytes.
     pub fn read_page(&mut self, page_id: PageId, page: &mut Page) -> Result<(), StorageError> {
         let offset = self.offset_of(page_id);
-        let file_len = self.file.metadata()?.len();
-        if offset + self.page_size as u64 > file_len {
+        let device_len = self.device.size()?;
+        if offset + self.page_size as u64 > device_len {
             return Err(StorageError::PageNotFound(page_id.0));
         }
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.read_exact(page.data_mut())?;
+        self.device.read_at(offset, page.data_mut())?;
         Ok(())
     }
 
     /// Writes `page`'s contents to its slot on disk.
     pub fn write_page(&mut self, page_id: PageId, page: &Page) -> Result<(), StorageError> {
         let offset = self.offset_of(page_id);
-        self.file.seek(SeekFrom::Start(offset))?;
-        self.file.write_all(page.data())?;
+        self.device.write_at(offset, page.data())?;
         Ok(())
     }
 
@@ -155,13 +185,27 @@ impl DiskManager {
         let page_id = PageId(self.next_page_id);
         self.next_page_id += 1;
         let new_len = self.next_page_id as u64 * self.page_size as u64;
-        self.file.set_len(new_len)?;
+        self.device.set_len(new_len)?;
         Ok(page_id)
+    }
+
+    /// Extends the file so that `page_id` is allocated, if it is not
+    /// already - i.e. redoes an `AllocPage` record. Idempotent: a no-op if
+    /// `page_id` is already within the file's current extent. Unlike
+    /// `allocate_page`, this never assigns a *new* id; it only ensures a
+    /// specific, already-decided one physically exists on disk.
+    pub fn ensure_allocated(&mut self, page_id: PageId) -> Result<(), StorageError> {
+        if page_id.0 >= self.next_page_id {
+            self.next_page_id = page_id.0 + 1;
+            let new_len = self.next_page_id as u64 * self.page_size as u64;
+            self.device.set_len(new_len)?;
+        }
+        Ok(())
     }
 
     /// Forces every write made so far to durable storage.
     pub fn sync(&mut self) -> Result<(), StorageError> {
-        self.file.sync_all()?;
+        self.device.sync_all()?;
         Ok(())
     }
 
@@ -184,6 +228,20 @@ impl DiskManager {
         self.write_header()
     }
 
+    /// The LSN of the most recent checkpoint's `CheckpointBegin` record, as
+    /// recorded in the database header, or `None` if no checkpoint has ever
+    /// been taken (`0` sentinel - LSNs are assigned starting at `1`).
+    pub fn last_checkpoint_lsn(&self) -> Option<common::Lsn> {
+        (self.last_checkpoint_lsn != 0).then_some(common::Lsn(self.last_checkpoint_lsn))
+    }
+
+    /// Records `lsn` as the most recent checkpoint's `CheckpointBegin` LSN
+    /// in the header, for the next reopen's recovery to start from.
+    pub fn set_last_checkpoint_lsn(&mut self, lsn: common::Lsn) -> Result<(), StorageError> {
+        self.last_checkpoint_lsn = lsn.0;
+        self.write_header()
+    }
+
     fn offset_of(&self, page_id: PageId) -> u64 {
         page_id.0 as u64 * self.page_size as u64
     }
@@ -196,13 +254,27 @@ impl DiskManager {
         buf[header::CATALOG_FIRST_PAGE_RANGE]
             .copy_from_slice(&self.catalog_first_page.to_le_bytes());
         buf[header::PAGE_SIZE_RANGE].copy_from_slice(&(self.page_size as u32).to_le_bytes());
+        buf[header::LAST_CHECKPOINT_LSN_RANGE]
+            .copy_from_slice(&self.last_checkpoint_lsn.to_le_bytes());
 
-        self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(&buf)?;
+        self.device.write_at(0, &buf)?;
         Ok(())
     }
 }
 
 fn read_u32(buf: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]])
+}
+
+fn read_u64(buf: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes([
+        buf[at],
+        buf[at + 1],
+        buf[at + 2],
+        buf[at + 3],
+        buf[at + 4],
+        buf[at + 5],
+        buf[at + 6],
+        buf[at + 7],
+    ])
 }

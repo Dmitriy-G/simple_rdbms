@@ -19,6 +19,11 @@ pub enum TxnError {
     /// of (never began, or already finished and was reaped).
     #[error("unknown transaction {0}")]
     UnknownTransaction(u64),
+
+    /// A lower-level storage failure (WAL append/flush, disk I/O) surfaced
+    /// while logging a transaction's lifecycle or undoing its writes.
+    #[error(transparent)]
+    Storage(#[from] storage::StorageError),
 }
 
 impl From<TxnError> for common::Error {

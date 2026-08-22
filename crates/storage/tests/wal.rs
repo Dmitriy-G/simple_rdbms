@@ -50,7 +50,7 @@ fn round_trip_mixed_record_kinds_survives_reopen() -> Result<(), Box<dyn Error>>
         log.flush(last_lsn)?;
     }
 
-    let log = LogManager::open(path.clone())?;
+    let mut log = LogManager::open(path.clone())?;
     let read_back: Vec<_> = log.iter_from(Lsn(0))?.collect();
 
     assert_eq!(read_back.len(), records.len());
