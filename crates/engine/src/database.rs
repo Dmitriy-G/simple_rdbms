@@ -42,6 +42,14 @@ impl Database {
     /// is why this is a separate, explicit call rather than left entirely to
     /// `Drop` (which cannot report them).
     pub fn close(self) -> Result<()> {
+        self.sync()
+    }
+
+    /// Flushes every dirty page and forces the file to durable storage.
+    /// Called at the end of `execute` for any statement that mutated state,
+    /// so a crash right after a statement is acknowledged never loses it;
+    /// read-only statements have nothing to sync and skip this.
+    pub fn sync(&self) -> Result<()> {
         self.buffer_pool.flush_all()?;
         self.buffer_pool.sync()?;
         Ok(())
@@ -64,6 +72,7 @@ impl Database {
                         .collect(),
                 );
                 self.catalog.create_table(&self.buffer_pool, &create.table_name, schema)?;
+                self.sync()?;
                 Ok(ResultSet::rows_affected(0))
             }
             BoundStatement::Insert(insert) => {
@@ -77,6 +86,7 @@ impl Database {
                         _ => None,
                     })
                     .unwrap_or(0);
+                self.sync()?;
                 Ok(ResultSet::rows_affected(inserted))
             }
             BoundStatement::Select(select) => {

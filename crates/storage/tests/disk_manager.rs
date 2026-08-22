@@ -107,6 +107,40 @@ fn reopening_a_file_with_a_different_format_version_is_a_clear_error() -> Result
     Ok(())
 }
 
+/// A file whose length isn't a whole multiple of the page size means the
+/// last page on disk is partially written - the failure mode this guards
+/// against is what would happen if `DiskManager::allocate_page`'s `set_len`
+/// were ever interrupted (it currently is not, being a single syscall, but
+/// the check must still hold for any other way a file could end up short).
+#[test]
+fn reopening_a_file_whose_length_is_not_a_page_multiple_is_a_clear_error()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.db");
+
+    {
+        let mut disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
+        disk.allocate_page()?;
+        disk.sync()?;
+    }
+
+    let truncated_len = (2 * PAGE_SIZE - 10) as u64;
+    let file = OpenOptions::new().write(true).open(&path)?;
+    file.set_len(truncated_len)?;
+    drop(file);
+
+    let message = match DiskManager::open(path, PAGE_SIZE) {
+        Ok(_) => panic!("reopening a file whose length isn't a page multiple must fail"),
+        Err(err) => err.to_string(),
+    };
+    assert!(
+        message.contains(&truncated_len.to_string()) && message.contains(&PAGE_SIZE.to_string()),
+        "error should name both the actual and expected lengths: {message}"
+    );
+
+    Ok(())
+}
+
 #[test]
 fn reading_an_unallocated_page_is_an_error_not_zeros() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;

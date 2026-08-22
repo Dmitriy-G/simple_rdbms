@@ -16,23 +16,23 @@ const MAGIC: &[u8; 8] = b"FERRODB\0";
 /// `heap::NO_NEXT_PAGE` and `heap::SlottedPage::init`): both are baked into
 /// every page already on disk, so a change to either must bump this,
 /// otherwise a file written by an older build gets silently misread rather
-/// than rejected with the clear error below. Bumped to `3` when
-/// `NO_NEXT_PAGE` changed from `PageId(u32::MAX)` to `PageId(0)` and the
-/// heap page header's second field changed from an absolute offset to a
-/// used-bytes count - an old file's terminal `0xFFFFFFFF` sentinel would
-/// otherwise decode as a real (and nonexistent) page id under the new
-/// scheme.
-const HEADER_VERSION: u32 = 3;
+/// than rejected with the clear error below. Bumped to `4` when the header
+/// stopped storing `page_count`: `next_page_id` is now derived from the
+/// file's actual length at open time (see `DiskManager::open`), so
+/// `allocate_page`'s `set_len` is the single durable act of allocation
+/// instead of racing a separate header rewrite against the new page's own
+/// initialization.
+const HEADER_VERSION: u32 = 4;
 
 /// The byte layout of the page-0 header: magic (8) | version (4) |
-/// page_count (4) | catalog_first_page (4) | page_size (4), zero-padded to
-/// a full page.
+/// catalog_first_page (4) | page_size (4), zero-padded to a full page.
+/// `page_count` is deliberately not part of this layout - see
+/// `HEADER_VERSION`'s doc comment.
 mod header {
     pub const MAGIC_RANGE: std::ops::Range<usize> = 0..8;
     pub const VERSION_RANGE: std::ops::Range<usize> = 8..12;
-    pub const PAGE_COUNT_RANGE: std::ops::Range<usize> = 12..16;
-    pub const CATALOG_FIRST_PAGE_RANGE: std::ops::Range<usize> = 16..20;
-    pub const PAGE_SIZE_RANGE: std::ops::Range<usize> = 20..24;
+    pub const CATALOG_FIRST_PAGE_RANGE: std::ops::Range<usize> = 12..16;
+    pub const PAGE_SIZE_RANGE: std::ops::Range<usize> = 16..20;
 }
 
 /// Owns the database file and performs raw, page-granular I/O against it.
@@ -52,7 +52,10 @@ impl DiskManager {
     /// Opens (creating if necessary) the database file at `path`, using
     /// `page_size`-byte pages. A brand-new file gets a fresh page-0 header
     /// written to it; an existing file has its header validated (magic and
-    /// version) and `next_page_id` derived from the header's `page_count`.
+    /// version) and `next_page_id` derived from the file's own length -
+    /// `file_len / page_size` - rather than from any stored count, so the
+    /// file's length is the single source of truth for how many pages have
+    /// been durably allocated.
     pub fn open(path: impl Into<PathBuf>, page_size: usize) -> Result<Self, StorageError> {
         let path = path.into();
         let mut file =
@@ -65,6 +68,15 @@ impl DiskManager {
             manager.write_header()?;
             Ok(manager)
         } else {
+            if file_len % page_size as u64 != 0 {
+                let whole_pages = file_len / page_size as u64;
+                return Err(StorageError::TruncatedFile {
+                    actual: file_len,
+                    expected: whole_pages * page_size as u64,
+                    page_size,
+                });
+            }
+
             // Read only the header fields themselves, not a full `page_size`
             // bytes: the file's actual page size is what we're about to
             // validate, so we can't yet trust the caller's `page_size` to
@@ -89,7 +101,6 @@ impl DiskManager {
                     ),
                 });
             }
-            let page_count = read_u32(&header_buf, header::PAGE_COUNT_RANGE.start);
             let catalog_first_page = read_u32(&header_buf, header::CATALOG_FIRST_PAGE_RANGE.start);
             let stored_page_size = read_u32(&header_buf, header::PAGE_SIZE_RANGE.start);
             if stored_page_size as usize != page_size {
@@ -102,7 +113,8 @@ impl DiskManager {
                 });
             }
 
-            Ok(Self { file, path, page_size, next_page_id: page_count, catalog_first_page })
+            let next_page_id = (file_len / page_size as u64) as u32;
+            Ok(Self { file, path, page_size, next_page_id, catalog_first_page })
         }
     }
 
@@ -129,14 +141,16 @@ impl DiskManager {
     }
 
     /// Allocates a new page id by extending the file, without writing any
-    /// tuple data to it yet. Persists the new page count into the header so
-    /// a reopen picks the right `next_page_id` back up.
+    /// tuple data to it yet. `set_len` is the only durable act of
+    /// allocation - a reopen derives `next_page_id` straight back from the
+    /// file's length (see `open`), so there is no separate header write to
+    /// race against the new page's own initialization, and no 4KB header
+    /// rewrite on every allocation either.
     pub fn allocate_page(&mut self) -> Result<PageId, StorageError> {
         let page_id = PageId(self.next_page_id);
         self.next_page_id += 1;
         let new_len = self.next_page_id as u64 * self.page_size as u64;
         self.file.set_len(new_len)?;
-        self.write_header()?;
         Ok(page_id)
     }
 
@@ -174,7 +188,6 @@ impl DiskManager {
         let mut buf = vec![0u8; self.page_size];
         buf[header::MAGIC_RANGE].copy_from_slice(MAGIC);
         buf[header::VERSION_RANGE].copy_from_slice(&HEADER_VERSION.to_le_bytes());
-        buf[header::PAGE_COUNT_RANGE].copy_from_slice(&self.next_page_id.to_le_bytes());
         buf[header::CATALOG_FIRST_PAGE_RANGE]
             .copy_from_slice(&self.catalog_first_page.to_le_bytes());
         buf[header::PAGE_SIZE_RANGE].copy_from_slice(&(self.page_size as u32).to_le_bytes());

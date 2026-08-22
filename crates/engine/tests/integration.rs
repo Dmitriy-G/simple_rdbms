@@ -117,6 +117,38 @@ fn data_survives_close_and_reopen() {
 }
 
 #[test]
+fn repeated_close_and_reopen_cycles_accumulate_tables_without_extra_page_growth() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().join("cycles.db");
+    const CYCLES: usize = 10;
+
+    for i in 0..CYCLES {
+        let mut db = Database::open(DbConfig::new(&path)).expect("open database");
+        db.execute(&format!("CREATE TABLE t{i} (a INTEGER)")).expect("create table");
+        db.close().expect("close database");
+    }
+
+    let db = Database::open(DbConfig::new(&path)).expect("reopen database");
+    let expected_names: Vec<String> = (0..CYCLES).map(|i| format!("t{i}")).collect();
+    assert_eq!(db.table_names(), expected_names);
+
+    let file_len = std::fs::metadata(&path).expect("stat database file").len();
+    let page_size = DbConfig::DEFAULT_PAGE_SIZE as u64;
+    // Page 0 is the header, one more page is the catalog's own heap
+    // (provisioned once, by the first CREATE TABLE - see
+    // `Catalog::ensure_catalog_heap`), and each of the `CYCLES` tables gets
+    // exactly one heap page of its own. Any extra growth here would mean a
+    // reopen is re-deriving `next_page_id` wrong and allocating pages it
+    // doesn't need.
+    let expected_pages = 2 + CYCLES as u64;
+    assert_eq!(
+        file_len,
+        expected_pages * page_size,
+        "file grew by more than the pages actually allocated"
+    );
+}
+
+#[test]
 fn integer_bigint_and_double_columns_round_trip_their_own_value_variants() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let mut db = open(&dir);

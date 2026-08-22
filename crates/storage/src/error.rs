@@ -27,6 +27,25 @@ pub enum StorageError {
     #[error("page {0} not found")]
     PageNotFound(u32),
 
+    /// The database file's length is not a whole multiple of its page size,
+    /// so the last page on disk is partially written rather than a complete
+    /// page. `set_len` (the sole durable act of allocation) is a single
+    /// syscall, so this should only arise from damage outside the engine's
+    /// own writes - but it must still be reported clearly rather than
+    /// silently truncating or rounding.
+    #[error(
+        "database file length {actual} bytes is not a multiple of the {page_size}-byte page \
+         size (expected {expected} bytes for a whole number of pages)"
+    )]
+    TruncatedFile {
+        /// The file's actual length, in bytes.
+        actual: u64,
+        /// The largest whole-page-multiple length not exceeding `actual`.
+        expected: u64,
+        /// The configured page size, in bytes.
+        page_size: usize,
+    },
+
     /// A tuple's encoded bytes are larger than a single page can ever hold,
     /// even empty, so no amount of retrying onto a fresh page would help.
     #[error("tuple of {size} bytes exceeds the {max}-byte maximum for a single page")]

@@ -150,6 +150,7 @@ dependencies = [
  "clap",
  "common",
  "engine",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]
