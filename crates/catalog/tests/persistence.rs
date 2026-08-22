@@ -5,15 +5,22 @@
 use std::error::Error;
 
 use catalog::{Catalog, CatalogError, Column, Schema};
+use common::TxnId;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
+use storage::wal::LogManager;
 use types::DataType;
+
+const TXN: TxnId = TxnId(0);
 
 fn open_pool(path: &std::path::Path) -> Result<BufferPool, Box<dyn Error>> {
     let disk = DiskManager::open(path, PAGE_SIZE)?;
-    Ok(BufferPool::new(disk, 16, Box::new(LruKReplacer::new(16, 2))))
+    let mut wal_path = path.as_os_str().to_owned();
+    wal_path.push(".wal");
+    let log = LogManager::open(wal_path)?;
+    Ok(BufferPool::new(disk, log, 16, Box::new(LruKReplacer::new(16, 2))))
 }
 
 fn users_schema() -> Schema {
@@ -31,9 +38,10 @@ fn reopening_the_database_reloads_identical_schemas() -> Result<(), Box<dyn Erro
     {
         let pool = open_pool(&path)?;
         let mut catalog = Catalog::open(&pool)?;
-        catalog.create_table(&pool, "users", users_schema())?;
+        catalog.create_table(&pool, TXN, "users", users_schema())?;
         catalog.create_table(
             &pool,
+            TXN,
             "orders",
             Schema::new(vec![
                 Column::new("order_id", DataType::BigInt, false),
@@ -77,7 +85,7 @@ fn schemas_with_more_than_255_columns_round_trip() -> Result<(), Box<dyn Error>>
     {
         let pool = open_pool(&path)?;
         let mut catalog = Catalog::open(&pool)?;
-        catalog.create_table(&pool, "wide", wide_schema.clone())?;
+        catalog.create_table(&pool, TXN, "wide", wide_schema.clone())?;
         pool.flush_all()?;
     }
 
@@ -99,9 +107,9 @@ fn duplicate_table_name_is_rejected() -> Result<(), Box<dyn Error>> {
     let pool = open_pool(&path)?;
     let mut catalog = Catalog::open(&pool)?;
 
-    catalog.create_table(&pool, "users", users_schema())?;
+    catalog.create_table(&pool, TXN, "users", users_schema())?;
 
-    match catalog.create_table(&pool, "users", users_schema()) {
+    match catalog.create_table(&pool, TXN, "users", users_schema()) {
         Err(CatalogError::TableAlreadyExists(name)) => assert_eq!(name, "users"),
         Err(other) => panic!("expected TableAlreadyExists, got {other}"),
         Ok(_) => panic!("a duplicate table name must be rejected"),

@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::error::Error;
 
+use common::TxnId;
 use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestCaseError, TestRng, TestRunner};
 use storage::StorageError;
@@ -13,25 +14,29 @@ use storage::disk::DiskManager;
 use storage::heap::{MAX_SLOTS, MAX_TUPLE_SIZE, TableHeap};
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
+use storage::wal::LogManager;
+
+const TXN: TxnId = TxnId(0);
 
 fn open_pool(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+    let log = LogManager::open(dir.path().join("test.db.wal"))?;
     let replacer = Box::new(LruKReplacer::new(pool_size, 2));
-    Ok((BufferPool::new(disk, pool_size, replacer), dir))
+    Ok((BufferPool::new(disk, log, pool_size, replacer), dir))
 }
 
 #[test]
 fn insert_spans_pages_and_iterates_every_tuple_back() -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
-    let mut heap = TableHeap::create(&pool)?;
+    let mut heap = TableHeap::create(&pool, TXN)?;
 
     let payload = vec![0x42u8; 300];
     let mut expected: HashMap<common::Rid, Vec<u8>> = HashMap::new();
     for i in 0..40u32 {
         let mut tuple = payload.clone();
         tuple.extend_from_slice(&i.to_le_bytes());
-        let rid = heap.insert_tuple(&tuple)?;
+        let rid = heap.insert_tuple(TXN, &tuple)?;
         expected.insert(rid, tuple);
     }
 
@@ -52,10 +57,10 @@ fn insert_spans_pages_and_iterates_every_tuple_back() -> Result<(), Box<dyn Erro
 #[test]
 fn insert_tuple_too_large_for_any_page_errors_cleanly() -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
-    let mut heap = TableHeap::create(&pool)?;
+    let mut heap = TableHeap::create(&pool, TXN)?;
 
     let oversized = vec![0u8; MAX_TUPLE_SIZE + 1];
-    match heap.insert_tuple(&oversized) {
+    match heap.insert_tuple(TXN, &oversized) {
         Err(StorageError::TupleTooLarge { .. }) => {}
         Err(other) => panic!("expected TupleTooLarge, got {other}"),
         Ok(_) => panic!("an oversized tuple must not be accepted"),
@@ -67,10 +72,10 @@ fn insert_tuple_too_large_for_any_page_errors_cleanly() -> Result<(), Box<dyn Er
 #[test]
 fn get_tuple_returns_none_for_deleted_slot() -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
-    let mut heap = TableHeap::create(&pool)?;
+    let mut heap = TableHeap::create(&pool, TXN)?;
 
-    let rid = heap.insert_tuple(b"gone soon")?;
-    heap.delete_tuple(rid)?;
+    let rid = heap.insert_tuple(TXN, b"gone soon")?;
+    heap.delete_tuple(TXN, rid)?;
 
     assert_eq!(heap.get_tuple(rid)?, None);
     Ok(())
@@ -86,7 +91,7 @@ fn get_tuple_returns_none_for_deleted_slot() -> Result<(), Box<dyn Error>> {
 fn scanning_a_page_whose_init_never_reached_disk_is_a_clean_empty_scan()
 -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
-    let (page_id, guard) = pool.new_page()?;
+    let (page_id, guard) = pool.new_page(TXN)?;
     drop(guard);
 
     let heap = TableHeap::open(&pool, page_id);
@@ -101,11 +106,11 @@ fn scanning_a_page_whose_init_never_reached_disk_is_a_clean_empty_scan()
 #[test]
 fn inserting_into_a_never_initialized_page_still_works() -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
-    let (page_id, guard) = pool.new_page()?;
+    let (page_id, guard) = pool.new_page(TXN)?;
     drop(guard);
 
     let mut heap = TableHeap::open(&pool, page_id);
-    let rid = heap.insert_tuple(b"lost its init write, still usable")?;
+    let rid = heap.insert_tuple(TXN, b"lost its init write, still usable")?;
     assert_eq!(
         heap.get_tuple(rid)?.as_deref(),
         Some(b"lost its init write, still usable".as_slice())
@@ -120,8 +125,10 @@ fn inserting_into_a_never_initialized_page_still_works() -> Result<(), Box<dyn E
 #[test]
 fn slot_count_above_max_slots_still_reports_corruption() -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
-    let (page_id, mut guard) = pool.new_page()?;
-    guard.page_mut().data_mut()[0..2].copy_from_slice(&(MAX_SLOTS + 1).to_le_bytes());
+    let (page_id, mut guard) = pool.new_page(TXN)?;
+    // Byte 8 is the start of the slotted-page header (`page_lsn` occupies
+    // the reserved `0..8` prefix; see `heap::SLOT_COUNT_RANGE`).
+    guard.write(TXN, 8, &(MAX_SLOTS + 1).to_le_bytes())?;
     drop(guard);
 
     let heap = TableHeap::open(&pool, page_id);
@@ -156,8 +163,8 @@ fn no_page_content_can_panic_a_reader() -> Result<(), Box<dyn Error>> {
     let outcome = runner.run(&strategy, |raw| {
         let (pool, _dir) = open_pool(2).map_err(|err| TestCaseError::fail(err.to_string()))?;
         let (page_id, mut guard) =
-            pool.new_page().map_err(|err| TestCaseError::fail(err.to_string()))?;
-        guard.page_mut().data_mut().copy_from_slice(&raw);
+            pool.new_page(TXN).map_err(|err| TestCaseError::fail(err.to_string()))?;
+        guard.write(TXN, 0, &raw).map_err(|err| TestCaseError::fail(err.to_string()))?;
         drop(guard);
 
         let mut heap = TableHeap::open(&pool, page_id);
@@ -172,7 +179,7 @@ fn no_page_content_can_panic_a_reader() -> Result<(), Box<dyn Error>> {
         for slot in 0..=u16::MAX {
             let _ = heap.get_tuple(common::Rid::new(page_id, slot));
         }
-        let _ = heap.insert_tuple(b"probe");
+        let _ = heap.insert_tuple(TXN, b"probe");
 
         Ok(())
     });

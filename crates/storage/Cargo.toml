@@ -21,5 +21,10 @@ types = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+# Self-referenced with `test-util` enabled so this crate's own integration
+# tests (under `tests/`) can see `BufferPool`'s test-only instrumentation:
+# they link against a normal (non-`--cfg test`) build of this library, the
+# same as any other crate's tests would.
+storage = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 proptest = { workspace = true }

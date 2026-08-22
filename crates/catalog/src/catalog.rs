@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use common::{PageId, TableId};
+use common::{PageId, TableId, TxnId};
 use storage::buffer::BufferPool;
 use storage::heap::TableHeap;
 
@@ -8,6 +8,12 @@ use crate::error::CatalogError;
 use crate::persist::{decode_table_info, encode_table_info};
 use crate::schema::Schema;
 use crate::table_info::TableInfo;
+
+/// The transaction id `Catalog::open` provisions a brand-new catalog heap
+/// under, for the case where no caller-supplied transaction exists yet
+/// (there is no transaction manager integration in this milestone - every
+/// DDL operation runs under this fixed id instead).
+const SYSTEM_TXN: TxnId = TxnId(0);
 
 /// The system catalog: an in-memory registry of every table's metadata,
 /// keyed by name. Sits between the planner/executor and `storage`,
@@ -55,7 +61,7 @@ impl Catalog {
     /// memory.
     pub fn open(buffer_pool: &BufferPool) -> Result<Self, CatalogError> {
         let mut catalog = Self::new();
-        let catalog_first_page = catalog.ensure_catalog_heap(buffer_pool)?;
+        let catalog_first_page = catalog.ensure_catalog_heap(buffer_pool, SYSTEM_TXN)?;
 
         let heap = TableHeap::open(buffer_pool, catalog_first_page);
         for entry in heap.iter() {
@@ -73,6 +79,7 @@ impl Catalog {
     pub fn create_table(
         &mut self,
         buffer_pool: &BufferPool,
+        txn_id: TxnId,
         name: &str,
         schema: Schema,
     ) -> Result<&TableInfo, CatalogError> {
@@ -81,12 +88,12 @@ impl Catalog {
         }
 
         let table_id = TableId(self.next_table_id);
-        let table_heap = TableHeap::create(buffer_pool)?;
+        let table_heap = TableHeap::create(buffer_pool, txn_id)?;
         let info = TableInfo::new(table_id, name, schema, table_heap.first_page_id());
 
-        let catalog_first_page = self.ensure_catalog_heap(buffer_pool)?;
+        let catalog_first_page = self.ensure_catalog_heap(buffer_pool, txn_id)?;
         let mut catalog_heap = TableHeap::open(buffer_pool, catalog_first_page);
-        catalog_heap.insert_tuple(&encode_table_info(&info))?;
+        catalog_heap.insert_tuple(txn_id, &encode_table_info(&info))?;
 
         self.next_table_id += 1;
         self.tables_by_id.insert(table_id, name.to_string());
@@ -125,7 +132,11 @@ impl Catalog {
     /// Returns the catalog's own table heap's root page, provisioning one
     /// (and recording it in the database header) if this is the first call
     /// against a catalog that didn't come from `open`.
-    fn ensure_catalog_heap(&mut self, buffer_pool: &BufferPool) -> Result<PageId, CatalogError> {
+    fn ensure_catalog_heap(
+        &mut self,
+        buffer_pool: &BufferPool,
+        txn_id: TxnId,
+    ) -> Result<PageId, CatalogError> {
         if let Some(page_id) = self.catalog_first_page {
             return Ok(page_id);
         }
@@ -134,7 +145,7 @@ impl Catalog {
             return Ok(page_id);
         }
 
-        let heap = TableHeap::create(buffer_pool)?;
+        let heap = TableHeap::create(buffer_pool, txn_id)?;
         let page_id = heap.first_page_id();
         buffer_pool.set_catalog_first_page(page_id)?;
         self.catalog_first_page = Some(page_id);

@@ -4,7 +4,7 @@ use common::PageId;
 use storage::StorageError;
 use storage::page::Page;
 use storage::replacer::LruKReplacer;
-use storage::wal::LogRecord;
+use storage::wal::{LogRecord, LogRecordKind};
 
 #[test]
 fn page_constructs_zeroed() {
@@ -20,8 +20,8 @@ fn lru_k_replacer_constructs() {
 
 #[test]
 fn log_record_constructs() {
-    let record = LogRecord::Begin { txn_id: common::TxnId(1) };
-    assert!(matches!(record, LogRecord::Begin { .. }));
+    let record = LogRecord { txn_id: common::TxnId(1), kind: LogRecordKind::Begin };
+    assert!(matches!(record.kind, LogRecordKind::Begin));
 }
 
 #[test]

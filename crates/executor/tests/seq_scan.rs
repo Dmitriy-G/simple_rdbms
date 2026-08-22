@@ -14,14 +14,18 @@ use storage::disk::DiskManager;
 use storage::heap::TableHeap;
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
+use storage::wal::LogManager;
 use txn::{IsolationLevel, Transaction};
 use types::{DataType, Encode, Tuple, Value};
+
+const TXN: TxnId = TxnId(0);
 
 fn open_pool(pool_size: usize) -> (BufferPool, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("create temp dir");
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE).expect("open disk");
+    let log = LogManager::open(dir.path().join("test.db.wal")).expect("open log");
     let replacer = Box::new(LruKReplacer::new(pool_size, 2));
-    (BufferPool::new(disk, pool_size, replacer), dir)
+    (BufferPool::new(disk, log, pool_size, replacer), dir)
 }
 
 /// Creates a single-column (`n BIGINT`) table and inserts `n` in `0..count`,
@@ -29,7 +33,7 @@ fn open_pool(pool_size: usize) -> (BufferPool, tempfile::TempDir) {
 /// table's id and the values expected back, in scan order.
 fn seed_table(pool: &BufferPool, catalog: &mut Catalog, count: i64) -> (TableId, Vec<i64>) {
     let schema = Schema::new(vec![Column::new("n", DataType::BigInt, false)]);
-    let info = catalog.create_table(pool, "t", schema).expect("create table");
+    let info = catalog.create_table(pool, TXN, "t", schema).expect("create table");
     let table_id = info.table_id;
     let mut heap = TableHeap::open(pool, info.first_page_id);
 
@@ -37,7 +41,7 @@ fn seed_table(pool: &BufferPool, catalog: &mut Catalog, count: i64) -> (TableId,
     for n in 0..count {
         let mut bytes = Vec::new();
         Tuple::new(vec![Value::BigInt(n)]).encode(&mut bytes);
-        heap.insert_tuple(&bytes).expect("insert tuple");
+        heap.insert_tuple(TXN, &bytes).expect("insert tuple");
         expected.push(n);
     }
     (table_id, expected)

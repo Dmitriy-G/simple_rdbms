@@ -1,4 +1,4 @@
-use common::{FrameId, PageId};
+use common::{FrameId, Lsn, PageId};
 
 /// The fixed size, in bytes, of every page in the database file and the
 /// write-ahead log. Matches `common::DbConfig::DEFAULT_PAGE_SIZE`; a
@@ -7,6 +7,15 @@ use common::{FrameId, PageId};
 /// page size disagrees with it, so it is not meant to vary per-page or
 /// across reopens of the same file.
 pub const PAGE_SIZE: usize = 4096;
+
+/// The byte range, at the start of every page, reserved for the page's
+/// `pageLSN`: the log sequence number of the last WAL record that
+/// describes a change to this page's bytes. The write-ahead rule is
+/// enforced by comparing this against the log's own durable LSN before the
+/// page is allowed to reach disk (see `BufferPool::flush_frame`), so every
+/// page layout built on top of `Page` (slotted heap pages, B+tree nodes)
+/// must treat these 8 bytes as reserved, not available for its own layout.
+pub const PAGE_LSN_RANGE: std::ops::Range<usize> = 0..8;
 
 /// A single fixed-size page: the unit of I/O between the disk manager and
 /// the buffer pool, and the unit of layout for slotted-page heap storage
@@ -36,8 +45,32 @@ impl Page {
     }
 
     /// Mutable access to the page's raw bytes, for in-place layout updates.
+    /// Not exposed outside the crate as a way to mutate a *resident* page's
+    /// bytes — `PageGuard::write` is the only path for that, since it is
+    /// what logs the change before applying it. This stays `pub` for
+    /// callers building a `Page` from scratch off the buffer pool (e.g.
+    /// `DiskManager::read_page`, which fills a freshly constructed page
+    /// from disk with nothing yet to log).
     pub fn data_mut(&mut self) -> &mut [u8; PAGE_SIZE] {
         &mut self.data
+    }
+
+    /// The LSN of the last WAL record describing a change to this page, or
+    /// `Lsn(0)` if the page has never been written through
+    /// `PageGuard::write` (a fresh, all-zero page).
+    pub fn page_lsn(&self) -> Lsn {
+        let bytes = &self.data[PAGE_LSN_RANGE];
+        Lsn(u64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ]))
+    }
+
+    /// Stamps this page with `lsn`, recording that its bytes now reflect
+    /// every WAL record up to and including `lsn`. Called by
+    /// `PageGuard::write` after applying a change, never directly by
+    /// higher layers.
+    pub fn set_page_lsn(&mut self, lsn: Lsn) {
+        self.data[PAGE_LSN_RANGE].copy_from_slice(&lsn.0.to_le_bytes());
     }
 }
 
@@ -54,13 +87,16 @@ impl Page {
 /// there is no second operation left to call:
 ///
 /// ```compile_fail
+/// # use common::TxnId;
 /// # use storage::buffer::BufferPool;
 /// # use storage::disk::DiskManager;
 /// # use storage::replacer::LruKReplacer;
+/// # use storage::wal::LogManager;
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let disk = DiskManager::open(dir.path().join("t.db"), storage::page::PAGE_SIZE).unwrap();
-/// # let pool = BufferPool::new(disk, 4, Box::new(LruKReplacer::new(4, 2)));
-/// let (page_id, guard) = pool.new_page().unwrap();
+/// # let log = LogManager::open(dir.path().join("t.db.wal")).unwrap();
+/// # let pool = BufferPool::new(disk, log, 4, Box::new(LruKReplacer::new(4, 2)));
+/// let (page_id, guard) = pool.new_page(TxnId(0)).unwrap();
 /// drop(guard);
 /// pool.unpin_page(page_id, false).unwrap(); // no such method on `BufferPool`
 /// ```
@@ -78,6 +114,6 @@ impl<'pool> PageGuard<'pool> {
     }
 }
 
-// `page()`, `page_mut()`, `mark_dirty()`, and `Drop` live in `crate::buffer`
-// alongside `BufferPool`, since they need access to its private frame
-// table, pin counts, and dirty flags.
+// `page()`, `write()`, and `Drop` live in `crate::buffer` alongside
+// `BufferPool`, since they need access to its private frame table, pin
+// counts, dirty flags, and log manager.

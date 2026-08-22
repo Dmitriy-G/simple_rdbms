@@ -488,6 +488,7 @@ version = "0.1.0"
 dependencies = [
  "common",
  "proptest",
+ "storage",
  "tempfile",
  "thiserror",
  "types",

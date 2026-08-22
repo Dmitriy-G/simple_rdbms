@@ -6,6 +6,7 @@ use sql::{Lexer, Parser};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::replacer::LruKReplacer;
+use storage::wal::{LogManager, LogRecordKind};
 use txn::{IsolationLevel, Transaction, TransactionManager};
 use types::{Tuple, Value};
 
@@ -16,6 +17,12 @@ use crate::result_set::ResultSet;
 /// frame before falling back to plain LRU. Not yet exposed as a config knob;
 /// `2` is the classic LRU-2 choice.
 const REPLACER_K: usize = 2;
+
+/// The transaction id used for operations that don't yet run under a real,
+/// caller-supplied transaction (DDL, and the per-statement commit record):
+/// there is no transaction manager integration in this milestone, so every
+/// such operation is attributed to this fixed id instead.
+const SYSTEM_TXN: TxnId = TxnId(0);
 
 /// A single open database. Owns the catalog, buffer pool, and transaction
 /// manager, and is the object every SQL statement is executed against.
@@ -30,28 +37,42 @@ impl Database {
     /// Opens (creating if necessary) the database described by `config`,
     /// standing up its disk manager, buffer pool, and catalog.
     pub fn open(config: DbConfig) -> Result<Self> {
+        let mut wal_path = config.db_path.clone().into_os_string();
+        wal_path.push(".wal");
+        let log_manager = LogManager::open(wal_path)?;
         let disk_manager = DiskManager::open(config.db_path.clone(), config.page_size)?;
         let replacer = Box::new(LruKReplacer::new(config.buffer_pool_size, REPLACER_K));
-        let buffer_pool = BufferPool::new(disk_manager, config.buffer_pool_size, replacer);
+        let buffer_pool =
+            BufferPool::new(disk_manager, log_manager, config.buffer_pool_size, replacer);
         let catalog = Catalog::open(&buffer_pool)?;
         Ok(Self { catalog, buffer_pool, txn_manager: TransactionManager::new() })
     }
 
-    /// Closes the database: flushes every dirty page and syncs the file to
-    /// durable storage. Errors here are real failures worth reporting, which
-    /// is why this is a separate, explicit call rather than left entirely to
-    /// `Drop` (which cannot report them).
+    /// Closes the database: forces every write-ahead log record to disk,
+    /// flushes every dirty page, and syncs the file to durable storage.
+    /// Errors here are real failures worth reporting, which is why this is
+    /// a separate, explicit call rather than left entirely to `Drop` (which
+    /// cannot report them).
     pub fn close(self) -> Result<()> {
-        self.sync()
-    }
-
-    /// Flushes every dirty page and forces the file to durable storage.
-    /// Called at the end of `execute` for any statement that mutated state,
-    /// so a crash right after a statement is acknowledged never loses it;
-    /// read-only statements have nothing to sync and skip this.
-    pub fn sync(&self) -> Result<()> {
+        self.buffer_pool.flush_log_all()?;
         self.buffer_pool.flush_all()?;
         self.buffer_pool.sync()?;
+        Ok(())
+    }
+
+    /// Forces this statement's changes durable by committing to the
+    /// write-ahead log alone: appends a `Commit` record and flushes the log
+    /// up to it. Called at the end of `execute` for any statement that
+    /// mutated state, so a crash right after a statement is acknowledged
+    /// never loses it. Data pages are deliberately *not* flushed here
+    /// (no-force): they may already be on disk from an earlier eviction
+    /// (steal) or may not reach disk until much later - both are safe once
+    /// every change to them is durably logged first (see
+    /// `BufferPool::flush_frame`). Read-only statements have nothing to
+    /// commit and skip this.
+    pub fn sync(&self) -> Result<()> {
+        let commit_lsn = self.buffer_pool.append_log(SYSTEM_TXN, LogRecordKind::Commit)?;
+        self.buffer_pool.flush_log(commit_lsn)?;
         Ok(())
     }
 
@@ -71,7 +92,12 @@ impl Database {
                         .map(|column| Column::new(column.name, column.data_type, column.nullable))
                         .collect(),
                 );
-                self.catalog.create_table(&self.buffer_pool, &create.table_name, schema)?;
+                self.catalog.create_table(
+                    &self.buffer_pool,
+                    SYSTEM_TXN,
+                    &create.table_name,
+                    schema,
+                )?;
                 self.sync()?;
                 Ok(ResultSet::rows_affected(0))
             }
@@ -114,7 +140,7 @@ impl Database {
     /// never-committed `Transaction` purely to satisfy `ExecutorContext`'s
     /// shape.
     fn run(&self, physical: PhysicalPlan) -> Result<Vec<Tuple>> {
-        let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted);
+        let txn = Transaction::new(SYSTEM_TXN, IsolationLevel::ReadCommitted);
         let mut executor = build_executor(physical);
         let mut ctx = ExecutorContext::new(&self.catalog, &self.buffer_pool, &txn);
         executor.init(&mut ctx)?;
@@ -132,6 +158,7 @@ impl Drop for Database {
     /// explicitly. Errors are swallowed here (there is nowhere to report
     /// them from `Drop`); call `close` to observe them.
     fn drop(&mut self) {
+        let _ = self.buffer_pool.flush_log_all();
         let _ = self.buffer_pool.flush_all();
     }
 }

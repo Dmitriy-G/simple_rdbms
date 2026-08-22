@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod config;
+pub mod crc;
 mod error;
 mod ids;
 

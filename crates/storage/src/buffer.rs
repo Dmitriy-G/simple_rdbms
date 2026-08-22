@@ -1,12 +1,13 @@
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
 
-use common::{FrameId, PageId};
+use common::{FrameId, Lsn, PageId, TxnId};
 
 use crate::disk::DiskManager;
 use crate::error::StorageError;
 use crate::page::{Page, PageGuard};
 use crate::replacer::Replacer;
+use crate::wal::{LogManager, LogRecord, LogRecordKind};
 
 /// Caches a bounded number of pages in memory, mediating every access to
 /// pages between the disk manager and the layers above (heap files,
@@ -22,6 +23,9 @@ use crate::replacer::Replacer;
 /// an exclusive borrow of the whole pool. Each lock guards a specific
 /// piece of bookkeeping:
 ///   - `disk_manager`: serializes the (rare) actual disk I/O calls.
+///   - `log_manager`: the write-ahead log every page mutation is recorded
+///     into before it reaches this pool's own bytes (see `PageGuard::write`
+///     and `flush_frame`).
 ///   - `page_table`/`frame_page`: the two-way `PageId <-> FrameId` mapping.
 ///   - `pin_counts`/`dirty`: per-frame `Cell`s, one independent lock each.
 ///   - `replacer`: the eviction policy's own bookkeeping.
@@ -32,6 +36,7 @@ use crate::replacer::Replacer;
 ///     `&mut` borrows of the same frame's bytes never occur.
 pub struct BufferPool {
     disk_manager: RefCell<DiskManager>,
+    log_manager: RefCell<LogManager>,
     frames: Vec<UnsafeCell<Page>>,
     page_table: RefCell<HashMap<PageId, FrameId>>,
     frame_page: Vec<Cell<Option<PageId>>>,
@@ -44,12 +49,39 @@ pub struct BufferPool {
     /// page it needed). Not present in ordinary builds.
     #[cfg(any(test, feature = "test-util"))]
     fetch_count: Cell<usize>,
+    /// Records, in order, every page actually written to disk by
+    /// `flush_frame`, alongside that page's `page_lsn` and the log's
+    /// `durable_lsn` at that exact moment - what the WAL-ordering
+    /// invariant test checks against. Not present in ordinary builds.
+    #[cfg(any(test, feature = "test-util"))]
+    write_observations: RefCell<Vec<WriteObservation>>,
+}
+
+/// One observed disk write, for the WAL-ordering invariant test: at the
+/// moment `page_id` was written to disk, its `page_lsn` and the log's
+/// `durable_lsn` at that instant. The write-ahead rule requires
+/// `durable_lsn >= page_lsn` for every entry.
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, Copy)]
+pub struct WriteObservation {
+    /// The page written to disk.
+    pub page_id: PageId,
+    /// That page's `page_lsn` at the moment of the write.
+    pub page_lsn: Lsn,
+    /// The log's `durable_lsn` at the moment of the write.
+    pub durable_lsn: Lsn,
 }
 
 impl BufferPool {
     /// Creates a buffer pool of `pool_size` frames over `disk_manager`,
-    /// using `replacer` to choose eviction victims.
-    pub fn new(disk_manager: DiskManager, pool_size: usize, replacer: Box<dyn Replacer>) -> Self {
+    /// using `replacer` to choose eviction victims and logging every page
+    /// mutation through `log_manager` before it is applied.
+    pub fn new(
+        disk_manager: DiskManager,
+        log_manager: LogManager,
+        pool_size: usize,
+        replacer: Box<dyn Replacer>,
+    ) -> Self {
         let frames = (0..pool_size).map(|_| UnsafeCell::new(Page::new(PageId(0)))).collect();
         let frame_page = (0..pool_size).map(|_| Cell::new(None)).collect();
         let pin_counts = (0..pool_size).map(|_| Cell::new(0)).collect();
@@ -58,6 +90,7 @@ impl BufferPool {
 
         Self {
             disk_manager: RefCell::new(disk_manager),
+            log_manager: RefCell::new(log_manager),
             frames,
             page_table: RefCell::new(HashMap::new()),
             frame_page,
@@ -67,6 +100,8 @@ impl BufferPool {
             replacer: RefCell::new(replacer),
             #[cfg(any(test, feature = "test-util"))]
             fetch_count: Cell::new(0),
+            #[cfg(any(test, feature = "test-util"))]
+            write_observations: RefCell::new(Vec::new()),
         }
     }
 
@@ -80,6 +115,13 @@ impl BufferPool {
     #[cfg(any(test, feature = "test-util"))]
     pub fn reset_fetch_count(&self) {
         self.fetch_count.set(0);
+    }
+
+    /// Every disk write `flush_frame` has performed so far, in order.
+    /// Test-only.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn write_observations(&self) -> Vec<WriteObservation> {
+        self.write_observations.borrow().clone()
     }
 
     /// Fetches the page `page_id`, pinning it and returning a guard. If the
@@ -102,9 +144,11 @@ impl BufferPool {
     }
 
     /// Allocates a brand-new page via the disk manager and pins it in the
-    /// pool, returning a guard to it.
-    pub fn new_page(&self) -> Result<(PageId, PageGuard<'_>), StorageError> {
+    /// pool, returning a guard to it. Logs an `AllocPage` record on behalf
+    /// of `txn_id` before installing the page.
+    pub fn new_page(&self, txn_id: TxnId) -> Result<(PageId, PageGuard<'_>), StorageError> {
         let page_id = self.disk_manager.borrow_mut().allocate_page()?;
+        self.append_log(txn_id, LogRecordKind::AllocPage { page_id })?;
         let frame_id = self.allocate_frame()?;
         self.install(frame_id, page_id, Page::new(page_id), true);
         self.pin(frame_id);
@@ -146,6 +190,29 @@ impl BufferPool {
     /// header, so a reopen can find it again.
     pub fn set_catalog_first_page(&self, page_id: PageId) -> Result<(), StorageError> {
         self.disk_manager.borrow_mut().set_catalog_first_page(page_id)
+    }
+
+    /// Appends `kind` to the write-ahead log on behalf of `txn_id`,
+    /// returning its assigned LSN. Does not by itself make the record
+    /// durable; call `flush_log` (or `flush_log_all`) for that.
+    pub fn append_log(&self, txn_id: TxnId, kind: LogRecordKind) -> Result<Lsn, StorageError> {
+        self.log_manager.borrow_mut().append(LogRecord { txn_id, kind })
+    }
+
+    /// Forces every log record up to and including `up_to` to disk.
+    pub fn flush_log(&self, up_to: Lsn) -> Result<(), StorageError> {
+        self.log_manager.borrow_mut().flush(up_to)
+    }
+
+    /// Forces every log record appended so far to disk, regardless of
+    /// `up_to`. Used at clean shutdown.
+    pub fn flush_log_all(&self) -> Result<(), StorageError> {
+        self.log_manager.borrow_mut().flush_all()
+    }
+
+    /// The write-ahead log's current durable LSN.
+    pub fn durable_lsn(&self) -> Lsn {
+        self.log_manager.borrow().durable_lsn()
     }
 
     /// Finds a frame to hold a newly-fetched or newly-allocated page:
@@ -208,6 +275,11 @@ impl BufferPool {
         }
     }
 
+    /// Writes a dirty frame to disk, enforcing the write-ahead rule: the
+    /// log record covering this page's most recent change must be durable
+    /// *before* the page itself reaches disk. `flush_frame` is the sole
+    /// call site of `DiskManager::write_page` for a resident page, so this
+    /// is the one place that guarantee needs to be enforced.
     fn flush_frame(&self, frame_id: FrameId, page_id: PageId) -> Result<(), StorageError> {
         let idx = frame_id.0 as usize;
         // SAFETY: called either on an unpinned victim frame (about to be
@@ -215,6 +287,20 @@ impl BufferPool {
         // only needs read access to bytes a caller's own guard already
         // has permission to read.
         let page = unsafe { &*self.frames[idx].get() };
+        let page_lsn = page.page_lsn();
+        self.log_manager.borrow_mut().flush(page_lsn)?;
+        let durable_lsn = self.log_manager.borrow().durable_lsn();
+        debug_assert!(
+            durable_lsn >= page_lsn,
+            "page {page_id:?} reached disk with page_lsn {page_lsn:?} ahead of durable_lsn \
+             {durable_lsn:?}"
+        );
+        #[cfg(any(test, feature = "test-util"))]
+        self.write_observations.borrow_mut().push(WriteObservation {
+            page_id,
+            page_lsn,
+            durable_lsn,
+        });
         self.disk_manager.borrow_mut().write_page(page_id, page)?;
         self.dirty[idx].set(false);
         Ok(())
@@ -234,30 +320,39 @@ impl<'pool> PageGuard<'pool> {
         unsafe { &*self.pool.frames[idx].get() }
     }
 
-    /// Mutable access to the pinned page, marking the frame dirty.
-    ///
-    /// Note: this pool does not yet enforce single-writer access to a page
-    /// (that arrives with page-level locking in a later milestone). A
-    /// caller that fetches the same page twice and calls `page_mut` on
-    /// both guards concurrently would alias `&mut` references to the same
-    /// bytes; the buffer pool relies on callers not doing that, same as
-    /// it relies on the whole engine being single-threaded for now.
-    pub fn page_mut(&mut self) -> &mut Page {
+    /// The only way to mutate a pinned page's bytes: captures the current
+    /// bytes at `offset..offset+bytes.len()` as the before-image, appends
+    /// an `Update` record on behalf of `txn_id` (before-image for undo,
+    /// `bytes` for redo), applies `bytes` to the page, and stamps the
+    /// page's `page_lsn` with the record's assigned LSN. Marks the frame
+    /// dirty. There is no way to mutate a resident page's bytes that
+    /// bypasses this - that is the write-ahead rule enforced at the type
+    /// level: no logging, no mutation.
+    pub fn write(
+        &mut self,
+        txn_id: TxnId,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<(), StorageError> {
         let idx = self.frame_id.0 as usize;
-        self.pool.dirty[idx].set(true);
         // SAFETY: this frame is pinned for the lifetime of this guard, so
         // the pool will never evict or reassign it while this borrow is
         // live.
-        unsafe { &mut *self.pool.frames[idx].get() }
-    }
-
-    /// Marks this guard's frame dirty without requiring mutable access to
-    /// the page, for callers that mutate page bytes some other way (e.g.
-    /// through a layout view already borrowed from `page_mut`) and just
-    /// need to flag the frame afterward.
-    pub fn mark_dirty(&self) {
-        let idx = self.frame_id.0 as usize;
+        let page = unsafe { &mut *self.pool.frames[idx].get() };
+        let before = page.data()[offset..offset + bytes.len()].to_vec();
+        let lsn = self.pool.append_log(
+            txn_id,
+            LogRecordKind::Update {
+                page_id: self.page_id,
+                offset: offset as u16,
+                before,
+                after: bytes.to_vec(),
+            },
+        )?;
+        page.data_mut()[offset..offset + bytes.len()].copy_from_slice(bytes);
+        page.set_page_lsn(lsn);
         self.pool.dirty[idx].set(true);
+        Ok(())
     }
 }
 

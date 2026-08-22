@@ -21,8 +21,13 @@ const MAGIC: &[u8; 8] = b"FERRODB\0";
 /// file's actual length at open time (see `DiskManager::open`), so
 /// `allocate_page`'s `set_len` is the single durable act of allocation
 /// instead of racing a separate header rewrite against the new page's own
-/// initialization.
-const HEADER_VERSION: u32 = 4;
+/// initialization. Bumped to `5` when every page gained an 8-byte
+/// `page_lsn` prefix (see `page::PAGE_LSN_RANGE`), which pushed the
+/// slotted-page header from `0..8` to `8..16` and shrank `MAX_SLOTS` and
+/// `MAX_TUPLE_SIZE` accordingly - a file written under version `4` has no
+/// `page_lsn` and would otherwise be misread as heap corruption. No
+/// migration: a version-`4` file must be deleted and recreated.
+const HEADER_VERSION: u32 = 5;
 
 /// The byte layout of the page-0 header: magic (8) | version (4) |
 /// catalog_first_page (4) | page_size (4), zero-padded to a full page.

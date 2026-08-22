@@ -5,6 +5,18 @@
 //! `Database::execute`). Before that call existed, dirty pages only ever
 //! reached disk in `Database::close`/`Drop`, neither of which runs when a
 //! process is killed rather than exited normally.
+//!
+//! M6 changed what `Database::sync` guarantees: it now forces the
+//! write-ahead log's `Commit` record to disk (force-at-commit) but
+//! deliberately leaves data pages dirty in the buffer pool (no-force), so
+//! they may not reach disk until a later eviction or `close`. That is safe
+//! *if* a crash can replay the log to redo whatever never made it to the
+//! data file - but redo is M7's work, not built yet. Until then, a hard
+//! kill genuinely can lose an acknowledged statement's data pages (while
+//! still leaving a durable record of it in the WAL), so this test is
+//! ignored rather than deleted: it documents the guarantee `Database::sync`
+//! is meant to restore once recovery exists, and should be un-ignored as
+//! part of implementing it.
 
 use std::error::Error;
 use std::io::{BufRead, BufReader, Write};
@@ -14,6 +26,7 @@ use common::DbConfig;
 use engine::Database;
 
 #[test]
+#[ignore = "requires WAL redo (M7); data pages are no-force until then, see module docs"]
 fn an_acknowledged_statement_survives_a_hard_kill() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("test.db");

@@ -58,7 +58,7 @@ impl Executor for InsertExecutor {
                 row.iter().map(|expr| evaluate(expr, &empty)).collect::<Result<Vec<_>, _>>()?;
             let mut bytes = Vec::new();
             Tuple::new(values).encode(&mut bytes);
-            heap.insert_tuple(&bytes)?;
+            heap.insert_tuple(ctx.txn.txn_id, &bytes)?;
             count += 1;
         }
 

@@ -3,19 +3,34 @@
 
 use std::error::Error;
 
-use common::PageId;
+use common::TxnId;
+use storage::buffer::BufferPool;
+use storage::disk::DiskManager;
 use storage::heap::SlottedPage;
-use storage::page::Page;
+use storage::page::PAGE_SIZE;
+use storage::replacer::LruKReplacer;
+use storage::wal::LogManager;
+
+const TXN: TxnId = TxnId(0);
+
+fn open_pool() -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+    let log = LogManager::open(dir.path().join("test.db.wal"))?;
+    let replacer = Box::new(LruKReplacer::new(4, 2));
+    Ok((BufferPool::new(disk, log, 4, replacer), dir))
+}
 
 #[test]
 fn insert_returns_none_once_full_and_prior_tuples_stay_readable() -> Result<(), Box<dyn Error>> {
-    let mut page = Page::new(PageId(1));
-    let mut slotted = SlottedPage::new(&mut page);
-    slotted.init();
+    let (pool, _dir) = open_pool()?;
+    let (_page_id, mut guard) = pool.new_page(TXN)?;
+    let mut slotted = SlottedPage::new(&mut guard, TXN);
+    slotted.init()?;
 
     let payload = [0xABu8; 200];
     let mut slots = Vec::new();
-    while let Some(slot) = slotted.insert(&payload) {
+    while let Some(slot) = slotted.insert(&payload)? {
         slots.push(slot);
     }
 
@@ -29,14 +44,15 @@ fn insert_returns_none_once_full_and_prior_tuples_stay_readable() -> Result<(), 
 
 #[test]
 fn deleted_slot_reads_as_none_but_others_survive() -> Result<(), Box<dyn Error>> {
-    let mut page = Page::new(PageId(1));
-    let mut slotted = SlottedPage::new(&mut page);
-    slotted.init();
+    let (pool, _dir) = open_pool()?;
+    let (_page_id, mut guard) = pool.new_page(TXN)?;
+    let mut slotted = SlottedPage::new(&mut guard, TXN);
+    slotted.init()?;
 
-    let Some(a) = slotted.insert(b"first") else {
+    let Some(a) = slotted.insert(b"first")? else {
         panic!("first tuple should fit in an empty page");
     };
-    let Some(b) = slotted.insert(b"second") else {
+    let Some(b) = slotted.insert(b"second")? else {
         panic!("second tuple should fit in an empty page");
     };
 
