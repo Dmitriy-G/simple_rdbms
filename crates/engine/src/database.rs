@@ -2,7 +2,7 @@ use catalog::{Catalog, Column, Schema};
 use common::{DbConfig, Error, Result, TxnId};
 use executor::ExecutorContext;
 use planner::{Binder, BoundStatement, PhysicalPlan, to_physical};
-use sql::{Lexer, Parser};
+use sql::{Lexer, Parser, Statement};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::recovery;
@@ -31,6 +31,12 @@ pub struct Database {
     /// `buffer_pool.log_bytes_appended()`'s value as of the last checkpoint
     /// (or database open, if none has happened yet this session).
     bytes_at_last_checkpoint: u64,
+    /// The id of the explicit transaction opened by an unmatched `BEGIN`,
+    /// if any. `None` means every statement runs autocommit: begin,
+    /// execute, commit, all within `execute` itself. `Some` means the next
+    /// statement joins this transaction instead, and only `COMMIT`/
+    /// `ROLLBACK` end it.
+    active_txn: Option<TxnId>,
 }
 
 impl Database {
@@ -92,6 +98,7 @@ impl Database {
             txn_manager,
             checkpoint_byte_threshold: config.checkpoint_byte_threshold,
             bytes_at_last_checkpoint,
+            active_txn: None,
         })
     }
 
@@ -121,17 +128,119 @@ impl Database {
     }
 
     /// Parses, binds, plans, and executes one SQL statement, returning its
-    /// result set. Every mutating statement runs under its own transaction,
-    /// begun and committed here.
+    /// result set. `BEGIN`/`START TRANSACTION`, `COMMIT`, and `ROLLBACK`
+    /// are handled directly here, before binding - they reference no
+    /// tables or columns, so binding is meaningless for them. Every other
+    /// statement runs under `active_txn` if one is open (joining an
+    /// explicit transaction), or under a fresh transaction begun and
+    /// committed (or, on failure, aborted) right here otherwise
+    /// (autocommit).
     pub fn execute(&mut self, sql: &str) -> Result<ResultSet> {
         let tokens = Lexer::new(sql).tokenize().map_err(|err| Error::Parse(err.render(sql)))?;
         let statement = Parser::new(tokens).parse().map_err(|err| Error::Parse(err.render(sql)))?;
-        let bound = Binder::new(&self.catalog).bind(statement)?;
 
-        match bound {
-            BoundStatement::CreateTable(create) => {
+        match &statement {
+            Statement::Begin => return self.handle_begin(),
+            Statement::Commit => return self.handle_commit(),
+            Statement::Rollback => return self.handle_rollback(),
+            _ => {}
+        }
+
+        let bound = Binder::new(&self.catalog).bind(statement)?;
+        let (txn_id, autocommit) = self.txn_for_statement()?;
+        let result = self.execute_bound(bound, txn_id);
+
+        if autocommit {
+            match &result {
+                Ok(_) => {
+                    self.txn_manager.commit(txn_id, &self.buffer_pool)?;
+                    self.maybe_checkpoint()?;
+                }
+                Err(_) => {
+                    // The statement failed partway through its own,
+                    // just-begun transaction: undo whatever it managed to
+                    // write rather than leaving it dangling for a future
+                    // crash recovery to clean up. If the abort itself
+                    // fails there's nothing more useful to report than the
+                    // original error, so that's swallowed.
+                    let _ = self.txn_manager.abort(txn_id, &self.buffer_pool);
+                }
+            }
+        }
+        result
+    }
+
+    /// `BEGIN`/`START TRANSACTION`: opens an explicit transaction. Nesting
+    /// is an error.
+    fn handle_begin(&mut self) -> Result<ResultSet> {
+        if self.active_txn.is_some() {
+            return Err(Error::Transaction(
+                "already inside a transaction; nested BEGIN is not allowed".to_string(),
+            ));
+        }
+        let txn_id = self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
+        self.active_txn = Some(txn_id);
+        Ok(ResultSet::rows_affected(0))
+    }
+
+    /// `COMMIT`: ends the active explicit transaction, keeping its writes.
+    /// An error with no active transaction.
+    fn handle_commit(&mut self) -> Result<ResultSet> {
+        let txn_id = self
+            .active_txn
+            .take()
+            .ok_or_else(|| Error::Transaction("no active transaction to COMMIT".to_string()))?;
+        self.txn_manager.commit(txn_id, &self.buffer_pool)?;
+        self.maybe_checkpoint()?;
+        Ok(ResultSet::rows_affected(0))
+    }
+
+    /// `ROLLBACK`: ends the active explicit transaction, undoing its
+    /// writes, and reloads the catalog from its heap. An error with no
+    /// active transaction.
+    ///
+    /// The reload is needed because a `CREATE TABLE` inside the aborted
+    /// transaction has its heap-page writes undone by `abort` but the
+    /// in-memory `tables_by_name`/`tables_by_id` maps don't know that;
+    /// rather than trying to reverse them surgically, `Catalog::open`
+    /// (already able to rebuild them from an existing heap) is simply
+    /// called again, discarding the stale `Catalog` for one read fresh off
+    /// disk - simplest thing that is actually correct.
+    fn handle_rollback(&mut self) -> Result<ResultSet> {
+        let txn_id = self
+            .active_txn
+            .take()
+            .ok_or_else(|| Error::Transaction("no active transaction to ROLLBACK".to_string()))?;
+        self.txn_manager.abort(txn_id, &self.buffer_pool)?;
+
+        let reload_txn =
+            self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
+        self.catalog = Catalog::open(&self.buffer_pool, reload_txn)?;
+        self.txn_manager.commit(reload_txn, &self.buffer_pool)?;
+
+        self.maybe_checkpoint()?;
+        Ok(ResultSet::rows_affected(0))
+    }
+
+    /// The transaction the next statement should run under: `active_txn`
+    /// if an explicit transaction is open (`autocommit = false`), or a
+    /// freshly begun one otherwise (`autocommit = true`, meaning `execute`
+    /// itself must commit or abort it once the statement is done).
+    fn txn_for_statement(&mut self) -> Result<(TxnId, bool)> {
+        match self.active_txn {
+            Some(txn_id) => Ok((txn_id, false)),
+            None => {
                 let txn_id =
                     self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
+                Ok((txn_id, true))
+            }
+        }
+    }
+
+    /// Runs a bound, non-transaction-control statement under `txn_id`.
+    fn execute_bound(&mut self, bound: BoundStatement, txn_id: TxnId) -> Result<ResultSet> {
+        match bound {
+            BoundStatement::CreateTable(create) => {
                 let schema = Schema::new(
                     create
                         .columns
@@ -140,13 +249,9 @@ impl Database {
                         .collect(),
                 );
                 self.catalog.create_table(&self.buffer_pool, txn_id, &create.table_name, schema)?;
-                self.txn_manager.commit(txn_id, &self.buffer_pool)?;
-                self.maybe_checkpoint()?;
                 Ok(ResultSet::rows_affected(0))
             }
             BoundStatement::Insert(insert) => {
-                let txn_id =
-                    self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
                 let physical = to_physical(planner::plan(BoundStatement::Insert(insert))?);
                 let rows = self.run(physical, txn_id)?;
                 let inserted = rows
@@ -157,20 +262,12 @@ impl Database {
                         _ => None,
                     })
                     .unwrap_or(0);
-                self.txn_manager.commit(txn_id, &self.buffer_pool)?;
-                self.maybe_checkpoint()?;
                 Ok(ResultSet::rows_affected(inserted))
             }
             BoundStatement::Select(select) => {
-                let txn_id =
-                    self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
                 let column_names = select.column_names.clone();
                 let physical = to_physical(planner::plan(BoundStatement::Select(select))?);
                 let rows = self.run(physical, txn_id)?;
-                // A read-only statement has nothing to undo or make
-                // durable, but it still needs an End record so recovery
-                // never mistakes it for a loser.
-                self.txn_manager.commit(txn_id, &self.buffer_pool)?;
                 Ok(ResultSet::rows(column_names, rows))
             }
         }

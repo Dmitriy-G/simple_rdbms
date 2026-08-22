@@ -31,6 +31,16 @@ pub enum TokenKind {
     True,
     /// `FALSE`
     False,
+    /// `BEGIN`
+    Begin,
+    /// `START` (of `START TRANSACTION`)
+    Start,
+    /// `TRANSACTION`
+    Transaction,
+    /// `COMMIT`
+    Commit,
+    /// `ROLLBACK`
+    Rollback,
 
     // Literals and identifiers
     /// A bare identifier: a table, column, or type name.

@@ -105,12 +105,33 @@ fn assert_workload_is_crash_safe(workload: &[String]) -> Result<(), Box<dyn Erro
         let counter = Rc::new(Cell::new(0));
         let (db_device, wal_device) = faulty_devices(db_path_dir, &counter, n)?;
 
+        // `acked` counts every statement that returned `Ok`, but that's not
+        // the same as "safely committed": a `BEGIN` and the inserts after
+        // it can each individually return `Ok` while the fault then kills
+        // the process before the matching `COMMIT` ever runs, in which case
+        // none of them should be in the reference prefix. `safe_prefix`
+        // only advances to the current `acked` count at a point nothing is
+        // left open - after an autocommit statement, or after a `COMMIT`/
+        // `ROLLBACK` that actually returned `Ok`.
         let mut acked = 0usize;
+        let mut in_txn = false;
+        let mut safe_prefix = 0usize;
         if let Ok(mut db) = Database::open_with_devices(config(db_path_dir), db_device, wal_device)
         {
             for stmt in workload {
                 match db.execute(stmt) {
-                    Ok(_) => acked += 1,
+                    Ok(_) => {
+                        acked += 1;
+                        match stmt.as_str() {
+                            "BEGIN" => in_txn = true,
+                            "COMMIT" | "ROLLBACK" => {
+                                in_txn = false;
+                                safe_prefix = acked;
+                            }
+                            _ if !in_txn => safe_prefix = acked,
+                            _ => {}
+                        }
+                    }
                     Err(_) => break,
                 }
             }
@@ -138,7 +159,7 @@ fn assert_workload_is_crash_safe(workload: &[String]) -> Result<(), Box<dyn Erro
         // fault-free database.
         let ref_dir = tempfile::tempdir()?;
         let mut reference = Database::open(config(ref_dir.path()))?;
-        for stmt in &workload[..acked] {
+        for stmt in &workload[..safe_prefix] {
             reference.execute(stmt)?;
         }
 
@@ -147,8 +168,8 @@ fn assert_workload_is_crash_safe(workload: &[String]) -> Result<(), Box<dyn Erro
         assert_eq!(
             recovered_state,
             reference_state,
-            "fail_at={n}, acked={acked}/{}: recovered state must match replaying exactly the \
-             acknowledged prefix",
+            "fail_at={n}, acked={acked}, safe_prefix={safe_prefix}/{}: recovered state must \
+             match replaying exactly the safely-committed prefix",
             workload.len()
         );
     }
@@ -202,6 +223,24 @@ fn interleaved_allocation_and_catalog_writes() -> Vec<String> {
     ]
 }
 
+/// A committed explicit transaction followed by one that's deliberately
+/// left open (its own trailing `BEGIN`/`INSERT` never reach a `COMMIT`
+/// within the fixed workload). Every fail point at or after that trailing
+/// `BEGIN` must recover to "row 3 doesn't exist" - this is the M8
+/// "kill mid-transaction, before COMMIT, leaves no trace of it" case, swept
+/// across every write point rather than checked at just one.
+fn mid_transaction_kill() -> Vec<String> {
+    vec![
+        "CREATE TABLE t (a INTEGER)".to_string(),
+        "BEGIN".to_string(),
+        "INSERT INTO t VALUES (1)".to_string(),
+        "INSERT INTO t VALUES (2)".to_string(),
+        "COMMIT".to_string(),
+        "BEGIN".to_string(),
+        "INSERT INTO t VALUES (3)".to_string(),
+    ]
+}
+
 #[test]
 fn many_small_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(&many_small_inserts())
@@ -221,4 +260,10 @@ fn create_table_then_inserts_survive_a_crash_at_every_write() -> Result<(), Box<
 fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write()
 -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(&interleaved_allocation_and_catalog_writes())
+}
+
+#[test]
+fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(&mid_transaction_kill())
 }

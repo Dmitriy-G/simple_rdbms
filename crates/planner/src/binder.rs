@@ -126,6 +126,12 @@ impl<'a> Binder<'a> {
             sql::Statement::CreateTable(create) => {
                 Ok(BoundStatement::CreateTable(self.bind_create_table(create)))
             }
+            sql::Statement::Begin | sql::Statement::Commit | sql::Statement::Rollback => {
+                unreachable!(
+                    "transaction control statements reference no tables or columns and are \
+                     intercepted in Database::execute before binding, not bound here"
+                )
+            }
         }
     }
 

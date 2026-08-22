@@ -29,7 +29,28 @@ impl Parser {
             TokenKind::Select => Statement::Select(self.parse_select()?),
             TokenKind::Insert => Statement::Insert(self.parse_insert()?),
             TokenKind::Create => Statement::CreateTable(self.parse_create_table()?),
-            _ => return Err(self.unexpected("SELECT, INSERT, or CREATE")),
+            TokenKind::Begin => {
+                self.advance();
+                Statement::Begin
+            }
+            TokenKind::Start => {
+                self.advance();
+                self.expect_kind(TokenKind::Transaction, "TRANSACTION")?;
+                Statement::Begin
+            }
+            TokenKind::Commit => {
+                self.advance();
+                Statement::Commit
+            }
+            TokenKind::Rollback => {
+                self.advance();
+                Statement::Rollback
+            }
+            _ => {
+                return Err(
+                    self.unexpected("SELECT, INSERT, CREATE, BEGIN, START, COMMIT, or ROLLBACK")
+                );
+            }
         };
 
         if matches!(self.current().kind, TokenKind::Semicolon) {

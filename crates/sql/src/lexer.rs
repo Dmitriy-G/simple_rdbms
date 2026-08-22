@@ -136,6 +136,11 @@ impl<'a> Lexer<'a> {
             "NULL" => TokenKind::Null,
             "TRUE" => TokenKind::True,
             "FALSE" => TokenKind::False,
+            "BEGIN" => TokenKind::Begin,
+            "START" => TokenKind::Start,
+            "TRANSACTION" => TokenKind::Transaction,
+            "COMMIT" => TokenKind::Commit,
+            "ROLLBACK" => TokenKind::Rollback,
             _ => TokenKind::Identifier(text.to_string()),
         }
     }

@@ -242,6 +242,32 @@ fn keywords_are_case_insensitive_identifiers_are_not() {
 }
 
 #[test]
+fn parses_begin_commit_rollback() {
+    assert_eq!(parse("BEGIN"), Statement::Begin);
+    assert_eq!(parse("COMMIT"), Statement::Commit);
+    assert_eq!(parse("ROLLBACK"), Statement::Rollback);
+}
+
+#[test]
+fn start_transaction_is_a_synonym_for_begin() {
+    assert_eq!(parse("START TRANSACTION"), Statement::Begin);
+    assert_eq!(parse("start transaction"), Statement::Begin, "keywords are case-insensitive");
+}
+
+#[test]
+fn transaction_control_keywords_are_case_insensitive() {
+    assert_eq!(parse("begin"), Statement::Begin);
+    assert_eq!(parse("commit"), Statement::Commit);
+    assert_eq!(parse("rollback"), Statement::Rollback);
+}
+
+#[test]
+fn start_without_transaction_is_a_parse_error_not_a_panic() {
+    let err = parse_err("START");
+    assert!(matches!(err, SqlError::UnexpectedEof { .. }));
+}
+
+#[test]
 fn missing_closing_paren_errors_with_offset_not_panic() {
     let err = parse_err("SELECT * FROM t WHERE (a = 1");
     assert!(matches!(err, SqlError::UnexpectedEof { .. }));

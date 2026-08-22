@@ -10,6 +10,13 @@ pub enum Statement {
     Insert(InsertStatement),
     /// A `CREATE TABLE` statement.
     CreateTable(CreateTableStatement),
+    /// `BEGIN` or `START TRANSACTION`: starts an explicit transaction.
+    Begin,
+    /// `COMMIT`: ends the current explicit transaction, keeping its writes.
+    Commit,
+    /// `ROLLBACK`: ends the current explicit transaction, undoing its
+    /// writes.
+    Rollback,
 }
 
 /// A `SELECT` query: `SELECT <items> FROM <table> [WHERE <expr>]`. No
