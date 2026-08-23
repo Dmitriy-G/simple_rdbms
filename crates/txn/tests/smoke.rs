@@ -11,7 +11,7 @@ fn transaction_constructs_growing() {
 
 #[test]
 fn transaction_manager_and_lock_manager_construct() {
-    let manager = TransactionManager::new();
+    let manager = TransactionManager::new(None);
     assert!(manager.get(TxnId(1)).is_err());
 
     let _lock_manager = LockManager::new();

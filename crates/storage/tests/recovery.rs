@@ -229,3 +229,60 @@ fn analysis_starts_from_the_checkpoint_and_still_finds_a_loser_that_began_before
     );
     Ok(())
 }
+
+#[test]
+fn begin_resets_stale_committed_state_left_by_a_reused_txn_id() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+
+    let page_id;
+    {
+        let pool = open_pool(dir.path(), 8)?;
+
+        // A page to write into, allocated and committed under an unrelated
+        // transaction, so the story below is exactly `Begin`/`Update`/
+        // `Commit` for txn 5, nothing more.
+        let (pid, mut guard) = pool.new_page(TxnId(1))?;
+        page_id = pid;
+        guard.write(TxnId(1), 16, b"------")?;
+        drop(guard);
+        let setup_commit = pool.append_log(TxnId(1), LogRecordKind::Commit)?;
+        pool.flush_log(setup_commit)?;
+        pool.append_log(TxnId(1), LogRecordKind::End)?;
+        pool.flush_log_all()?;
+        pool.flush_all()?;
+
+        // Generation 1: Begin(5), Update(5), Commit(5) - deliberately no
+        // `End`, exactly what a crash between the flushed `Commit` and the
+        // unflushed `End` would leave behind.
+        pool.append_log(TxnId(5), LogRecordKind::Begin)?;
+        let mut guard = pool.fetch_page(page_id)?;
+        guard.write(TxnId(5), 16, b"first!")?;
+        drop(guard);
+        let commit_lsn = pool.append_log(TxnId(5), LogRecordKind::Commit)?;
+        pool.flush_log(commit_lsn)?;
+
+        // Generation 2 reuses id 5 - exactly what an unseeded
+        // `TransactionManager` would hand out next: Begin(5), Update(5), and
+        // nothing more (no Commit, no End). Without Analysis resetting the
+        // ATT entry on `Begin`, this write would inherit generation 1's
+        // stale `committed: true` and never get undone.
+        pool.append_log(TxnId(5), LogRecordKind::Begin)?;
+        let mut guard = pool.fetch_page(page_id)?;
+        guard.write(TxnId(5), 16, b"second")?;
+        drop(guard);
+        pool.flush_log_all()?;
+        pool.flush_all()?;
+    }
+
+    let pool = open_pool(dir.path(), 8)?;
+    recovery::recover(&pool)?;
+
+    let guard = pool.fetch_page(page_id)?;
+    assert_eq!(
+        &guard.page().data()[16..22],
+        b"first!",
+        "generation 1's committed write must survive, and generation 2's uncommitted reuse of \
+         the same id must be undone rather than left in place"
+    );
+    Ok(())
+}

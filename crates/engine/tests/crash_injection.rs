@@ -90,6 +90,51 @@ fn observable_state(db: &mut Database) -> Result<Vec<TableRows>, Box<dyn Error>>
         .collect()
 }
 
+/// Runs `workload` against a freshly opened database backed by
+/// `db_device`/`wal_device` (typically fault-injecting ones) until a
+/// statement fails or the workload finishes, returning how large a prefix
+/// of it is safe to expect on the other side of a crash right afterward.
+///
+/// `acked` (every statement that returned `Ok`) is not the same as "safely
+/// committed": a `BEGIN` and the inserts after it can each individually
+/// return `Ok` while the fault then kills the process before the matching
+/// `COMMIT` ever runs, in which case none of them should be in the
+/// reference prefix. The returned count only advances at a point nothing is
+/// left open - after an autocommit statement, or after a `COMMIT`/
+/// `ROLLBACK` that actually returned `Ok`.
+fn run_until_crash(
+    config: DbConfig,
+    db_device: Box<dyn BlockDevice>,
+    wal_device: Box<dyn BlockDevice>,
+    workload: &[String],
+) -> Result<usize, Box<dyn Error>> {
+    let mut safe_prefix = 0usize;
+    if let Ok(mut db) = Database::open_with_devices(config, db_device, wal_device) {
+        let mut acked = 0usize;
+        let mut in_txn = false;
+        for stmt in workload {
+            match db.execute(stmt) {
+                Ok(_) => {
+                    acked += 1;
+                    match stmt.as_str() {
+                        "BEGIN" => in_txn = true,
+                        "COMMIT" | "ROLLBACK" => {
+                            in_txn = false;
+                            safe_prefix = acked;
+                        }
+                        _ if !in_txn => safe_prefix = acked,
+                        _ => {}
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        // `db` is dropped here without `close`: it died wherever it died,
+        // exactly like a real crash.
+    }
+    Ok(safe_prefix)
+}
+
 /// Runs the full crash-injection sweep for `workload`: every fail point
 /// `1..=K`, plus (per fail point) a couple of secondary fault-injected
 /// reopens that crash *during* recovery itself before the final clean
@@ -104,40 +149,7 @@ fn assert_workload_is_crash_safe(workload: &[String]) -> Result<(), Box<dyn Erro
 
         let counter = Rc::new(Cell::new(0));
         let (db_device, wal_device) = faulty_devices(db_path_dir, &counter, n)?;
-
-        // `acked` counts every statement that returned `Ok`, but that's not
-        // the same as "safely committed": a `BEGIN` and the inserts after
-        // it can each individually return `Ok` while the fault then kills
-        // the process before the matching `COMMIT` ever runs, in which case
-        // none of them should be in the reference prefix. `safe_prefix`
-        // only advances to the current `acked` count at a point nothing is
-        // left open - after an autocommit statement, or after a `COMMIT`/
-        // `ROLLBACK` that actually returned `Ok`.
-        let mut acked = 0usize;
-        let mut in_txn = false;
-        let mut safe_prefix = 0usize;
-        if let Ok(mut db) = Database::open_with_devices(config(db_path_dir), db_device, wal_device)
-        {
-            for stmt in workload {
-                match db.execute(stmt) {
-                    Ok(_) => {
-                        acked += 1;
-                        match stmt.as_str() {
-                            "BEGIN" => in_txn = true,
-                            "COMMIT" | "ROLLBACK" => {
-                                in_txn = false;
-                                safe_prefix = acked;
-                            }
-                            _ if !in_txn => safe_prefix = acked,
-                            _ => {}
-                        }
-                    }
-                    Err(_) => break,
-                }
-            }
-            // `db` is dropped here without `close`: it died wherever it
-            // died, exactly like a real crash.
-        }
+        let safe_prefix = run_until_crash(config(db_path_dir), db_device, wal_device, workload)?;
 
         // A couple of secondary crashes *during* the next recovery attempt
         // itself, on the very same files, before the final clean reopen.
@@ -168,8 +180,8 @@ fn assert_workload_is_crash_safe(workload: &[String]) -> Result<(), Box<dyn Erro
         assert_eq!(
             recovered_state,
             reference_state,
-            "fail_at={n}, acked={acked}, safe_prefix={safe_prefix}/{}: recovered state must \
-             match replaying exactly the safely-committed prefix",
+            "fail_at={n}, safe_prefix={safe_prefix}/{}: recovered state must match replaying \
+             exactly the safely-committed prefix",
             workload.len()
         );
     }
@@ -239,6 +251,153 @@ fn mid_transaction_kill() -> Vec<String> {
         "BEGIN".to_string(),
         "INSERT INTO t VALUES (3)".to_string(),
     ]
+}
+
+/// Like `total_write_count`, but for a workload meant to run as a second
+/// process generation on top of `prefix` having already run to completion
+/// and been cleanly closed: returns the write count for `workload` alone,
+/// with `prefix`'s own writes (and that clean close's) excluded.
+fn total_write_count_after(prefix: &[String], workload: &[String]) -> Result<u64, Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    {
+        let mut db = Database::open(config(dir.path()))?;
+        for stmt in prefix {
+            db.execute(stmt)?;
+        }
+        db.close()?;
+    }
+
+    let counter = Rc::new(Cell::new(0));
+    let (db_device, wal_device) = faulty_devices(dir.path(), &counter, u64::MAX)?;
+    let mut db = Database::open_with_devices(config(dir.path()), db_device, wal_device)?;
+    for stmt in workload {
+        db.execute(stmt)?;
+    }
+    db.close()?;
+    Ok(counter.get())
+}
+
+/// Crosses two process generations, the one shape none of the sweeps above
+/// exercise: every prior sweep crashes once and then only ever reopens
+/// cleanly afterward, so a freshly opened `TransactionManager` never gets a
+/// chance to collide with an id a *previous* generation's crash left
+/// dangling - which is exactly the M9 bug (see `task.MD`) this harness
+/// extension targets: a transaction whose `Commit` reached disk but whose
+/// `End` didn't is a "phantom winner" that recovery correctly never undoes,
+/// but if a later generation's `TransactionManager` isn't seeded past its
+/// id, a brand new transaction can be assigned that same id - and, unless
+/// recovery resets that id's Active Transaction Table state on `Begin`,
+/// the new, uncommitted transaction inherits the phantom's `committed`
+/// flag and is never undone either.
+///
+/// `setup` runs once, cleanly, before the sweep even starts, so both
+/// generations' own first explicit transaction lands on the same id under
+/// the pre-fix bug (every open's bootstrap transaction takes id `0`, and
+/// each generation's own first explicit `BEGIN` is otherwise the very next
+/// id handed out) - the collision this test needs actually happens, not
+/// just hypothetically could. `gen1` is swept across every possible crash
+/// point (`1..=K1`), since only some of them land exactly between its
+/// `COMMIT`'s flush and its `End` ever reaching disk - the precise
+/// "phantom winner" shape. `gen2` is not fault-injected: it is constructed
+/// to never issue its own `COMMIT`, so simply running it to completion and
+/// dropping the database without closing already leaves it open, exactly
+/// like a real process exit mid-transaction.
+fn assert_two_generation_workload_is_crash_safe(
+    setup: &[String],
+    gen1: &[String],
+    gen2: &[String],
+) -> Result<(), Box<dyn Error>> {
+    let k1 = total_write_count_after(setup, gen1)?;
+    assert!(k1 > 0, "generation 1 must perform at least one write");
+
+    for n1 in 1..=k1 {
+        let dir = tempfile::tempdir()?;
+        let db_path_dir = dir.path();
+
+        // Setup: applied cleanly, outside fault injection, so it never
+        // counts against `n1`'s budget.
+        {
+            let mut db = Database::open(config(db_path_dir))?;
+            for stmt in setup {
+                db.execute(stmt)?;
+            }
+            db.close()?;
+        }
+
+        // Generation 1: runs under fault injection until it crashes.
+        let counter = Rc::new(Cell::new(0));
+        let (db_device, wal_device) = faulty_devices(db_path_dir, &counter, n1)?;
+        let safe_prefix1 = run_until_crash(config(db_path_dir), db_device, wal_device, gen1)?;
+
+        // Reopen for real: recovery must leave a fully consistent database
+        // behind. Closing it cleanly means generation 2 below starts from a
+        // clean slate rather than layering a second crash on top of the
+        // first.
+        Database::open(config(db_path_dir))?.close()?;
+
+        // Generation 2: never commits by construction, so running it to
+        // completion and then just dropping the database (no `close`)
+        // already leaves it exactly as open as a real crash mid-transaction
+        // would.
+        {
+            let mut db = Database::open(config(db_path_dir))?;
+            for stmt in gen2 {
+                db.execute(stmt)?;
+            }
+        }
+
+        // The final reopen: this is where a transaction id reused across
+        // generations would corrupt generation 1's own already-committed
+        // data, if `TransactionManager` weren't seeded past every id the
+        // log has ever used.
+        let mut recovered = Database::open(config(db_path_dir))?;
+
+        let ref_dir = tempfile::tempdir()?;
+        let mut reference = Database::open(config(ref_dir.path()))?;
+        for stmt in setup {
+            reference.execute(stmt)?;
+        }
+        for stmt in &gen1[..safe_prefix1] {
+            reference.execute(stmt)?;
+        }
+
+        let recovered_state = observable_state(&mut recovered)?;
+        let reference_state = observable_state(&mut reference)?;
+        assert_eq!(
+            recovered_state, reference_state,
+            "n1={n1}/{k1}: recovered state after two crash generations must match replaying \
+             exactly generation 1's safely-committed prefix (generation 2 never commits)"
+        );
+    }
+    Ok(())
+}
+
+/// The table both generations act on, created once via a clean, fault-free
+/// open before the sweep starts.
+fn two_generation_setup() -> Vec<String> {
+    vec!["CREATE TABLE t (a INTEGER)".to_string()]
+}
+
+/// Generation 1: a single explicit transaction committing one row, swept
+/// across every crash point - including, crucially, every point after its
+/// `COMMIT` record is durable but before its `End` is.
+fn two_generation_gen1() -> Vec<String> {
+    vec!["BEGIN".to_string(), "INSERT INTO t VALUES (1)".to_string(), "COMMIT".to_string()]
+}
+
+/// Generation 2: a second explicit transaction that never commits.
+fn two_generation_gen2() -> Vec<String> {
+    vec!["BEGIN".to_string(), "INSERT INTO t VALUES (2)".to_string()]
+}
+
+#[test]
+fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point()
+-> Result<(), Box<dyn Error>> {
+    assert_two_generation_workload_is_crash_safe(
+        &two_generation_setup(),
+        &two_generation_gen1(),
+        &two_generation_gen2(),
+    )
 }
 
 #[test]

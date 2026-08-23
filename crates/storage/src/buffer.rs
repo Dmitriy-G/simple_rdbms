@@ -374,6 +374,14 @@ impl BufferPool {
         self.log_manager.borrow().last_lsn_for(txn_id)
     }
 
+    /// The highest transaction id that appears anywhere in the write-ahead
+    /// log (excluding `CHECKPOINT_TXN`), or `None` if none has been used
+    /// yet. Recovery-only: lets `Database::open` seed the next transaction
+    /// id past every id the log has ever used.
+    pub fn max_txn_id(&self) -> Option<TxnId> {
+        self.log_manager.borrow().max_txn_id()
+    }
+
     /// The `page_lsn` of `page_id`, bringing it into the pool if not
     /// already resident. Recovery-only: lets the Redo pass decide whether a
     /// record needs replaying.

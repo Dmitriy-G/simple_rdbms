@@ -28,7 +28,15 @@ use crate::wal::{CHECKPOINT_TXN, LogRecordKind};
 /// common case - most opens follow a clean shutdown), and safe to call
 /// again on a log left behind by a crash *during* a previous recovery
 /// attempt (see `undo_transaction`'s docs for why).
-pub fn recover(pool: &BufferPool) -> Result<(), StorageError> {
+///
+/// Returns the highest `TxnId` observed anywhere in the log (excluding
+/// `CHECKPOINT_TXN`), or `None` if the log has never recorded a real
+/// transaction. `Database::open` threads this into `TransactionManager::new`
+/// so a freshly seeded id counter can never hand out an id the log has
+/// already used - which matters even for an id whose transaction is long
+/// since committed and ended, since a reused id's new `Begin` would chain
+/// its `prev_lsn` right onto that unrelated transaction's own log records.
+pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
     let start = pool.last_checkpoint_lsn().unwrap_or(Lsn(1));
 
     // ---- Analysis ----
@@ -72,7 +80,18 @@ pub fn recover(pool: &BufferPool) -> Result<(), StorageError> {
                     .or_insert((record.lsn, false));
                 dpt.entry(*page_id).or_insert(record.lsn);
             }
-            LogRecordKind::Begin | LogRecordKind::Abort => {
+            LogRecordKind::Begin => {
+                // A `Begin` means a transaction is starting: any prior
+                // entry for this id belongs to a different transaction (an
+                // earlier generation reusing the id), and must not leak its
+                // `committed` flag into this one - in particular, a
+                // "phantom winner" left behind by a crash between a
+                // `Commit` and its `End` must not make a brand new,
+                // never-committed transaction of the same id look
+                // committed too.
+                att.insert(record.txn_id, (record.lsn, false));
+            }
+            LogRecordKind::Abort => {
                 att.entry(record.txn_id)
                     .and_modify(|entry| entry.0 = record.lsn)
                     .or_insert((record.lsn, false));
@@ -120,7 +139,7 @@ pub fn recover(pool: &BufferPool) -> Result<(), StorageError> {
     pool.flush_log_all()?;
     pool.flush_all()?;
     pool.sync()?;
-    Ok(())
+    Ok(pool.max_txn_id())
 }
 
 /// Undoes `txn_id`'s writes, walking its log chain backward starting from
@@ -160,6 +179,17 @@ pub fn undo_transaction(pool: &BufferPool, txn_id: TxnId, from: Lsn) -> Result<(
             }
             LogRecordKind::Clr { undo_next_lsn, .. } => {
                 cursor = (undo_next_lsn.0 != 0).then_some(undo_next_lsn);
+            }
+            LogRecordKind::Begin => {
+                // A transaction's undo chain never extends past its own
+                // `Begin`, regardless of what `prev_lsn` this particular
+                // record carries. `LogManager` chains `prev_lsn` purely by
+                // `TxnId`, so if this id has ever been reused, `Begin`'s own
+                // `prev_lsn` points at an unrelated, earlier generation's
+                // last record for the same id - walking past it here would
+                // cascade into undoing that generation's already-committed
+                // writes too.
+                cursor = None;
             }
             _ => {
                 cursor = record.prev_lsn;

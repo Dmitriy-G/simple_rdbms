@@ -453,6 +453,19 @@ impl LogManager {
         self.last_lsn_by_txn.get(&txn_id).copied().map(Lsn)
     }
 
+    /// The highest transaction id that appears anywhere in the log
+    /// (excluding `CHECKPOINT_TXN`), or `None` if the log has never
+    /// recorded a real transaction. Built from the same full-file scan
+    /// `open_with_device` already does to rebuild `last_lsn_by_txn`, so this
+    /// reflects every id the log has ever used - not just the ones a
+    /// bounded, checkpoint-anchored recovery scan happens to revisit - which
+    /// is what lets a reseeded `TransactionManager` avoid ever reusing an id
+    /// whose log chain a new transaction of the same id would otherwise
+    /// alias.
+    pub fn max_txn_id(&self) -> Option<TxnId> {
+        self.last_lsn_by_txn.keys().filter(|&&id| id != CHECKPOINT_TXN).max().copied()
+    }
+
     /// Returns a forward iterator over every record with LSN `>= from`,
     /// whether durably on disk or still sitting in the not-yet-flushed
     /// in-memory buffer. The buffer's bytes are exactly what `flush` would

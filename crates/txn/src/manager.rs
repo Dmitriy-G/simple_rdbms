@@ -20,9 +20,19 @@ pub struct TransactionManager {
 }
 
 impl TransactionManager {
-    /// Creates a manager with no active transactions.
-    pub fn new() -> Self {
-        Self { active: HashMap::new(), next_txn_id: 0 }
+    /// Creates a manager with no active transactions, handing out ids
+    /// starting past `highest_seen` - the highest `TxnId` `recovery::recover`
+    /// observed anywhere in the log, or `None` for a log that has never
+    /// recorded a real transaction. Seeding from this rather than always
+    /// starting at `0` is what stops a freshly opened database from ever
+    /// reusing an id the log has already used: a reused id's new `Begin`
+    /// would otherwise chain its `prev_lsn` onto an unrelated transaction's
+    /// own log records, and - if that old id was a "phantom winner" left by
+    /// a crash between a `Commit` and its `End` - could even make a brand
+    /// new, never-committed transaction look already committed.
+    pub fn new(highest_seen: Option<TxnId>) -> Self {
+        let next_txn_id = highest_seen.map_or(0, |TxnId(id)| id + 1);
+        Self { active: HashMap::new(), next_txn_id }
     }
 
     /// Begins a new transaction at the given isolation level: assigns it
@@ -34,6 +44,12 @@ impl TransactionManager {
         isolation_level: IsolationLevel,
     ) -> Result<TxnId, TxnError> {
         let txn_id = TxnId(self.next_txn_id);
+        debug_assert!(
+            self.active.keys().all(|&active_id| txn_id > active_id),
+            "begin assigned {txn_id:?}, which does not exceed every already-active id \
+             {:?} - the id counter was not seeded past every id the log has ever used",
+            self.active.keys().collect::<Vec<_>>()
+        );
         self.next_txn_id += 1;
         pool.append_log(txn_id, LogRecordKind::Begin)?;
         self.active.insert(txn_id, Transaction::new(txn_id, isolation_level));

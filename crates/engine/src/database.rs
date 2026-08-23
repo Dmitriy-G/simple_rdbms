@@ -80,9 +80,9 @@ impl Database {
         let buffer_pool =
             BufferPool::new(disk_manager, log_manager, config.buffer_pool_size, replacer);
 
-        recovery::recover(&buffer_pool)?;
+        let highest_txn_id = recovery::recover(&buffer_pool)?;
 
-        let mut txn_manager = TransactionManager::new();
+        let mut txn_manager = TransactionManager::new(highest_txn_id);
         // The catalog's own bootstrap heap allocation (only ever happens on
         // a brand-new database) needs a real, committed transaction of its
         // own - otherwise it would be a dangling, never-committed write
