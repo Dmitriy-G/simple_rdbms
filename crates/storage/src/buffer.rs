@@ -192,7 +192,9 @@ impl BufferPool {
             })
             .collect();
 
-        let capacity = self.dwb.borrow().capacity().max(1);
+        // `DoubleWriteBuffer::open` rejects `capacity == 0`, so this is
+        // always a positive chunk size - no `.max(1)` paper-over needed.
+        let capacity = self.dwb.borrow().capacity();
         for batch in dirty.chunks(capacity) {
             self.flush_pages(batch)?;
         }

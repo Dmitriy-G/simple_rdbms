@@ -80,6 +80,30 @@ pub enum StorageError {
         /// The checksum recomputed over the page's `4..PAGE_SIZE` bytes.
         actual: u32,
     },
+
+    /// `recovery::recover_double_write` restored `page_id` from its
+    /// double-write copy, but the page still fails its own checksum once
+    /// read back - the restore write itself was interrupted (e.g. a second
+    /// crash during recovery). The batch is left in place rather than
+    /// cleared, so a later recovery attempt can retry the restore from the
+    /// still-intact double-write copy instead of losing it.
+    #[error(
+        "double-write restore for page {page_id} did not survive its own write; the batch is \
+         left in place for a retry"
+    )]
+    DoubleWriteRestoreFailed {
+        /// The page whose restore write failed to leave a page that passes
+        /// its own checksum.
+        page_id: u32,
+    },
+
+    /// `DoubleWriteBuffer::open`'s `capacity` was zero: a double-write
+    /// buffer with no page-image slots cannot protect any page, and
+    /// `BufferPool::flush_pages`'s `pages.len() <= capacity` assertion
+    /// would debug-panic on the very first non-empty flush rather than
+    /// failing cleanly at construction time.
+    #[error("double-write buffer capacity must be at least 1, got 0")]
+    InvalidDwbCapacity,
 }
 
 impl From<StorageError> for common::Error {

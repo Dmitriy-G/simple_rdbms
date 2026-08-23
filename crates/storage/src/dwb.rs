@@ -55,7 +55,10 @@ impl DoubleWriteBuffer {
     pub const DEFAULT_CAPACITY: usize = 64;
 
     /// Opens (creating if necessary) the double-write buffer file at
-    /// `path`, sized for `capacity` page-image slots.
+    /// `path`, sized for `capacity` page-image slots. Rejects
+    /// `capacity == 0` with `StorageError::InvalidDwbCapacity` rather than
+    /// constructing a buffer `flush_pages` would debug-panic against on its
+    /// first non-empty batch.
     pub fn open(path: impl Into<PathBuf>, capacity: usize) -> Result<Self, StorageError> {
         let path = path.into();
         let file =
@@ -77,6 +80,9 @@ impl DoubleWriteBuffer {
         mut device: Box<dyn BlockDevice>,
         capacity: usize,
     ) -> Result<Self, StorageError> {
+        if capacity == 0 {
+            return Err(StorageError::InvalidDwbCapacity);
+        }
         debug_assert!(
             PAGE_IDS_OFFSET + capacity * 4 + 4 <= PAGE_SIZE,
             "a {capacity}-entry double-write buffer header does not fit in a {PAGE_SIZE}-byte page"

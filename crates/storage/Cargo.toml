@@ -19,6 +19,7 @@ test-util = []
 common = { workspace = true }
 types = { workspace = true }
 thiserror = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 # Self-referenced with `test-util` enabled so this crate's own integration

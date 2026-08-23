@@ -41,6 +41,20 @@ the double-write buffer's own file (a torn slot or header write there is
 self-detecting the same way a torn real-file write is, and is treated as
 "the crash landed before this copy was trusted," never restored from).
 
+The claim above is checked, not assumed: `crates/engine/tests/crash_injection.rs`
+sweeps every fixed workload, at every possible fail point, under all four
+compositions of `storage::block_device::DurabilityModel` — `write_is_durable`
+(a crash lands cleanly between two syscalls), `requires_sync` (a crash loses
+whatever was written but never `fsync`'d), `torn_write` (a crash tears the
+one call it interrupts, landing a seeded-random subset of that write's
+512-byte sectors), and `torn_write_requires_sync`, the composition of the
+last two — a torn write *and* a lost unsynced write in the same crash, which
+is what an actual power failure does, and the specific case the double-write
+buffer exists to survive. The first three each leave one dimension of a real
+crash out; only the fourth exercises both at once, which is why it is
+swept alongside the other three rather than treated as redundant with
+`torn_write` alone.
+
 **Not covered.** A disk that lies about `fsync` having completed (some
 consumer SSDs and virtualized/cloud block devices under certain
 configurations) - the write-ahead rule and the double-write protocol both

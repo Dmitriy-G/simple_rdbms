@@ -15,27 +15,28 @@
 //!
 //! ## Durability models
 //!
-//! Every sweep below runs under every one of `FaultyDevice`'s
-//! `storage::block_device::DurabilityModel`s:
+//! Every sweep below runs under every one of the four
+//! `storage::block_device::DurabilityModel` compositions:
 //!
-//! - `WriteIsDurable` (the harness's original model): a completed
+//! - `write_is_durable()` (the harness's original model): a completed
 //!   `write_at`/`set_len` is durable the instant it returns, and the fault
 //!   only ever loses the one call it interrupted. This covers a crash that
 //!   lands between two syscalls - e.g. the process dying between writing
 //!   the WAL and writing a page - which is the failure class M7-M11's fixes
 //!   target.
-//! - `RequiresSync`: a completed `write_at`/`set_len` only becomes durable
-//!   once a later `sync_all` succeeds; anything still pending when the
-//!   fault fires is discarded. This additionally covers a crash or power
-//!   loss that lands *after* a write() call returns but *before* the next
-//!   fsync() - data sitting in the OS page cache, never flushed to the
-//!   platter. Real systems lose writes this way constantly; `WriteIsDurable`
-//!   alone can never exercise it, because nothing before `RequiresSync`
-//!   existed for it to be tested by.
-//! - `TornWrite`: the tripped `write_at` call itself lands only half-written
-//!   on the inner device before reporting its error - a single `write_at`
-//!   interrupted mid-sector, which neither of the models above can produce.
-//!   This is the M12 failure class: a checksum (part 1) detects it, and the
+//! - `requires_sync()`: a completed `write_at`/`set_len` only becomes
+//!   durable once a later `sync_all` succeeds; anything still pending when
+//!   the fault fires is discarded. This additionally covers a crash or
+//!   power loss that lands *after* a write() call returns but *before* the
+//!   next fsync() - data sitting in the OS page cache, never flushed to the
+//!   platter. Real systems lose writes this way constantly;
+//!   `write_is_durable()` alone can never exercise it, because nothing
+//!   before `requires_sync()` existed for it to be tested by.
+//! - `torn_write()`: the tripped `write_at` call itself lands only a
+//!   seeded-random subset of its 512-byte sectors on the inner device
+//!   before reporting its error - a single `write_at` interrupted
+//!   mid-sector, which neither of the models above can produce. This is the
+//!   M12 failure class: a checksum (part 1) detects it, and the
 //!   double-write buffer (part 2) is what lets recovery repair it instead of
 //!   just reporting it. Applied uniformly to all three files (data, WAL,
 //!   double-write buffer) like the other models, which also exercises a
@@ -43,9 +44,18 @@
 //!   this file) and a torn double-write buffer slot or header (handled by
 //!   `recovery::recover_double_write` treating a bad copy as "skip it,"
 //!   not just a torn real-file page).
+//! - `torn_write_requires_sync()`: `torn_write()` and `requires_sync()`
+//!   composed - the tripped call tears *and* everything else still needs a
+//!   `sync_all` to be durable, so whatever was pending when the fault fired
+//!   is lost outright rather than merely absent from that one call. This is
+//!   what an actual power failure does, and it is the combination the
+//!   double-write buffer exists to survive: the other three models each
+//!   leave one of tearing or lost-unsynced-writes out, so none of them on
+//!   its own tests the double-write buffer against the failure mode it was
+//!   built for.
 //!
-//! None of the three models cover a disk that lies about having synced
-//! (some consumer SSDs and virtualized/cloud block devices under certain
+//! None of the four models cover a disk that lies about having synced (some
+//! consumer SSDs and virtualized/cloud block devices under certain
 //! configurations), or media failure large enough to fool CRC-32 in both a
 //! page and its double-write copy at once. Those are outside what fault
 //! injection at the `write_at`/`sync_all` call boundary can express at all.
@@ -122,7 +132,7 @@ fn total_write_count(workload: &[String]) -> Result<u64, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let counter = Rc::new(Cell::new(0));
     let (db_device, wal_device, dwb_device) =
-        faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::WriteIsDurable)?;
+        faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
     let mut db =
         Database::open_with_devices(config(dir.path()), db_device, wal_device, dwb_device)?;
     for stmt in workload {
@@ -335,7 +345,7 @@ fn total_write_count_after(prefix: &[String], workload: &[String]) -> Result<u64
 
     let counter = Rc::new(Cell::new(0));
     let (db_device, wal_device, dwb_device) =
-        faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::WriteIsDurable)?;
+        faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
     let mut db =
         Database::open_with_devices(config(dir.path()), db_device, wal_device, dwb_device)?;
     for stmt in workload {
@@ -468,11 +478,11 @@ fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point
         &two_generation_setup(),
         &two_generation_gen1(),
         &two_generation_gen2(),
-        DurabilityModel::WriteIsDurable,
+        DurabilityModel::write_is_durable(),
     )
 }
 
-/// Same as above, but under `DurabilityModel::TornWrite`: a torn write to
+/// Same as above, but under `DurabilityModel::torn_write()`: a torn write to
 /// the real data file mid-flush must be repaired by the double-write buffer
 /// before recovery ever gets to the transaction-id-reuse hazard this sweep
 /// exists to catch, not compound it.
@@ -483,59 +493,114 @@ fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point
         &two_generation_setup(),
         &two_generation_gen1(),
         &two_generation_gen2(),
-        DurabilityModel::TornWrite,
+        DurabilityModel::torn_write(),
+    )
+}
+
+/// Same shape again, but this workload had never been swept under
+/// `requires_sync()` at all - so add both the missing model and the
+/// missing composition of it with tearing, completing the set of all four.
+#[test]
+fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point_with_unsynced_writes_lost()
+-> Result<(), Box<dyn Error>> {
+    assert_two_generation_workload_is_crash_safe(
+        &two_generation_setup(),
+        &two_generation_gen1(),
+        &two_generation_gen2(),
+        DurabilityModel::requires_sync(),
+    )
+}
+
+/// The composed model: the transaction-id-reuse hazard must still be caught
+/// even when the crash that exposes it also tears a write and discards
+/// whatever was unsynced.
+#[test]
+fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point_with_torn_and_unsynced_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_two_generation_workload_is_crash_safe(
+        &two_generation_setup(),
+        &two_generation_gen1(),
+        &two_generation_gen2(),
+        DurabilityModel::torn_write_requires_sync(),
     )
 }
 
 #[test]
 fn many_small_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::WriteIsDurable)
+    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::write_is_durable())
 }
 
 #[test]
 fn many_small_inserts_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::RequiresSync)
+    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::requires_sync())
 }
 
 #[test]
 fn many_small_inserts_survive_a_crash_at_every_write_with_torn_writes() -> Result<(), Box<dyn Error>>
 {
-    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::TornWrite)
+    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::torn_write())
+}
+
+#[test]
+fn many_small_inserts_survive_a_crash_at_every_write_with_torn_and_unsynced_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &many_small_inserts(),
+        DurabilityModel::torn_write_requires_sync(),
+    )
 }
 
 #[test]
 fn page_boundary_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::WriteIsDurable)
+    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::write_is_durable())
 }
 
 #[test]
 fn page_boundary_inserts_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::RequiresSync)
+    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::requires_sync())
 }
 
 #[test]
 fn page_boundary_inserts_survive_a_crash_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::TornWrite)
+    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::torn_write())
+}
+
+#[test]
+fn page_boundary_inserts_survive_a_crash_at_every_write_with_torn_and_unsynced_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &page_boundary_inserts(),
+        DurabilityModel::torn_write_requires_sync(),
+    )
 }
 
 #[test]
 fn create_table_then_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::WriteIsDurable)
+    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::write_is_durable())
 }
 
 #[test]
 fn create_table_then_inserts_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::RequiresSync)
+    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::requires_sync())
 }
 
 #[test]
 fn create_table_then_inserts_survive_a_crash_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::TornWrite)
+    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::torn_write())
+}
+
+#[test]
+fn create_table_then_inserts_survive_a_crash_at_every_write_with_torn_and_unsynced_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &create_table_then_inserts(),
+        DurabilityModel::torn_write_requires_sync(),
+    )
 }
 
 #[test]
@@ -543,7 +608,7 @@ fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write()
 -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(
         &interleaved_allocation_and_catalog_writes(),
-        DurabilityModel::WriteIsDurable,
+        DurabilityModel::write_is_durable(),
     )
 }
 
@@ -552,7 +617,7 @@ fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write_with
 -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(
         &interleaved_allocation_and_catalog_writes(),
-        DurabilityModel::RequiresSync,
+        DurabilityModel::requires_sync(),
     )
 }
 
@@ -561,24 +626,42 @@ fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write_with
 -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(
         &interleaved_allocation_and_catalog_writes(),
-        DurabilityModel::TornWrite,
+        DurabilityModel::torn_write(),
+    )
+}
+
+#[test]
+fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write_with_torn_and_unsynced_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &interleaved_allocation_and_catalog_writes(),
+        DurabilityModel::torn_write_requires_sync(),
     )
 }
 
 #[test]
 fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::WriteIsDurable)
+    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::write_is_durable())
 }
 
 #[test]
 fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::RequiresSync)
+    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::requires_sync())
 }
 
 #[test]
 fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::TornWrite)
+    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::torn_write())
+}
+
+#[test]
+fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write_with_torn_and_unsynced_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &mid_transaction_kill(),
+        DurabilityModel::torn_write_requires_sync(),
+    )
 }

@@ -54,6 +54,12 @@ use crate::wal::{CHECKPOINT_TXN, HEADER_LEN, LogRecordKind};
 /// this page's still-untouched region as a side effect), indistinguishable
 /// from a legitimately empty page, which is exactly the state redo expects
 /// to start from anyway.
+///
+/// The batch is only ever retired (`dwb.clear_batch()`) once every page this
+/// pass actually restored has been read back and reverified against its own
+/// checksum - a second crash landing on top of this pass's own restore
+/// writes is possible too, and a batch discarded before that is ruled out
+/// would take the only remaining intact copy down with it.
 pub fn recover_double_write(
     disk: &mut DiskManager,
     dwb: &mut DoubleWriteBuffer,
@@ -62,6 +68,7 @@ pub fn recover_double_write(
         return Ok(());
     };
 
+    let mut restored_pages = Vec::new();
     for (index, page_id) in page_ids.into_iter().enumerate() {
         let slot = dwb.read_slot(index)?;
         if !page::checksum_ok(&slot) {
@@ -75,6 +82,7 @@ pub fn recover_double_write(
                     let mut restored = Page::new(page_id);
                     restored.data_mut().copy_from_slice(&slot);
                     disk.write_page(page_id, &restored)?;
+                    restored_pages.push(page_id);
                 }
             }
             Err(StorageError::PageNotFound(_)) => {}
@@ -83,6 +91,23 @@ pub fn recover_double_write(
     }
 
     disk.sync()?;
+
+    // A second crash can land right on top of this pass's own restore
+    // writes (e.g. tearing one of them in turn), so nothing here is trusted
+    // just because it was just written: every page this pass actually
+    // restored is re-read and re-verified before the batch that can still
+    // repair it is discarded. Only once every one of them provably landed
+    // intact is the batch retired; otherwise it is left in place so a later
+    // attempt can retry the restore from the same, still-intact double-write
+    // copies.
+    for page_id in &restored_pages {
+        let mut check = Page::new(*page_id);
+        disk.read_page_unchecked(*page_id, &mut check)?;
+        if !page::checksum_ok(check.data()) {
+            return Err(StorageError::DoubleWriteRestoreFailed { page_id: page_id.0 });
+        }
+    }
+
     dwb.clear_batch()?;
     Ok(())
 }
