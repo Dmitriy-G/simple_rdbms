@@ -72,13 +72,44 @@ impl BlockDevice for FileDevice {
     }
 }
 
+/// How `FaultyDevice` treats a completed `write_at`/`set_len` call: does it
+/// land on the wrapped device immediately, or does it only become durable
+/// once a later `sync_all` succeeds?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DurabilityModel {
+    /// Every completed `write_at`/`set_len` is immediately durable, as if
+    /// `sync_all` ran automatically after each one. This is the harness's
+    /// original, stronger-than-real-disks model: it only ever loses the one
+    /// write the fault interrupted, never anything that "succeeded" but was
+    /// still sitting in a cache. It covers a real crash that lands between
+    /// two syscalls, but not one that lands between a `write()` returning
+    /// and the next `fsync()` - which is exactly the gap `RequiresSync`
+    /// exercises.
+    WriteIsDurable,
+    /// A completed `write_at`/`set_len` only reaches the wrapped device once
+    /// a later `sync_all` call succeeds; anything still pending when the
+    /// fault fires is discarded instead of applied - modeling "the write
+    /// reached the page cache, but `fsync` had not happened yet," a real and
+    /// common way for an OS-level crash or power loss to lose data that a
+    /// completed `write()` call already promised. Reads still see pending
+    /// writes (matching real page-cache behavior: a live process reads back
+    /// what it just wrote), so only what a *crash* would lose differs from
+    /// `WriteIsDurable`.
+    RequiresSync,
+}
+
+/// A `write_at`/`set_len` call not yet covered by a `sync_all`, under
+/// `DurabilityModel::RequiresSync`.
+enum PendingOp {
+    Write { offset: u64, bytes: Vec<u8> },
+    SetLen(u64),
+}
+
 /// A `BlockDevice` that wraps a real one and fails the first mutating call
 /// (`write_at` or `set_len`) once a shared counter passes `fail_at`,
-/// simulating a crash mid-workload. Reads and `sync_all` never fail: only
-/// `write_at`/`set_len` count as "writes" for the purpose of "fail after
-/// exactly N successful writes," and every write before the failing one
-/// completes for real against the wrapped device, so the underlying file
-/// ends up in exactly the state a real crash at that point would leave.
+/// simulating a crash mid-workload. Reads never fail. Whether a write that
+/// completed *before* the fault fired actually survives the "crash" depends
+/// on `model` - see `DurabilityModel`.
 ///
 /// The counter is an `Rc<Cell<u64>>` so that two `FaultyDevice`s - one
 /// wrapping the database file, one wrapping the WAL - can share a single
@@ -88,14 +119,29 @@ pub struct FaultyDevice {
     inner: Box<dyn BlockDevice>,
     counter: Rc<Cell<u64>>,
     fail_at: u64,
+    model: DurabilityModel,
+    /// Writes and length changes made so far but not yet covered by a
+    /// `sync_all`, applied in order. Always empty under `WriteIsDurable`.
+    pending: Vec<PendingOp>,
 }
 
 impl FaultyDevice {
-    /// Wraps `inner`, sharing `counter` with (presumably) another
-    /// `FaultyDevice`, and failing the write that would make the counter
-    /// exceed `fail_at`.
+    /// Wraps `inner` under `DurabilityModel::WriteIsDurable`, sharing
+    /// `counter` with (presumably) another `FaultyDevice`, and failing the
+    /// write that would make the counter exceed `fail_at`.
     pub fn new(inner: Box<dyn BlockDevice>, counter: Rc<Cell<u64>>, fail_at: u64) -> Self {
-        Self { inner, counter, fail_at }
+        Self::with_model(inner, counter, fail_at, DurabilityModel::WriteIsDurable)
+    }
+
+    /// Wraps `inner` under an explicit `model`, otherwise identical to
+    /// `new`.
+    pub fn with_model(
+        inner: Box<dyn BlockDevice>,
+        counter: Rc<Cell<u64>>,
+        fail_at: u64,
+        model: DurabilityModel,
+    ) -> Self {
+        Self { inner, counter, fail_at, model, pending: Vec::new() }
     }
 
     /// Ticks the shared write counter, returning an injected error once it
@@ -111,29 +157,90 @@ impl FaultyDevice {
         }
         Ok(())
     }
+
+    /// The device's contents as a live process would currently see them:
+    /// whatever's really durable on `inner`, with every still-pending
+    /// write/length-change replayed on top, in order. Only ever called
+    /// under `RequiresSync` with a non-empty `pending` - `read_at`/`size`
+    /// skip straight to `inner` otherwise, since there is nothing to
+    /// overlay.
+    fn materialized(&mut self) -> io::Result<Vec<u8>> {
+        let len = self.inner.size()?;
+        let mut buf = vec![0u8; len as usize];
+        self.inner.read_at(0, &mut buf)?;
+        for op in &self.pending {
+            match op {
+                PendingOp::Write { offset, bytes } => {
+                    let end = *offset as usize + bytes.len();
+                    if buf.len() < end {
+                        buf.resize(end, 0);
+                    }
+                    buf[*offset as usize..end].copy_from_slice(bytes);
+                }
+                PendingOp::SetLen(new_len) => {
+                    buf.resize(*new_len as usize, 0);
+                }
+            }
+        }
+        Ok(buf)
+    }
 }
 
 impl BlockDevice for FaultyDevice {
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
-        self.inner.read_at(offset, buf)
+        if self.pending.is_empty() {
+            return self.inner.read_at(offset, buf);
+        }
+        let materialized = self.materialized()?;
+        let start = offset as usize;
+        let end = start + buf.len();
+        if end > materialized.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "read past the device's current (materialized) end",
+            ));
+        }
+        buf.copy_from_slice(&materialized[start..end]);
+        Ok(())
     }
 
     fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
         self.tick()?;
-        self.inner.write_at(offset, buf)
+        match self.model {
+            DurabilityModel::WriteIsDurable => self.inner.write_at(offset, buf),
+            DurabilityModel::RequiresSync => {
+                self.pending.push(PendingOp::Write { offset, bytes: buf.to_vec() });
+                Ok(())
+            }
+        }
     }
 
     fn set_len(&mut self, len: u64) -> io::Result<()> {
         self.tick()?;
-        self.inner.set_len(len)
+        match self.model {
+            DurabilityModel::WriteIsDurable => self.inner.set_len(len),
+            DurabilityModel::RequiresSync => {
+                self.pending.push(PendingOp::SetLen(len));
+                Ok(())
+            }
+        }
     }
 
     fn sync_all(&mut self) -> io::Result<()> {
+        for op in self.pending.drain(..) {
+            match op {
+                PendingOp::Write { offset, bytes } => self.inner.write_at(offset, &bytes)?,
+                PendingOp::SetLen(len) => self.inner.set_len(len)?,
+            }
+        }
         self.inner.sync_all()
     }
 
     fn size(&mut self) -> io::Result<u64> {
-        self.inner.size()
+        if self.pending.is_empty() {
+            return self.inner.size();
+        }
+        Ok(self.materialized()?.len() as u64)
     }
 }
 

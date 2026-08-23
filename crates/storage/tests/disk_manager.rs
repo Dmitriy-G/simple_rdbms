@@ -88,10 +88,11 @@ fn reopening_a_file_with_a_different_format_version_is_a_clear_error() -> Result
         disk.sync()?;
     }
 
-    // Overwrite just the header's version field (bytes 8..12) to simulate a
+    // Overwrite just the header's version field (bytes 16..20 - after page
+    // 0's own 8-byte `page_lsn` prefix and the 8-byte magic) to simulate a
     // file written by a build with an incompatible on-disk format.
     let mut file = OpenOptions::new().read(true).write(true).open(&path)?;
-    file.seek(SeekFrom::Start(8))?;
+    file.seek(SeekFrom::Start(16))?;
     file.write_all(&999u32.to_le_bytes())?;
     drop(file);
 

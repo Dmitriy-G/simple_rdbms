@@ -8,7 +8,8 @@ use crate::error::StorageError;
 use crate::page::Page;
 
 /// The 8-byte magic string identifying a FerroDB database file, stored at
-/// the start of page 0.
+/// the start of page 0 - just after page 0's own `page_lsn` prefix (see
+/// `header::MAGIC_RANGE`).
 const MAGIC: &[u8; 8] = b"FERRODB\0";
 
 /// The on-disk format version this build reads and writes. Covers not just
@@ -28,20 +29,36 @@ const MAGIC: &[u8; 8] = b"FERRODB\0";
 /// `page_lsn` and would otherwise be misread as heap corruption. Bumped to
 /// `6` when the header gained `last_checkpoint_lsn` (see
 /// `header::LAST_CHECKPOINT_LSN_RANGE`), which recovery's Analysis pass
-/// reads to know where to start scanning the log. No migration: a file
-/// written under an older version must be deleted and recreated.
-const HEADER_VERSION: u32 = 6;
+/// reads to know where to start scanning the log. Bumped to `7` when page 0
+/// gained the same 8-byte `page_lsn` prefix every other page already has,
+/// shifting every other field 8 bytes later - needed so `catalog_first_page`
+/// and `last_checkpoint_lsn` can be mutated through the ordinary
+/// `PageGuard::write` path (see `buffer::BufferPool::set_catalog_first_page`/
+/// `set_last_checkpoint_lsn`) instead of a raw, unlogged disk write. No
+/// migration: a file written under an older version must be deleted and
+/// recreated.
+const HEADER_VERSION: u32 = 7;
 
-/// The byte layout of the page-0 header: magic (8) | version (4) |
+/// The byte layout of the page-0 header: `page_lsn` (8, reserved by every
+/// page - see `page::PAGE_LSN_RANGE`) | magic (8) | version (4) |
 /// catalog_first_page (4) | page_size (4) | last_checkpoint_lsn (8),
-/// zero-padded to a full page.  `page_count` is deliberately not part of
+/// zero-padded to a full page. `page_count` is deliberately not part of
 /// this layout - see `HEADER_VERSION`'s doc comment.
-mod header {
-    pub const MAGIC_RANGE: std::ops::Range<usize> = 0..8;
-    pub const VERSION_RANGE: std::ops::Range<usize> = 8..12;
-    pub const CATALOG_FIRST_PAGE_RANGE: std::ops::Range<usize> = 12..16;
-    pub const PAGE_SIZE_RANGE: std::ops::Range<usize> = 16..20;
-    pub const LAST_CHECKPOINT_LSN_RANGE: std::ops::Range<usize> = 20..28;
+///
+/// `catalog_first_page` and `last_checkpoint_lsn` are mutated exclusively
+/// through `buffer::BufferPool` once the pool exists - fetching page 0 like
+/// any other page and writing through `PageGuard::write`, so both become
+/// redoable and undoable like any other page mutation. `DiskManager` itself
+/// only ever *reads* this layout (see `open_with_device`), and writes it
+/// directly, in full, exactly once: stamping a brand-new file's very first
+/// header in `write_header`, before there is any pool or log to write
+/// through.
+pub(crate) mod header {
+    pub const MAGIC_RANGE: std::ops::Range<usize> = 8..16;
+    pub const VERSION_RANGE: std::ops::Range<usize> = 16..20;
+    pub const CATALOG_FIRST_PAGE_RANGE: std::ops::Range<usize> = 20..24;
+    pub const PAGE_SIZE_RANGE: std::ops::Range<usize> = 24..28;
+    pub const LAST_CHECKPOINT_LSN_RANGE: std::ops::Range<usize> = 28..36;
 }
 
 /// Owns the database file and performs raw, page-granular I/O against it.
@@ -54,11 +71,6 @@ pub struct DiskManager {
     path: Option<PathBuf>,
     page_size: usize,
     next_page_id: u32,
-    catalog_first_page: u32,
-    /// The LSN of the most recent checkpoint's `CheckpointBegin` record, or
-    /// `0` if none has ever been taken. Recovery's Analysis pass starts
-    /// scanning the log here rather than from the beginning.
-    last_checkpoint_lsn: u64,
 }
 
 impl DiskManager {
@@ -86,14 +98,7 @@ impl DiskManager {
         let device_len = device.size()?;
 
         if device_len == 0 {
-            let mut manager = Self {
-                device,
-                path,
-                page_size,
-                next_page_id: 1,
-                catalog_first_page: u32::MAX,
-                last_checkpoint_lsn: 0,
-            };
+            let mut manager = Self { device, path, page_size, next_page_id: 1 };
             manager.write_header()?;
             Ok(manager)
         } else {
@@ -106,11 +111,13 @@ impl DiskManager {
                 });
             }
 
-            // Read only the header fields themselves, not a full `page_size`
-            // bytes: the file's actual page size is what we're about to
-            // validate, so we can't yet trust the caller's `page_size` to
-            // size this read.
-            let mut header_buf = vec![0u8; header::LAST_CHECKPOINT_LSN_RANGE.end];
+            // Read only the header fields `DiskManager` itself still cares
+            // about (magic, version, page size) - not a full `page_size`
+            // bytes, and not `catalog_first_page`/`last_checkpoint_lsn`
+            // either, since those are read live through the buffer pool now
+            // (see `buffer::BufferPool::catalog_first_page`/
+            // `last_checkpoint_lsn`), not cached here.
+            let mut header_buf = vec![0u8; header::PAGE_SIZE_RANGE.end];
             device.read_at(0, &mut header_buf)?;
 
             if &header_buf[header::MAGIC_RANGE] != MAGIC.as_slice() {
@@ -129,7 +136,6 @@ impl DiskManager {
                     ),
                 });
             }
-            let catalog_first_page = read_u32(&header_buf, header::CATALOG_FIRST_PAGE_RANGE.start);
             let stored_page_size = read_u32(&header_buf, header::PAGE_SIZE_RANGE.start);
             if stored_page_size as usize != page_size {
                 return Err(StorageError::CorruptPage {
@@ -140,18 +146,9 @@ impl DiskManager {
                     ),
                 });
             }
-            let last_checkpoint_lsn =
-                read_u64(&header_buf, header::LAST_CHECKPOINT_LSN_RANGE.start);
 
             let next_page_id = (device_len / page_size as u64) as u32;
-            Ok(Self {
-                device,
-                path,
-                page_size,
-                next_page_id,
-                catalog_first_page,
-                last_checkpoint_lsn,
-            })
+            Ok(Self { device, path, page_size, next_page_id })
         }
     }
 
@@ -214,48 +211,24 @@ impl DiskManager {
         self.page_size
     }
 
-    /// The first page of the catalog's own storage, as recorded in the
-    /// database header, or `None` if the catalog has not been persisted
-    /// yet (`u32::MAX` sentinel).
-    pub fn catalog_first_page(&self) -> Option<PageId> {
-        (self.catalog_first_page != u32::MAX).then_some(PageId(self.catalog_first_page))
-    }
-
-    /// Records `page_id` as the catalog's first page in the header, for the
-    /// next reopen to pick back up.
-    pub fn set_catalog_first_page(&mut self, page_id: PageId) -> Result<(), StorageError> {
-        self.catalog_first_page = page_id.0;
-        self.write_header()
-    }
-
-    /// The LSN of the most recent checkpoint's `CheckpointBegin` record, as
-    /// recorded in the database header, or `None` if no checkpoint has ever
-    /// been taken (`0` sentinel - LSNs are assigned starting at `1`).
-    pub fn last_checkpoint_lsn(&self) -> Option<common::Lsn> {
-        (self.last_checkpoint_lsn != 0).then_some(common::Lsn(self.last_checkpoint_lsn))
-    }
-
-    /// Records `lsn` as the most recent checkpoint's `CheckpointBegin` LSN
-    /// in the header, for the next reopen's recovery to start from.
-    pub fn set_last_checkpoint_lsn(&mut self, lsn: common::Lsn) -> Result<(), StorageError> {
-        self.last_checkpoint_lsn = lsn.0;
-        self.write_header()
-    }
-
     fn offset_of(&self, page_id: PageId) -> u64 {
         page_id.0 as u64 * self.page_size as u64
     }
 
-    /// Serializes the current header fields and writes them to page 0.
+    /// Stamps a brand-new file's very first page-0 header: magic, version,
+    /// page size, and `catalog_first_page`/`last_checkpoint_lsn` both at
+    /// their "none" sentinels (`page_lsn`, at the front, stays zero too -
+    /// the same "never written" sentinel every other fresh page has). The
+    /// only direct header write left in this module - every later change to
+    /// `catalog_first_page` or `last_checkpoint_lsn` goes through
+    /// `buffer::BufferPool` instead, so it is logged and can be redone or
+    /// undone like any other page mutation.
     fn write_header(&mut self) -> Result<(), StorageError> {
         let mut buf = vec![0u8; self.page_size];
         buf[header::MAGIC_RANGE].copy_from_slice(MAGIC);
         buf[header::VERSION_RANGE].copy_from_slice(&HEADER_VERSION.to_le_bytes());
-        buf[header::CATALOG_FIRST_PAGE_RANGE]
-            .copy_from_slice(&self.catalog_first_page.to_le_bytes());
+        buf[header::CATALOG_FIRST_PAGE_RANGE].copy_from_slice(&u32::MAX.to_le_bytes());
         buf[header::PAGE_SIZE_RANGE].copy_from_slice(&(self.page_size as u32).to_le_bytes());
-        buf[header::LAST_CHECKPOINT_LSN_RANGE]
-            .copy_from_slice(&self.last_checkpoint_lsn.to_le_bytes());
 
         self.device.write_at(0, &buf)?;
         Ok(())
@@ -264,17 +237,4 @@ impl DiskManager {
 
 fn read_u32(buf: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]])
-}
-
-fn read_u64(buf: &[u8], at: usize) -> u64 {
-    u64::from_le_bytes([
-        buf[at],
-        buf[at + 1],
-        buf[at + 2],
-        buf[at + 3],
-        buf[at + 4],
-        buf[at + 5],
-        buf[at + 6],
-        buf[at + 7],
-    ])
 }

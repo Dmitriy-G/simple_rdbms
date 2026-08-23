@@ -37,7 +37,7 @@ use crate::wal::{CHECKPOINT_TXN, HEADER_LEN, LogRecordKind};
 /// since committed and ended, since a reused id's new `Begin` would chain
 /// its `prev_lsn` right onto that unrelated transaction's own log records.
 pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
-    let start = pool.last_checkpoint_lsn().unwrap_or(Lsn(HEADER_LEN));
+    let start = pool.last_checkpoint_lsn()?.unwrap_or(Lsn(HEADER_LEN));
 
     // ---- Analysis ----
     // `att` maps a transaction to its most recent LSN and whether it has
@@ -48,20 +48,40 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
     let mut att: HashMap<TxnId, (Lsn, bool)> = HashMap::new();
     let mut dpt: HashMap<PageId, Lsn> = HashMap::new();
 
+    // Seed ATT/DPT from the checkpoint's own snapshot *before* the forward
+    // scan below runs at all - not merged in via `or_insert` at the moment
+    // the scan happens to reach `CheckpointEnd`, which is what the old code
+    // did. That mattered: a fuzzy checkpoint's snapshot is captured near
+    // `CheckpointBegin`'s time, but `CheckpointEnd` (carrying it) is only
+    // logged later, so any record in between - say, a transaction's `End` -
+    // gets processed by the scan *before* the snapshot that predates it. If
+    // that snapshot still shows the same transaction active and gets merged
+    // in with `or_insert`, it resurrects an entry the scan just correctly
+    // removed - undoing already-committed work. Seeding first and letting
+    // every subsequent record overwrite unconditionally (via the same
+    // `insert`/`remove`/`and_modify` each kind already uses below) fixes
+    // this: whichever is more recent always wins, regardless of which one
+    // this loop happens to visit first.
+    for record in pool.log_iter_from(start)? {
+        if record.txn_id != CHECKPOINT_TXN {
+            continue;
+        }
+        if let LogRecordKind::CheckpointEnd { att: snap_att, dpt: snap_dpt } = &record.kind {
+            for (txn_id, lsn) in snap_att {
+                att.insert(*txn_id, (*lsn, false));
+            }
+            for (page_id, lsn) in snap_dpt {
+                dpt.insert(*page_id, *lsn);
+            }
+            break;
+        }
+    }
+
     for record in pool.log_iter_from(start)? {
         if record.txn_id == CHECKPOINT_TXN {
-            if let LogRecordKind::CheckpointEnd { att: snap_att, dpt: snap_dpt } = &record.kind {
-                // Only seed entries not already discovered by the scan so
-                // far: anything already touched by a record after `start`
-                // is strictly more current than the checkpoint's own
-                // (possibly slightly stale, "fuzzy") snapshot of it.
-                for (txn_id, lsn) in snap_att {
-                    att.entry(*txn_id).or_insert((*lsn, false));
-                }
-                for (page_id, lsn) in snap_dpt {
-                    dpt.entry(*page_id).or_insert(*lsn);
-                }
-            }
+            // Already applied above; `CheckpointBegin`/`CheckpointEnd`
+            // themselves carry no further per-transaction or per-page state
+            // to fold in here.
             continue;
         }
 

@@ -67,15 +67,15 @@ fn write_checkpoint_captures_active_transactions_and_dirty_pages() -> Result<(),
     let pool = open_pool(dir.path())?;
     let mut manager = TransactionManager::new(None);
 
-    assert_eq!(pool.last_checkpoint_lsn(), None);
+    assert_eq!(pool.last_checkpoint_lsn()?, None);
 
     let txn = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
     let (page_id, mut guard) = pool.new_page(txn)?;
     guard.write(txn, 16, b"hello!")?;
     drop(guard);
 
-    let begin_lsn = write_checkpoint(&pool, &manager)?;
-    assert_eq!(pool.last_checkpoint_lsn(), Some(begin_lsn));
+    let begin_lsn = write_checkpoint(&pool, &mut manager)?;
+    assert_eq!(pool.last_checkpoint_lsn()?, Some(begin_lsn));
 
     let dpt = pool.dirty_page_table();
     assert!(dpt.iter().any(|(id, _)| *id == page_id), "the dirty page must be in the DPT snapshot");

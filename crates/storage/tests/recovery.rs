@@ -205,7 +205,14 @@ fn analysis_starts_from_the_checkpoint_and_still_finds_a_loser_that_began_before
                 dpt: vec![(page_id, first_update_lsn)],
             },
         )?;
-        pool.set_last_checkpoint_lsn(begin_lsn)?;
+        // Recording the checkpoint's own LSN in the header (page 0) is a
+        // real, logged page mutation now, so it needs its own committed
+        // transaction - matches `txn::write_checkpoint`'s own use of a
+        // dedicated header transaction.
+        pool.set_last_checkpoint_lsn(TxnId(9), begin_lsn)?;
+        let header_commit_lsn = pool.append_log(TxnId(9), LogRecordKind::Commit)?;
+        pool.flush_log(header_commit_lsn)?;
+        pool.append_log(TxnId(9), LogRecordKind::End)?;
         pool.flush_log_all()?;
 
         // Txn 2's second update, after the checkpoint - still never
@@ -283,6 +290,116 @@ fn begin_resets_stale_committed_state_left_by_a_reused_txn_id() -> Result<(), Bo
         b"first!",
         "generation 1's committed write must survive, and generation 2's uncommitted reuse of \
          the same id must be undone rather than left in place"
+    );
+    Ok(())
+}
+
+/// Page 0's header fields (`catalog_first_page`, `last_checkpoint_lsn`)
+/// must be exactly as redoable and undoable as any other page's bytes -
+/// per `task.MD`'s "route page 0 through the WAL". A raw, unlogged write
+/// (the bug this guards against) could never be rolled back this way: only
+/// a properly WAL-tracked `Update` record lets `undo_transaction` find and
+/// revert it.
+#[test]
+fn an_uncommitted_header_update_is_undone_like_any_other_page_mutation()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    {
+        let pool = open_pool(dir.path(), 8)?;
+        assert_eq!(pool.catalog_first_page()?, None, "no catalog heap yet");
+
+        // A transaction that allocates a heap page and points the header at
+        // it, but crashes before ever committing.
+        pool.append_log(TxnId(1), LogRecordKind::Begin)?;
+        let (page_id, guard) = pool.new_page(TxnId(1))?;
+        drop(guard);
+        pool.set_catalog_first_page(TxnId(1), page_id)?;
+        pool.flush_log_all()?;
+        pool.flush_all()?;
+    }
+
+    let pool = open_pool(dir.path(), 8)?;
+    recovery::recover(&pool)?;
+
+    assert_eq!(
+        pool.catalog_first_page()?,
+        None,
+        "an uncommitted header update must be undone like any other page mutation"
+    );
+    Ok(())
+}
+
+/// A transaction that commits and ends *during* the checkpoint window
+/// (between `CheckpointBegin` and `CheckpointEnd`) must not get resurrected
+/// as still-active by the checkpoint's own snapshot, which was captured
+/// slightly earlier and is stale by the time `CheckpointEnd` is actually
+/// logged. Driving `LogManager` directly, since the engine can't currently
+/// produce this exact interleaving.
+#[test]
+fn checkpoint_seeding_does_not_resurrect_a_transaction_the_scan_already_saw_end_for()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+
+    let page_id;
+    {
+        let pool = open_pool(dir.path(), 8)?;
+        let (pid, mut guard) = pool.new_page(TxnId(1))?;
+        page_id = pid;
+        guard.write(TxnId(1), 16, b"000000")?;
+        drop(guard);
+        let commit_lsn = pool.append_log(TxnId(1), LogRecordKind::Commit)?;
+        pool.flush_log(commit_lsn)?;
+        pool.append_log(TxnId(1), LogRecordKind::End)?;
+        pool.flush_all()?;
+
+        // Txn 2 begins and writes, before the checkpoint starts.
+        pool.append_log(TxnId(2), LogRecordKind::Begin)?;
+        let mut guard = pool.fetch_page(page_id)?;
+        guard.write(TxnId(2), 16, b"222222")?;
+        let update_lsn = guard.page().page_lsn();
+        drop(guard);
+
+        // The checkpoint begins - a fuzzy snapshot will be taken "around"
+        // this point, but `CheckpointEnd` (carrying it) isn't logged until
+        // later.
+        let begin_lsn = pool.append_log(CHECKPOINT_TXN, LogRecordKind::CheckpointBegin)?;
+
+        // Interleaved between `CheckpointBegin` and `CheckpointEnd`: txn 2
+        // actually commits and ends.
+        let commit_lsn = pool.append_log(TxnId(2), LogRecordKind::Commit)?;
+        pool.flush_log(commit_lsn)?;
+        pool.append_log(TxnId(2), LogRecordKind::End)?;
+
+        // `CheckpointEnd`'s own snapshot is stale by the time it's logged:
+        // it still shows txn 2 active, exactly as it genuinely was when the
+        // snapshot was captured - just before the interleaved commit above.
+        pool.append_log(
+            CHECKPOINT_TXN,
+            LogRecordKind::CheckpointEnd {
+                att: vec![(TxnId(2), update_lsn)],
+                dpt: vec![(page_id, update_lsn)],
+            },
+        )?;
+
+        pool.set_last_checkpoint_lsn(TxnId(9), begin_lsn)?;
+        let header_commit_lsn = pool.append_log(TxnId(9), LogRecordKind::Commit)?;
+        pool.flush_log(header_commit_lsn)?;
+        pool.append_log(TxnId(9), LogRecordKind::End)?;
+
+        pool.flush_log_all()?;
+        pool.flush_all()?;
+    }
+
+    let pool = open_pool(dir.path(), 8)?;
+    recovery::recover(&pool)?;
+
+    let guard = pool.fetch_page(page_id)?;
+    assert_eq!(
+        &guard.page().data()[16..22],
+        b"222222",
+        "txn 2's committed write must survive recovery - the checkpoint's own snapshot, \
+         captured before txn 2's commit/end were logged, must not resurrect it as still active \
+         and get it wrongly undone"
     );
     Ok(())
 }

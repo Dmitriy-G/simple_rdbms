@@ -107,8 +107,8 @@ impl Database {
     /// the file to durable storage. Errors here are real failures worth
     /// reporting, which is why this is a separate, explicit call rather
     /// than left entirely to `Drop` (which cannot report them).
-    pub fn close(self) -> Result<()> {
-        write_checkpoint(&self.buffer_pool, &self.txn_manager)?;
+    pub fn close(mut self) -> Result<()> {
+        write_checkpoint(&self.buffer_pool, &mut self.txn_manager)?;
         self.buffer_pool.flush_log_all()?;
         self.buffer_pool.flush_all()?;
         self.buffer_pool.sync()?;
@@ -121,7 +121,7 @@ impl Database {
     fn maybe_checkpoint(&mut self) -> Result<()> {
         let grown = self.buffer_pool.log_bytes_appended() - self.bytes_at_last_checkpoint;
         if grown >= self.checkpoint_byte_threshold {
-            write_checkpoint(&self.buffer_pool, &self.txn_manager)?;
+            write_checkpoint(&self.buffer_pool, &mut self.txn_manager)?;
             self.bytes_at_last_checkpoint = self.buffer_pool.log_bytes_appended();
         }
         Ok(())

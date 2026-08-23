@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use common::{FrameId, Lsn, PageId, TxnId};
 
-use crate::disk::DiskManager;
+use crate::disk::{DiskManager, header};
 use crate::error::StorageError;
 use crate::page::{Page, PageGuard};
 use crate::replacer::Replacer;
@@ -184,16 +184,29 @@ impl BufferPool {
         self.disk_manager.borrow_mut().sync()
     }
 
-    /// The catalog's first page, as recorded in the database header, or
-    /// `None` if the catalog has not been persisted yet.
-    pub fn catalog_first_page(&self) -> Option<PageId> {
-        self.disk_manager.borrow().catalog_first_page()
+    /// The catalog's first page, as recorded in the database header (page
+    /// 0), or `None` if the catalog has not been persisted yet. Reads page 0
+    /// through the ordinary buffer-pool path - fetching it like any other
+    /// page - rather than a value cached before crash recovery ran, so this
+    /// always reflects the current, possibly just-redone-or-undone state.
+    pub fn catalog_first_page(&self) -> Result<Option<PageId>, StorageError> {
+        let guard = self.fetch_page(PageId(0))?;
+        let raw = read_u32(guard.page().data(), header::CATALOG_FIRST_PAGE_RANGE.start);
+        Ok((raw != u32::MAX).then_some(PageId(raw)))
     }
 
-    /// Records `page_id` as the catalog's first page in the database
-    /// header, so a reopen can find it again.
-    pub fn set_catalog_first_page(&self, page_id: PageId) -> Result<(), StorageError> {
-        self.disk_manager.borrow_mut().set_catalog_first_page(page_id)
+    /// Records `page_id` as the catalog's first page in the database header
+    /// (page 0), on behalf of `txn_id` - an ordinary, logged
+    /// `PageGuard::write` like any other page mutation, so it is redone or
+    /// undone exactly like the catalog heap allocation it accompanies rather
+    /// than racing ahead of it as an unlogged direct write.
+    pub fn set_catalog_first_page(
+        &self,
+        txn_id: TxnId,
+        page_id: PageId,
+    ) -> Result<(), StorageError> {
+        let mut guard = self.fetch_page(PageId(0))?;
+        guard.write(txn_id, header::CATALOG_FIRST_PAGE_RANGE.start, &page_id.0.to_le_bytes())
     }
 
     /// Appends `kind` to the write-ahead log on behalf of `txn_id`,
@@ -336,16 +349,23 @@ impl BufferPool {
             .collect()
     }
 
-    /// The LSN of the most recent checkpoint's `CheckpointBegin` record, or
-    /// `None` if no checkpoint has been taken yet.
-    pub fn last_checkpoint_lsn(&self) -> Option<Lsn> {
-        self.disk_manager.borrow().last_checkpoint_lsn()
+    /// The LSN of the most recent checkpoint's `CheckpointBegin` record, as
+    /// recorded in the database header (page 0), or `None` if no checkpoint
+    /// has been taken yet. Reads page 0 through the ordinary buffer-pool
+    /// path, like `catalog_first_page`.
+    pub fn last_checkpoint_lsn(&self) -> Result<Option<Lsn>, StorageError> {
+        let guard = self.fetch_page(PageId(0))?;
+        let raw = read_u64(guard.page().data(), header::LAST_CHECKPOINT_LSN_RANGE.start);
+        Ok((raw != 0).then_some(Lsn(raw)))
     }
 
-    /// Records `lsn` as the most recent checkpoint's `CheckpointBegin` LSN,
-    /// so a future reopen's recovery knows where to start scanning.
-    pub fn set_last_checkpoint_lsn(&self, lsn: Lsn) -> Result<(), StorageError> {
-        self.disk_manager.borrow_mut().set_last_checkpoint_lsn(lsn)
+    /// Records `lsn` as the most recent checkpoint's `CheckpointBegin` LSN
+    /// in the database header (page 0), on behalf of `txn_id`, so a future
+    /// reopen's recovery knows where to start scanning - an ordinary, logged
+    /// `PageGuard::write` like `set_catalog_first_page`.
+    pub fn set_last_checkpoint_lsn(&self, txn_id: TxnId, lsn: Lsn) -> Result<(), StorageError> {
+        let mut guard = self.fetch_page(PageId(0))?;
+        guard.write(txn_id, header::LAST_CHECKPOINT_LSN_RANGE.start, &lsn.0.to_le_bytes())
     }
 
     /// Forward iterator over every durable write-ahead log record with LSN
@@ -477,4 +497,21 @@ impl Drop for PageGuard<'_> {
     fn drop(&mut self) {
         self.pool.unpin_frame(self.frame_id);
     }
+}
+
+fn read_u32(buf: &[u8], at: usize) -> u32 {
+    u32::from_le_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]])
+}
+
+fn read_u64(buf: &[u8], at: usize) -> u64 {
+    u64::from_le_bytes([
+        buf[at],
+        buf[at + 1],
+        buf[at + 2],
+        buf[at + 3],
+        buf[at + 4],
+        buf[at + 5],
+        buf[at + 6],
+        buf[at + 7],
+    ])
 }

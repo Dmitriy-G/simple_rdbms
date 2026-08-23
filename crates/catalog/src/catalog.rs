@@ -138,14 +138,14 @@ impl Catalog {
         if let Some(page_id) = self.catalog_first_page {
             return Ok(page_id);
         }
-        if let Some(page_id) = buffer_pool.catalog_first_page() {
+        if let Some(page_id) = buffer_pool.catalog_first_page()? {
             self.catalog_first_page = Some(page_id);
             return Ok(page_id);
         }
 
         let heap = TableHeap::create(buffer_pool, txn_id)?;
         let page_id = heap.first_page_id();
-        buffer_pool.set_catalog_first_page(page_id)?;
+        buffer_pool.set_catalog_first_page(txn_id, page_id)?;
         self.catalog_first_page = Some(page_id);
         Ok(page_id)
     }
