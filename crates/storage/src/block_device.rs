@@ -136,3 +136,55 @@ impl BlockDevice for FaultyDevice {
         self.inner.size()
     }
 }
+
+/// A `BlockDevice` that wraps a real one and counts `read_at` calls and the
+/// cumulative bytes requested across them, via counters shared with the
+/// test that constructed it (the same shared-`Rc<Cell<_>>` shape
+/// `FaultyDevice` uses `counter` for). Test-only: lets a test assert that
+/// `LogManager::read_at` costs a small, bounded amount of I/O per lookup
+/// rather than re-reading the whole log, without resorting to a flaky
+/// wall-clock timing assertion.
+#[cfg(test)]
+pub struct CountingDevice {
+    inner: Box<dyn BlockDevice>,
+    calls: Rc<Cell<usize>>,
+    bytes: Rc<Cell<usize>>,
+}
+
+#[cfg(test)]
+impl CountingDevice {
+    /// Wraps `inner`, recording every `read_at` call's count and byte size
+    /// into `calls`/`bytes`.
+    pub fn new(
+        inner: Box<dyn BlockDevice>,
+        calls: Rc<Cell<usize>>,
+        bytes: Rc<Cell<usize>>,
+    ) -> Self {
+        Self { inner, calls, bytes }
+    }
+}
+
+#[cfg(test)]
+impl BlockDevice for CountingDevice {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        self.calls.set(self.calls.get() + 1);
+        self.bytes.set(self.bytes.get() + buf.len());
+        self.inner.read_at(offset, buf)
+    }
+
+    fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
+        self.inner.write_at(offset, buf)
+    }
+
+    fn set_len(&mut self, len: u64) -> io::Result<()> {
+        self.inner.set_len(len)
+    }
+
+    fn sync_all(&mut self) -> io::Result<()> {
+        self.inner.sync_all()
+    }
+
+    fn size(&mut self) -> io::Result<u64> {
+        self.inner.size()
+    }
+}

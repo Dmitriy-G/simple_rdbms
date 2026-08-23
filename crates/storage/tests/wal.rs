@@ -15,7 +15,7 @@ use storage::disk::DiskManager;
 use storage::heap::TableHeap;
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
-use storage::wal::{LogManager, LogRecord, LogRecordKind};
+use storage::wal::{HEADER_LEN, LogManager, LogRecord, LogRecordKind};
 
 #[test]
 fn round_trip_mixed_record_kinds_survives_reopen() -> Result<(), Box<dyn Error>> {
@@ -118,16 +118,80 @@ fn flipped_byte_fails_crc_at_exactly_that_record_and_stops() -> Result<(), Box<d
     log.flush(commit_lsn)?;
 
     // Flip one byte inside the second record (the `Update`), leaving the
-    // first record untouched.
+    // first record untouched. The file starts with the 8-byte magic
+    // header, so the first *record*'s own length prefix starts right after
+    // it, not at byte 0.
     let mut bytes = std::fs::read(&path)?;
-    let first_record_len = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-    let flip_at = first_record_len + 5;
+    let header_len = HEADER_LEN as usize;
+    let first_record_len = u32::from_le_bytes([
+        bytes[header_len],
+        bytes[header_len + 1],
+        bytes[header_len + 2],
+        bytes[header_len + 3],
+    ]) as usize;
+    let flip_at = header_len + first_record_len + 5;
     bytes[flip_at] ^= 0xFF;
     std::fs::write(&path, &bytes)?;
 
     let read_back: Vec<_> = log.iter_from(Lsn(0))?.collect();
     assert_eq!(read_back.len(), 1, "only the untouched first record should be yielded");
     assert_eq!(read_back[0].lsn, begin_lsn);
+
+    Ok(())
+}
+
+/// `LogManager::read_at` must return the exact record at a given LSN
+/// whether that record is already durable on disk or still sitting
+/// unflushed in the in-memory buffer - the two branches `read_at` picks
+/// between internally.
+#[test]
+fn read_at_returns_each_records_own_lsn_before_and_after_the_durable_boundary()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.wal");
+    let mut log = LogManager::open(path)?;
+
+    let begin_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Begin })?;
+    let commit_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
+    log.flush(commit_lsn)?;
+
+    // Appended after the flush above, so this one stays in the in-memory
+    // buffer rather than becoming durable.
+    let end_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::End })?;
+
+    let durable_record = log.read_at(begin_lsn)?.ok_or("begin_lsn should be durable")?;
+    let boundary_record = log.read_at(commit_lsn)?.ok_or("commit_lsn should be durable")?;
+    let buffered_record = log.read_at(end_lsn)?.ok_or("end_lsn should still be buffered")?;
+
+    assert_eq!(durable_record.lsn, begin_lsn);
+    assert_eq!(durable_record.kind, LogRecordKind::Begin);
+    assert_eq!(boundary_record.lsn, commit_lsn);
+    assert_eq!(boundary_record.kind, LogRecordKind::Commit);
+    assert_eq!(buffered_record.lsn, end_lsn);
+    assert_eq!(buffered_record.kind, LogRecordKind::End);
+
+    Ok(())
+}
+
+/// LSNs are byte offsets into the log stream now, so the next one assigned
+/// after a reopen must equal the file's length - not `highest_lsn + 1`,
+/// which would only make sense for a sequential counter.
+#[test]
+fn offset_lsns_survive_reopen() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.wal");
+
+    {
+        let mut log = LogManager::open(path.clone())?;
+        let lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Begin })?;
+        log.flush(lsn)?;
+    }
+
+    let file_len = std::fs::metadata(&path)?.len();
+
+    let mut log = LogManager::open(path)?;
+    let next_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
+    assert_eq!(next_lsn.0, file_len, "the next assigned LSN must equal the file length on reopen");
 
     Ok(())
 }

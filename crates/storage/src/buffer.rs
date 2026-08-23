@@ -354,6 +354,14 @@ impl BufferPool {
         self.log_manager.borrow_mut().iter_from(from)
     }
 
+    /// Reads and decodes exactly one write-ahead log record by its LSN,
+    /// without scanning the rest of the log. Used by
+    /// `recovery::undo_transaction` to walk a transaction's chain backward
+    /// one record at a time.
+    pub fn read_log_at(&self, lsn: Lsn) -> Result<Option<crate::wal::LoggedRecord>, StorageError> {
+        self.log_manager.borrow_mut().read_at(lsn)
+    }
+
     /// Extends the underlying file so `page_id` is allocated, if it is not
     /// already - i.e. redoes an `AllocPage` record. Idempotent: a no-op if
     /// `page_id` is already within the file's current extent.

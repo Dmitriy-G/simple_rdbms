@@ -55,6 +55,15 @@ pub enum StorageError {
         /// The largest tuple a single empty page can hold.
         max: usize,
     },
+
+    /// The write-ahead log's own header (the fixed magic bytes every log
+    /// file starts with) failed a structural sanity check: bad magic, or a
+    /// file shorter than the header itself.
+    #[error("corrupt write-ahead log header: {reason}")]
+    CorruptLogHeader {
+        /// A human-readable description of what failed validation.
+        reason: String,
+    },
 }
 
 impl From<StorageError> for common::Error {

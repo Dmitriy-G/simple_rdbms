@@ -19,7 +19,7 @@ use common::{Lsn, PageId, TxnId};
 
 use crate::buffer::BufferPool;
 use crate::error::StorageError;
-use crate::wal::{CHECKPOINT_TXN, LogRecordKind};
+use crate::wal::{CHECKPOINT_TXN, HEADER_LEN, LogRecordKind};
 
 /// Runs Analysis, Redo, and Undo against `pool`'s write-ahead log, leaving
 /// every page consistent with the log's most recent durable state and every
@@ -37,7 +37,7 @@ use crate::wal::{CHECKPOINT_TXN, LogRecordKind};
 /// since committed and ended, since a reused id's new `Begin` would chain
 /// its `prev_lsn` right onto that unrelated transaction's own log records.
 pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
-    let start = pool.last_checkpoint_lsn().unwrap_or(Lsn(1));
+    let start = pool.last_checkpoint_lsn().unwrap_or(Lsn(HEADER_LEN));
 
     // ---- Analysis ----
     // `att` maps a transaction to its most recent LSN and whether it has
@@ -164,7 +164,7 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
 pub fn undo_transaction(pool: &BufferPool, txn_id: TxnId, from: Lsn) -> Result<(), StorageError> {
     let mut cursor = Some(from);
     while let Some(lsn) = cursor {
-        let Some(record) = pool.log_iter_from(lsn)?.next() else {
+        let Some(record) = pool.read_log_at(lsn)? else {
             break;
         };
         match record.kind {
@@ -199,4 +199,92 @@ pub fn undo_transaction(pool: &BufferPool, txn_id: TxnId, from: Lsn) -> Result<(
     pool.append_log(txn_id, LogRecordKind::Abort)?;
     pool.append_log(txn_id, LogRecordKind::End)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+    use std::error::Error;
+    use std::fs::OpenOptions;
+    use std::rc::Rc;
+
+    use common::TxnId;
+
+    use super::undo_transaction;
+    use crate::block_device::{BlockDevice, CountingDevice, FileDevice};
+    use crate::buffer::BufferPool;
+    use crate::disk::DiskManager;
+    use crate::page::PAGE_SIZE;
+    use crate::replacer::LruKReplacer;
+    use crate::wal::LogManager;
+
+    /// Rolling back thousands of updates must cost a small, constant amount
+    /// of device I/O *per undone record*, not a whole extra log-sized read
+    /// for every single one of them - which is exactly the quadratic
+    /// behavior `LogManager::read_at` replaced `iter_from(lsn).next()` to
+    /// fix (see `task.MD`'s "Make the LSN a byte offset" task). A read
+    /// counter is the deterministic way to check this; a wall-clock timing
+    /// assertion would be flaky.
+    #[test]
+    fn undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times()
+    -> Result<(), Box<dyn Error>> {
+        let dir = tempfile::tempdir()?;
+        let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+
+        let wal_file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(dir.path().join("test.db.wal"))?;
+        let calls = Rc::new(Cell::new(0));
+        let bytes = Rc::new(Cell::new(0));
+        let device: Box<dyn BlockDevice> = Box::new(CountingDevice::new(
+            Box::new(FileDevice::new(wal_file)),
+            calls.clone(),
+            bytes.clone(),
+        ));
+        let log = LogManager::open_with_device(device)?;
+
+        let pool = BufferPool::new(disk, log, 8, Box::new(LruKReplacer::new(8, 2)));
+
+        const N: usize = 5_000;
+        let txn_id = TxnId(1);
+        let (_, mut guard) = pool.new_page(txn_id)?;
+        for i in 0..N {
+            guard.write(txn_id, 16, &(i as u32).to_le_bytes())?;
+        }
+        drop(guard);
+
+        // Force every one of the N updates durable, so undoing them below
+        // exercises `read_at`'s device-reading branch throughout rather
+        // than its free in-memory-buffer one - the branch the quadratic bug
+        // actually lived in.
+        pool.flush_log_all()?;
+
+        calls.set(0);
+        bytes.set(0);
+
+        let last_lsn = pool.last_lsn(txn_id).ok_or("txn should have appended at least one lsn")?;
+        undo_transaction(&pool, txn_id, last_lsn)?;
+
+        // Two device reads per undone record (peek the length prefix, then
+        // read exactly that many bytes) is what the fixed `read_at` costs;
+        // this bound is generous enough to not be brittle to the exact
+        // record encoding while still being far below what re-reading the
+        // whole (thousands-of-records) log on every single step would cost.
+        assert!(
+            calls.get() <= 3 * N,
+            "expected roughly 2 device reads per undone record, got {} calls for {N} updates",
+            calls.get()
+        );
+        assert!(
+            bytes.get() <= 500 * N,
+            "expected a small, constant number of bytes read per undone record, got {} bytes \
+             for {N} updates - this is the metric that actually catches the old quadratic \
+             behavior (N calls each re-reading the whole, ever-growing durable log)",
+            bytes.get()
+        );
+        Ok(())
+    }
 }

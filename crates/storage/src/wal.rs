@@ -14,6 +14,17 @@ use crate::error::StorageError;
 /// pass special-cases this id out of the Active Transaction Table.
 pub const CHECKPOINT_TXN: TxnId = TxnId(u64::MAX);
 
+/// The 8-byte magic string every write-ahead log file starts with.
+const MAGIC: &[u8; 8] = b"FDBWAL01";
+
+/// The length, in bytes, of the log file's fixed header (just `MAGIC` for
+/// now). No real record can ever start before this offset, which is what
+/// lets `Lsn(0)` - and, defensively, anything less than `HEADER_LEN` - be
+/// treated as "no record" rather than a real one: LSNs are now byte offsets
+/// into the log stream (see `LogManager::append`), and offset `0` is where
+/// the header itself lives, not a record.
+pub const HEADER_LEN: u64 = MAGIC.len() as u64;
+
 /// The fixed-size portion of a serialized record: front `total_len` (4
 /// bytes), `lsn` (8), `prev_lsn` (8), `txn_id` (8), `kind` tag (1), `crc32`
 /// (4), and trailing `total_len` (4). Any candidate record shorter than
@@ -341,10 +352,12 @@ pub struct LogManager {
     device: Box<dyn BlockDevice>,
     /// Records appended but not yet flushed to disk.
     buffer: Vec<u8>,
-    /// The LSN the next `append` will assign.
+    /// The byte offset the next `append` will assign as its LSN: the
+    /// durable file length plus the current in-memory buffer length.
     next_lsn: u64,
-    /// The highest LSN durably on disk; `0` if nothing has been flushed
-    /// yet (LSNs are assigned starting at `1`).
+    /// The offset one past the last durably-written byte - equivalently,
+    /// the device's own length once every write has landed. Never less
+    /// than `HEADER_LEN`, even for a freshly created log with no records.
     durable_lsn: u64,
     /// Each transaction's most recently appended LSN, consulted by
     /// `append` to fill in a new record's `prev_lsn`.
@@ -365,75 +378,115 @@ impl LogManager {
     }
 
     /// Opens a log backed by an arbitrary `BlockDevice`, for tests and
-    /// crash-injection fault wrapping. An existing device is scanned
-    /// forward, validating each record's CRC, to find `next_lsn` and
-    /// rebuild the per-transaction `prev_lsn` chain; any trailing bytes
-    /// past the last valid record (a torn write from a crash mid-append)
-    /// are truncated away, so appends after reopening always start from a
-    /// clean boundary.
+    /// crash-injection fault wrapping. A brand-new (zero-length) device gets
+    /// a fresh `MAGIC` header written to it. An existing device has its
+    /// header validated first, then is scanned forward from `HEADER_LEN`,
+    /// validating each record's CRC, to find the durable boundary and
+    /// rebuild the per-transaction `prev_lsn` chain; any trailing bytes past
+    /// the last valid record (a torn write from a crash mid-append) are
+    /// truncated away, so appends after reopening always start from a clean
+    /// boundary.
     pub fn open_with_device(mut device: Box<dyn BlockDevice>) -> Result<Self, StorageError> {
-        let len = device.size()?;
-        let mut bytes = vec![0u8; len as usize];
+        let device_len = device.size()?;
+
+        if device_len == 0 {
+            device.write_at(0, MAGIC)?;
+            return Ok(Self {
+                device,
+                buffer: Vec::new(),
+                next_lsn: HEADER_LEN,
+                durable_lsn: HEADER_LEN,
+                last_lsn_by_txn: HashMap::new(),
+                bytes_appended: 0,
+            });
+        }
+
+        if device_len < HEADER_LEN {
+            return Err(StorageError::CorruptLogHeader {
+                reason: format!(
+                    "log file is {device_len} bytes, shorter than its {HEADER_LEN}-byte header"
+                ),
+            });
+        }
+
+        let mut bytes = vec![0u8; device_len as usize];
         device.read_at(0, &mut bytes)?;
 
-        let mut pos = 0usize;
-        let mut last_lsn = 0u64;
+        if &bytes[0..HEADER_LEN as usize] != MAGIC.as_slice() {
+            return Err(StorageError::CorruptLogHeader {
+                reason: "bad magic in write-ahead log header".to_string(),
+            });
+        }
+
+        let mut pos = HEADER_LEN as usize;
         let mut last_lsn_by_txn = HashMap::new();
         while let Some((record, len)) = decode_record(&bytes, pos) {
-            last_lsn = record.lsn.0;
             last_lsn_by_txn.insert(record.txn_id, record.lsn.0);
             pos += len;
         }
         device.set_len(pos as u64)?;
 
+        let boundary = pos as u64;
         Ok(Self {
             device,
             buffer: Vec::new(),
-            next_lsn: last_lsn + 1,
-            durable_lsn: last_lsn,
+            next_lsn: boundary,
+            durable_lsn: boundary,
             last_lsn_by_txn,
             bytes_appended: 0,
         })
     }
 
-    /// Appends `record` to the log, returning its assigned `Lsn`. Only
-    /// buffers the bytes in memory; call `flush` to force them to disk.
+    /// Appends `record` to the log, returning its assigned `Lsn`: its byte
+    /// offset in the log stream, i.e. the durable file length plus the
+    /// current in-memory buffer length. Only buffers the bytes in memory;
+    /// call `flush` to force them to disk.
     pub fn append(&mut self, record: LogRecord) -> Result<Lsn, StorageError> {
         let lsn = Lsn(self.next_lsn);
-        self.next_lsn += 1;
         let prev_lsn = self.last_lsn_by_txn.get(&record.txn_id).copied().map(Lsn);
         let bytes = encode_record(lsn, prev_lsn, record.txn_id, &record.kind);
+        self.next_lsn += bytes.len() as u64;
         self.bytes_appended += bytes.len() as u64;
         self.buffer.extend_from_slice(&bytes);
         self.last_lsn_by_txn.insert(record.txn_id, lsn.0);
         Ok(lsn)
     }
 
-    /// Forces every buffered record up to and including `up_to` to disk.
-    /// Idempotent: returns immediately if `up_to` is already durable.
+    /// Forces every buffered record up to and including the one starting at
+    /// `up_to` to disk. Idempotent: returns immediately if that record is
+    /// already durable.
+    ///
+    /// The check is `durable_lsn > up_to.0`, strictly - not `>=`. `up_to`
+    /// is a record's *start* offset, and `durable_lsn` is byte-granular
+    /// now, so `durable_lsn == up_to.0` means the durable region ends
+    /// exactly where that record begins: none of it has reached disk yet,
+    /// and a real flush is still required. `durable_lsn` only ever advances
+    /// in whole-record increments (every flush durable-izes the entire
+    /// buffer at once), so `durable_lsn > up_to.0` correctly implies the
+    /// *whole* record at `up_to` is durable, not just its first byte.
     pub fn flush(&mut self, up_to: Lsn) -> Result<(), StorageError> {
-        if self.durable_lsn >= up_to.0 {
+        if self.durable_lsn > up_to.0 {
             return Ok(());
         }
         let offset = self.device.size()?;
         self.device.write_at(offset, &self.buffer)?;
         self.device.sync_all()?;
         self.buffer.clear();
-        self.durable_lsn = self.next_lsn - 1;
+        self.durable_lsn = self.next_lsn;
         Ok(())
     }
 
     /// Forces every record appended so far to disk, regardless of what any
     /// individual page needs. Used at clean shutdown.
     pub fn flush_all(&mut self) -> Result<(), StorageError> {
-        if self.next_lsn <= 1 {
+        if self.buffer.is_empty() {
             return Ok(());
         }
-        self.flush(Lsn(self.next_lsn - 1))
+        self.flush(Lsn(self.next_lsn))
     }
 
-    /// The highest LSN durably on disk, or `Lsn(0)` if nothing has been
-    /// flushed yet.
+    /// The offset one past the last durably-written byte - never less than
+    /// `HEADER_LEN`, even for a freshly created log with no records.
     pub fn durable_lsn(&self) -> Lsn {
         Lsn(self.durable_lsn)
     }
@@ -479,12 +532,68 @@ impl LogManager {
     /// yielding no further records, not an error - at the first invalid or
     /// truncated one, since a crash mid-append leaves exactly that shape
     /// and is not corruption.
+    ///
+    /// Seeks straight to `from` (clamped up to `HEADER_LEN` if it is
+    /// smaller - `Lsn(0)`/anything before the header means "from the very
+    /// start") instead of reading the whole device from offset `0`: only
+    /// `from` and later can possibly matter, so only the device's tail from
+    /// `from` onward, plus the buffered tail, are ever read. `from` must be
+    /// `HEADER_LEN` or an LSN some earlier `append` actually returned - i.e.
+    /// a real record boundary - since the bytes read here are decoded
+    /// starting exactly at `from` with no scan-and-skip to realign.
+    ///
+    /// Queries the device's current length fresh rather than trusting the
+    /// cached `durable_lsn`, so a torn tail introduced *after* this
+    /// `LogManager` was constructed (as `flush` believes things to be) is
+    /// still handled by the ordinary CRC/length-prefix validation below,
+    /// not an out-of-bounds read.
     pub fn iter_from(&mut self, from: Lsn) -> Result<LogIterator, StorageError> {
-        let len = self.device.size()?;
-        let mut bytes = vec![0u8; len as usize];
-        self.device.read_at(0, &mut bytes)?;
-        bytes.extend_from_slice(&self.buffer);
-        Ok(LogIterator { bytes, pos: 0, from })
+        let start = from.0.max(HEADER_LEN);
+        let device_len = self.device.size()?;
+        let bytes = if start < device_len {
+            let mut buf = vec![0u8; (device_len - start) as usize];
+            self.device.read_at(start, &mut buf)?;
+            buf.extend_from_slice(&self.buffer);
+            buf
+        } else {
+            let buf_offset = (start - device_len) as usize;
+            self.buffer.get(buf_offset..).unwrap_or(&[]).to_vec()
+        };
+        Ok(LogIterator { bytes, pos: 0, from: Lsn(start) })
+    }
+
+    /// Reads and decodes exactly one record by its LSN, without scanning
+    /// any other part of the log: `undo_transaction` uses this to walk a
+    /// transaction's chain backward one record at a time, which is what
+    /// keeps undoing N records `O(N)` rather than the `O(N^2)` that
+    /// `iter_from(lsn).next()` used to cost (each call re-reading the whole
+    /// log just to yield its first matching record). Returns `None` for
+    /// `Lsn(0)` (the "no record" sentinel) or a torn/invalid record.
+    ///
+    /// A durable-region lookup costs two device reads (one to peek the
+    /// record's own `total_len` prefix, one to read exactly that many
+    /// bytes) rather than one read sized to the whole durable region. A
+    /// lookup into the not-yet-flushed buffer costs no device I/O at all:
+    /// it's already in memory.
+    pub fn read_at(&mut self, lsn: Lsn) -> Result<Option<LoggedRecord>, StorageError> {
+        let offset = lsn.0;
+        if offset == 0 {
+            return Ok(None);
+        }
+        if offset < self.durable_lsn {
+            let mut len_buf = [0u8; 4];
+            self.device.read_at(offset, &mut len_buf)?;
+            let total_len = u32::from_le_bytes(len_buf) as u64;
+            if total_len < MIN_RECORD_LEN as u64 || offset + total_len > self.durable_lsn {
+                return Ok(None);
+            }
+            let mut record_buf = vec![0u8; total_len as usize];
+            self.device.read_at(offset, &mut record_buf)?;
+            Ok(decode_record(&record_buf, 0).map(|(record, _)| record))
+        } else {
+            let buf_offset = (offset - self.durable_lsn) as usize;
+            Ok(decode_record(&self.buffer, buf_offset).map(|(record, _)| record))
+        }
     }
 }
 
