@@ -1,13 +1,5 @@
-//! A hand-written, table-driven CRC-32 (the IEEE 802.3 polynomial, reflected
-//! form — the same checksum used by zip, gzip, and Ethernet), used by the
-//! write-ahead log to detect a torn or corrupted record. No external crate:
-//! the table is built once, lazily, from the polynomial itself.
-
 use std::sync::OnceLock;
 
-/// The reflected IEEE 802.3 polynomial, `0xEDB88320` (the bit-reversal of
-/// the standard `0x04C11DB7` polynomial), used because CRC-32 is
-/// conventionally computed least-significant-bit first.
 const POLYNOMIAL: u32 = 0xEDB8_8320;
 
 fn table() -> &'static [u32; 256] {
@@ -29,7 +21,6 @@ fn table() -> &'static [u32; 256] {
     })
 }
 
-/// Computes the CRC-32 (IEEE 802.3) checksum of `data`.
 pub fn crc32(data: &[u8]) -> u32 {
     let table = table();
     let mut crc = 0xFFFF_FFFFu32;

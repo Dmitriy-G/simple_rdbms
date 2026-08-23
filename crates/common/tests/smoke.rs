@@ -1,5 +1,3 @@
-//! Asserts the crate compiles and its main types can be constructed.
-
 #[test]
 fn db_config_constructs() {
     let config = common::DbConfig::new("test.db");

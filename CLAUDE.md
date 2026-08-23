@@ -59,6 +59,51 @@ If a crate seems to need a dependency not on this list, that's a sign the
 change belongs in a different crate, or the edge list itself needs an ADR
 updating it — don't just add the dependency.
 
+## Documentation
+
+No comments in code. Every `crates/**/*.rs` file has a sibling `<stem>.MD`
+beside it in the same directory (`buffer.rs` -> `buffer.MD`,
+`tests/wal.rs` -> `tests/wal.MD`), uppercase extension, test files
+included. Any new `.rs` file must ship with its `.MD` in the same commit.
+
+The `.MD` file mirrors this structure exactly:
+
+```
+# <the .rs file's stem>
+
+<Opening paragraph: what this module does, where it sits in the
+pipeline, and the design rationale behind it. Link ADRs as
+docs/adr/NNNN-slug.md and cross-reference sibling modules by filename.>
+
+## Key Components
+
+- `TypeName` - What it represents and the invariant it maintains.
+- `TypeName::method(args) -> Ret` - What it does, when it's called,
+  and the edge cases or ordering constraints that matter.
+- `free_function(args) -> Ret` - Same.
+- `private_helper(args)` - Private. Only listed when it carries real
+  logic rather than being a one-line accessor.
+
+## Usage Example
+
+<a short, realistic call sequence showing how this module is driven
+in context - illustrative, not a compiling doctest, in a fenced
+```rust block>
+
+<Closing paragraph: how this is actually invoked by its callers and
+what guarantee that ordering or sequencing buys.>
+```
+
+This is a migration, not a deletion: no reasoning may be lost when a
+comment moves into the `.MD`. Two exceptions stay in the `.rs` file itself
+rather than moving: `// SAFETY:` comments on `unsafe` blocks (required by
+clippy's `undocumented_unsafe_blocks`) and `// TODO(Mx):` milestone
+markers. Every other `///`, `//!`, and ordinary `//` comment is disallowed.
+
+`scripts/check_docs.sh` enforces this in CI: missing `.MD` siblings,
+missing `.rs` siblings, a missing `## Key Components` heading, or a
+disallowed comment all fail the build.
+
 ## Commit and branch conventions
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/):

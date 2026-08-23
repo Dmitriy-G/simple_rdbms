@@ -28,5 +28,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Check docs convention
+        run: bash scripts/check_docs.sh
+
       - name: Test
         run: cargo test --workspace
