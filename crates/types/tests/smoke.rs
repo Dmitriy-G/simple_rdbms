@@ -1,5 +1,3 @@
-//! Asserts the crate compiles and its main types can be constructed.
-
 use types::{DataType, Tuple, Value};
 
 #[test]

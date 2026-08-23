@@ -1,7 +1,3 @@
-//! Property-based round-trip test: `Tuple::decode` must reconstruct exactly
-//! what `Encode::encode` produced, for any schema and matching set of
-//! values (including `NULL`s in any column).
-
 use proptest::prelude::*;
 use proptest::strategy::BoxedStrategy;
 use types::{DataType, Encode, Tuple, Value};
@@ -29,8 +25,6 @@ fn arb_value_for(data_type: DataType) -> BoxedStrategy<Value> {
     prop_oneof![1 => Just(Value::Null), 4 => non_null].boxed()
 }
 
-/// Builds a strategy yielding `(schema, values)` pairs where `values[i]`
-/// always matches `schema[i]`'s type (or is `Null`).
 fn arb_schema_and_values() -> impl Strategy<Value = (Vec<DataType>, Vec<Value>)> {
     proptest::collection::vec(arb_data_type(), 0..8).prop_flat_map(|schema| {
         let values_strategy = schema.iter().cloned().fold(
