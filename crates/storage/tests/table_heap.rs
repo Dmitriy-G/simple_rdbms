@@ -1,7 +1,3 @@
-//! `TableHeap` behavior: inserting enough tuples to span several pages and
-//! reading them all back, and a tuple too large for any page producing a
-//! clear error instead of a panic (or an infinite loop).
-
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -86,12 +82,6 @@ fn get_tuple_returns_none_for_deleted_slot() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// A page allocated but never `SlottedPage::init`-ed (as happens when a
-/// process exits before flushing a freshly-created page) stays all-zero.
-/// `NO_NEXT_PAGE` being `PageId(0)` - the one page id a heap chain can
-/// never legitimately contain - means that decodes as a valid, empty,
-/// terminal page rather than corruption: an uninitialized page is usable,
-/// not merely non-fatal.
 #[test]
 fn scanning_a_page_whose_init_never_reached_disk_is_a_clean_empty_scan()
 -> Result<(), Box<dyn Error>> {
@@ -105,9 +95,6 @@ fn scanning_a_page_whose_init_never_reached_disk_is_a_clean_empty_scan()
     Ok(())
 }
 
-/// Proves an uninitialized (all-zero) page is genuinely usable, not just
-/// safe to read: inserting into a heap whose only page was never
-/// `SlottedPage::init`-ed must succeed, and the tuple must read back.
 #[test]
 fn inserting_into_a_never_initialized_page_still_works() -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
@@ -123,17 +110,10 @@ fn inserting_into_a_never_initialized_page_still_works() -> Result<(), Box<dyn E
     Ok(())
 }
 
-/// `MAX_SLOTS` remains a backstop against a page whose slot count could
-/// never have come from `SlottedPage::insert` (a non-heap page misread as
-/// one, say) - written directly here since `SlottedPage::insert` itself
-/// can't be driven past it.
 #[test]
 fn slot_count_above_max_slots_still_reports_corruption() -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
     let (page_id, mut guard) = pool.new_page(TXN)?;
-    // Byte 12 is the start of the slotted-page header (the checksum and
-    // `page_lsn` occupy the reserved `0..12` prefix; see
-    // `heap::SLOT_COUNT_RANGE`).
     guard.write(TXN, 12, &(MAX_SLOTS + 1).to_le_bytes())?;
     drop(guard);
 
@@ -147,17 +127,6 @@ fn slot_count_above_max_slots_still_reports_corruption() -> Result<(), Box<dyn E
     Ok(())
 }
 
-/// No sequence of page bytes - however implausible - may panic a reader.
-/// Installs 4096 fully random bytes as a heap page's raw content and drives
-/// every public entry point that parses page bytes through it: iterating
-/// the heap, looking up every possible slot by `Rid`, and inserting a
-/// tuple. This is the property the original all-zero-page bug was really
-/// an instance of - no on-disk byte pattern, whether from a lost write, a
-/// torn write, or outright disk corruption, should be able to crash the
-/// reader; proptest's own panic-catching (needed to shrink counterexamples)
-/// is what turns any surviving panic into a normal, reproducible test
-/// failure here rather than an aborted test binary. The RNG is seeded so a
-/// failure is reproducible across runs.
 #[test]
 fn no_page_content_can_panic_a_reader() -> Result<(), Box<dyn Error>> {
     let mut runner = TestRunner::new_with_rng(
@@ -175,10 +144,6 @@ fn no_page_content_can_panic_a_reader() -> Result<(), Box<dyn Error>> {
 
         let mut heap = TableHeap::open(&pool, page_id);
 
-        // Bounded: an adversarial `next_page_id` that happens to loop back
-        // on itself would otherwise iterate forever rather than panic;
-        // astronomically unlikely from random bytes, but the bound keeps
-        // that outcome from hanging the test either way.
         for entry in heap.iter().take(10_000) {
             let _ = entry;
         }

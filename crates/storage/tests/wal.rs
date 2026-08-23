@@ -1,12 +1,3 @@
-//! `LogManager` behavior: a mix of record kinds survives an append/flush/
-//! reopen round trip with `prev_lsn` chained correctly per transaction; a
-//! log file truncated mid-record (a crash mid-append) iterates cleanly up
-//! to the last intact record instead of erroring; a single flipped byte
-//! fails CRC at exactly the record it corrupted and stops there; and the
-//! write-ahead invariant itself - no page ever reaches disk before the log
-//! record describing it is durable - holds across a real, eviction-heavy
-//! workload.
-
 use std::error::Error;
 
 use common::{Lsn, PageId, TxnId};
@@ -62,8 +53,6 @@ fn round_trip_mixed_record_kinds_survives_reopen() -> Result<(), Box<dyn Error>>
         assert_eq!(logged.kind, expected.kind);
     }
 
-    // `prev_lsn` chains each transaction's own records together,
-    // independent of what other transactions interleaved between them.
     assert_eq!(read_back[0].prev_lsn, None, "txn 1's first record has no predecessor");
     assert_eq!(read_back[1].prev_lsn, Some(lsns[0]), "txn 1's Update chains from its Begin");
     assert_eq!(read_back[2].prev_lsn, None, "txn 2's first record has no predecessor");
@@ -84,9 +73,6 @@ fn truncated_mid_record_iterates_cleanly_up_to_last_intact_record() -> Result<()
     let commit_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
     log.flush(commit_lsn)?;
 
-    // Simulate a crash partway through appending a record by lopping a few
-    // bytes off the end of the file - shorter than a complete record, so
-    // the trailing bytes describe no valid record at all.
     let file_len = std::fs::metadata(&path)?.len();
     let file = std::fs::OpenOptions::new().write(true).open(&path)?;
     file.set_len(file_len - 3)?;
@@ -118,10 +104,6 @@ fn flipped_byte_fails_crc_at_exactly_that_record_and_stops() -> Result<(), Box<d
     let commit_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
     log.flush(commit_lsn)?;
 
-    // Flip one byte inside the second record (the `Update`), leaving the
-    // first record untouched. The file starts with the 8-byte magic
-    // header, so the first *record*'s own length prefix starts right after
-    // it, not at byte 0.
     let mut bytes = std::fs::read(&path)?;
     let header_len = HEADER_LEN as usize;
     let first_record_len = u32::from_le_bytes([
@@ -141,10 +123,6 @@ fn flipped_byte_fails_crc_at_exactly_that_record_and_stops() -> Result<(), Box<d
     Ok(())
 }
 
-/// `LogManager::read_at` must return the exact record at a given LSN
-/// whether that record is already durable on disk or still sitting
-/// unflushed in the in-memory buffer - the two branches `read_at` picks
-/// between internally.
 #[test]
 fn read_at_returns_each_records_own_lsn_before_and_after_the_durable_boundary()
 -> Result<(), Box<dyn Error>> {
@@ -156,8 +134,6 @@ fn read_at_returns_each_records_own_lsn_before_and_after_the_durable_boundary()
     let commit_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
     log.flush(commit_lsn)?;
 
-    // Appended after the flush above, so this one stays in the in-memory
-    // buffer rather than becoming durable.
     let end_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::End })?;
 
     let durable_record = log.read_at(begin_lsn)?.ok_or("begin_lsn should be durable")?;
@@ -174,9 +150,6 @@ fn read_at_returns_each_records_own_lsn_before_and_after_the_durable_boundary()
     Ok(())
 }
 
-/// LSNs are byte offsets into the log stream now, so the next one assigned
-/// after a reopen must equal the file's length - not `highest_lsn + 1`,
-/// which would only make sense for a sequential counter.
 #[test]
 fn offset_lsns_survive_reopen() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
@@ -197,12 +170,6 @@ fn offset_lsns_survive_reopen() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// The invariant `BufferPool::flush_pages` and M7's recovery both depend
-/// on: a page never reaches disk before the log record describing its most
-/// recent change is durable. A three-frame pool against hundreds of
-/// inserted tuples forces repeated eviction under pressure, so
-/// `write_observations` captures many real disk writes to check this
-/// against, not just the trivial case of a pool that never evicts.
 #[test]
 fn wal_ordering_holds_across_an_eviction_heavy_workload() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;

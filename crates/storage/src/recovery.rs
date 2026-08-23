@@ -1,18 +1,3 @@
-//! ARIES crash recovery: Analysis, Redo, and Undo.
-//!
-//! `recover` is meant to be called once, on every `Database::open`, before
-//! the catalog is loaded - the log and the pages it describes must be back
-//! in a consistent state before anything above `storage` starts trusting
-//! page contents. It never touches the catalog, transaction-manager, or
-//! lock-manager concepts (this crate isn't allowed to depend on `txn`
-//! anyway - see the workspace's crate dependency-edge rules), so it is
-//! phrased entirely in terms of `BufferPool`/`LogManager`/`DiskManager`.
-//!
-//! `undo_transaction` is deliberately `pub`: it is the one piece of this
-//! module a *runtime* abort (not just crash recovery) also needs, so
-//! `txn::TransactionManager::abort` calls it directly rather than
-//! reimplementing undo.
-
 use std::collections::HashMap;
 
 use common::{Lsn, PageId, TxnId};
@@ -24,42 +9,6 @@ use crate::error::StorageError;
 use crate::page::{self, Page};
 use crate::wal::{CHECKPOINT_TXN, HEADER_LEN, LogRecordKind};
 
-/// Repairs a real-file page torn by a crash mid-write, using an in-flight
-/// double-write buffer batch, if there is one. Must run before `recover`
-/// (and before any `BufferPool` exists to run it against): ARIES's Redo
-/// pass trusts every page it reads to be otherwise intact, so a page torn
-/// by a crash must be restored *first* - this is what lets a
-/// `ChecksumMismatch` surviving to `recover`'s own Redo pass stay a hard,
-/// unrecoverable error (real media corruption) rather than something Redo
-/// itself has to work around.
-///
-/// For each page id the double-write buffer's header names: reads that
-/// slot's copy and checks *its own* checksum first. A bad copy means the
-/// crash landed while the copy itself was still being written (protocol
-/// steps 1-2) - the real page was never touched by this batch, so it is
-/// already fine and there is nothing to restore it from. A good copy means
-/// it's safe to compare against the real page: if the real page's own
-/// checksum fails, it was torn by this batch's real-file write (step 4)
-/// and is restored from the copy; if it verifies, it is left alone -
-/// either this batch never reached it or reached it completely, and both
-/// are consistent states Redo can work from unmodified. A real page that
-/// isn't durably extended to *at all* yet (`PageNotFound`) is treated the
-/// same as "never reached it": this batch's own real-file write (step 4)
-/// never got that far, but the page's `AllocPage` record is already
-/// durable in the WAL (it could not have been dirtied otherwise), so
-/// ordinary ARIES redo will reconstruct it from an all-zero start the same
-/// way it already does for any page whose first-ever write never reached
-/// disk - restoring it here would be redundant at best, and, if a later
-/// entry in this same batch happens to extend the file first (zero-filling
-/// this page's still-untouched region as a side effect), indistinguishable
-/// from a legitimately empty page, which is exactly the state redo expects
-/// to start from anyway.
-///
-/// The batch is only ever retired (`dwb.clear_batch()`) once every page this
-/// pass actually restored has been read back and reverified against its own
-/// checksum - a second crash landing on top of this pass's own restore
-/// writes is possible too, and a batch discarded before that is ruled out
-/// would take the only remaining intact copy down with it.
 pub fn recover_double_write(
     disk: &mut DiskManager,
     dwb: &mut DoubleWriteBuffer,
@@ -92,14 +41,6 @@ pub fn recover_double_write(
 
     disk.sync()?;
 
-    // A second crash can land right on top of this pass's own restore
-    // writes (e.g. tearing one of them in turn), so nothing here is trusted
-    // just because it was just written: every page this pass actually
-    // restored is re-read and re-verified before the batch that can still
-    // repair it is discarded. Only once every one of them provably landed
-    // intact is the batch retired; otherwise it is left in place so a later
-    // attempt can retry the restore from the same, still-intact double-write
-    // copies.
     for page_id in &restored_pages {
         let mut check = Page::new(*page_id);
         disk.read_page_unchecked(*page_id, &mut check)?;
@@ -112,47 +53,12 @@ pub fn recover_double_write(
     Ok(())
 }
 
-/// Runs Analysis, Redo, and Undo against `pool`'s write-ahead log, leaving
-/// every page consistent with the log's most recent durable state and every
-/// transaction that never committed fully undone. Idempotent: safe to call
-/// on a log that describes a database already in a consistent state (the
-/// common case - most opens follow a clean shutdown), and safe to call
-/// again on a log left behind by a crash *during* a previous recovery
-/// attempt (see `undo_transaction`'s docs for why).
-///
-/// Returns the highest `TxnId` observed anywhere in the log (excluding
-/// `CHECKPOINT_TXN`), or `None` if the log has never recorded a real
-/// transaction. `Database::open` threads this into `TransactionManager::new`
-/// so a freshly seeded id counter can never hand out an id the log has
-/// already used - which matters even for an id whose transaction is long
-/// since committed and ended, since a reused id's new `Begin` would chain
-/// its `prev_lsn` right onto that unrelated transaction's own log records.
 pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
     let start = pool.last_checkpoint_lsn()?.unwrap_or(Lsn(HEADER_LEN));
 
-    // ---- Analysis ----
-    // `att` maps a transaction to its most recent LSN and whether it has
-    // committed (a winner) or not (still a candidate loser until the scan
-    // ends). `dpt` maps a page to the LSN of the record that first dirtied
-    // it since its last flush - the earliest point Redo might need to
-    // start replaying from.
     let mut att: HashMap<TxnId, (Lsn, bool)> = HashMap::new();
     let mut dpt: HashMap<PageId, Lsn> = HashMap::new();
 
-    // Seed ATT/DPT from the checkpoint's own snapshot *before* the forward
-    // scan below runs at all - not merged in via `or_insert` at the moment
-    // the scan happens to reach `CheckpointEnd`, which is what the old code
-    // did. That mattered: a fuzzy checkpoint's snapshot is captured near
-    // `CheckpointBegin`'s time, but `CheckpointEnd` (carrying it) is only
-    // logged later, so any record in between - say, a transaction's `End` -
-    // gets processed by the scan *before* the snapshot that predates it. If
-    // that snapshot still shows the same transaction active and gets merged
-    // in with `or_insert`, it resurrects an entry the scan just correctly
-    // removed - undoing already-committed work. Seeding first and letting
-    // every subsequent record overwrite unconditionally (via the same
-    // `insert`/`remove`/`and_modify` each kind already uses below) fixes
-    // this: whichever is more recent always wins, regardless of which one
-    // this loop happens to visit first.
     for record in pool.log_iter_from(start)? {
         if record.txn_id != CHECKPOINT_TXN {
             continue;
@@ -170,9 +76,6 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
 
     for record in pool.log_iter_from(start)? {
         if record.txn_id == CHECKPOINT_TXN {
-            // Already applied above; `CheckpointBegin`/`CheckpointEnd`
-            // themselves carry no further per-transaction or per-page state
-            // to fold in here.
             continue;
         }
 
@@ -192,14 +95,6 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
                 dpt.entry(*page_id).or_insert(record.lsn);
             }
             LogRecordKind::Begin => {
-                // A `Begin` means a transaction is starting: any prior
-                // entry for this id belongs to a different transaction (an
-                // earlier generation reusing the id), and must not leak its
-                // `committed` flag into this one - in particular, a
-                // "phantom winner" left behind by a crash between a
-                // `Commit` and its `End` must not make a brand new,
-                // never-committed transaction of the same id look
-                // committed too.
                 att.insert(record.txn_id, (record.lsn, false));
             }
             LogRecordKind::Abort => {
@@ -218,11 +113,6 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
         .filter_map(|(txn_id, (last_lsn, committed))| (!committed).then_some((txn_id, last_lsn)))
         .collect();
 
-    // ---- Redo ----
-    // Repeats history from the oldest change that might still be missing
-    // from disk, replaying every logged `Update`/`Clr`/`AllocPage` -
-    // including losers' own actions, which is exactly why Undo runs after,
-    // not instead of, this pass.
     if let Some(&min_recovery_lsn) = dpt.values().min() {
         for record in pool.log_iter_from(min_recovery_lsn)? {
             match &record.kind {
@@ -240,38 +130,16 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
         }
     }
 
-    // ---- Undo ----
     for (txn_id, last_lsn) in losers {
         undo_transaction(pool, txn_id, last_lsn)?;
     }
 
-    // Recovery leaves a durable, checkpoint-able database behind rather
-    // than relying on later no-force flushes to eventually catch up.
     pool.flush_log_all()?;
     pool.flush_all()?;
     pool.sync()?;
     Ok(pool.max_txn_id())
 }
 
-/// Undoes `txn_id`'s writes, walking its log chain backward starting from
-/// `from` (that transaction's most recent LSN). For each `Update` found,
-/// logs a `Clr` carrying the before-image and applies it, then continues
-/// from the `Update`'s own `prev_lsn`; a `Clr` is never itself undone -
-/// walking through one just continues from its `undo_next_lsn`. Once the
-/// chain is exhausted, logs `Abort` then `End`.
-///
-/// This is shared by two callers: crash recovery's Undo pass (`recover`,
-/// above) and `txn::TransactionManager::abort`'s ordinary runtime abort -
-/// there is exactly one undo implementation, not two.
-///
-/// Resuming after a crash *during* undo works for free: on a second
-/// recovery attempt, Analysis finds the loser still active with `last_lsn`
-/// now pointing at the last `Clr` that made it to disk, and walking from
-/// there immediately follows that `Clr`'s `undo_next_lsn` rather than
-/// re-undoing the `Update` it already compensated for. Redo (which always
-/// runs first) independently reapplies any `Clr` whose own page write
-/// didn't survive the second crash, which is why Redo must replay losers'
-/// actions - including their `Clr`s - and must be idempotent.
 pub fn undo_transaction(pool: &BufferPool, txn_id: TxnId, from: Lsn) -> Result<(), StorageError> {
     let mut cursor = Some(from);
     while let Some(lsn) = cursor {
@@ -292,14 +160,6 @@ pub fn undo_transaction(pool: &BufferPool, txn_id: TxnId, from: Lsn) -> Result<(
                 cursor = (undo_next_lsn.0 != 0).then_some(undo_next_lsn);
             }
             LogRecordKind::Begin => {
-                // A transaction's undo chain never extends past its own
-                // `Begin`, regardless of what `prev_lsn` this particular
-                // record carries. `LogManager` chains `prev_lsn` purely by
-                // `TxnId`, so if this id has ever been reused, `Begin`'s own
-                // `prev_lsn` points at an unrelated, earlier generation's
-                // last record for the same id - walking past it here would
-                // cascade into undoing that generation's already-committed
-                // writes too.
                 cursor = None;
             }
             _ => {
@@ -330,13 +190,6 @@ mod tests {
     use crate::replacer::LruKReplacer;
     use crate::wal::LogManager;
 
-    /// Rolling back thousands of updates must cost a small, constant amount
-    /// of device I/O *per undone record*, not a whole extra log-sized read
-    /// for every single one of them - which is exactly the quadratic
-    /// behavior `LogManager::read_at` replaced `iter_from(lsn).next()` to
-    /// fix (see `task.MD`'s "Make the LSN a byte offset" task). A read
-    /// counter is the deterministic way to check this; a wall-clock timing
-    /// assertion would be flaky.
     #[test]
     fn undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times()
     -> Result<(), Box<dyn Error>> {
@@ -372,10 +225,6 @@ mod tests {
         }
         drop(guard);
 
-        // Force every one of the N updates durable, so undoing them below
-        // exercises `read_at`'s device-reading branch throughout rather
-        // than its free in-memory-buffer one - the branch the quadratic bug
-        // actually lived in.
         pool.flush_log_all()?;
 
         calls.set(0);
@@ -384,11 +233,6 @@ mod tests {
         let last_lsn = pool.last_lsn(txn_id).ok_or("txn should have appended at least one lsn")?;
         undo_transaction(&pool, txn_id, last_lsn)?;
 
-        // Two device reads per undone record (peek the length prefix, then
-        // read exactly that many bytes) is what the fixed `read_at` costs;
-        // this bound is generous enough to not be brittle to the exact
-        // record encoding while still being far below what re-reading the
-        // whole (thousands-of-records) log on every single step would cost.
         assert!(
             calls.get() <= 3 * N,
             "expected roughly 2 device reads per undone record, got {} calls for {N} updates",

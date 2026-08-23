@@ -1,5 +1,3 @@
-//! Asserts the crate compiles and its main types can be constructed.
-
 use common::PageId;
 use storage::StorageError;
 use storage::page::Page;

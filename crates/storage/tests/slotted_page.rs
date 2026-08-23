@@ -1,6 +1,3 @@
-//! Fills a slotted page past capacity and checks every tuple inserted
-//! before that point is still readable.
-
 use std::error::Error;
 
 use common::TxnId;
