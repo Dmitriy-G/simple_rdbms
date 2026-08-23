@@ -14,10 +14,11 @@ use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
 
-/// An arbitrary offset past the reserved `page_lsn` prefix (`0..8`), used by
-/// these tests as a one-byte marker location. What byte of the page it is
-/// doesn't matter to the buffer pool; it only matters that it isn't the
-/// `page_lsn` field, which `PageGuard::write` overwrites on every write.
+/// An arbitrary offset past the reserved checksum and `page_lsn` prefix
+/// (`0..12`), used by these tests as a one-byte marker location. What byte
+/// of the page it is doesn't matter to the buffer pool; it only matters
+/// that it isn't the `page_lsn` field, which `PageGuard::write` overwrites
+/// on every write.
 const MARKER_OFFSET: usize = 100;
 
 fn open_pool(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {

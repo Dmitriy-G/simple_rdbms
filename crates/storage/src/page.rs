@@ -8,14 +8,25 @@ use common::{FrameId, Lsn, PageId};
 /// across reopens of the same file.
 pub const PAGE_SIZE: usize = 4096;
 
-/// The byte range, at the start of every page, reserved for the page's
+/// The byte range, at the very start of every page, reserved for a CRC-32
+/// checksum over the rest of the page's bytes (`4..PAGE_SIZE`). Computed and
+/// verified at the `DiskManager` layer (`write_page`/`read_page`), not by
+/// any layout built on top of `Page`, so it is format-agnostic: the slotted
+/// heap page format gets it today, and the B+tree's node pages will get it
+/// for free once M9 adds them, with no changes to that code. See
+/// `disk::DiskManager::read_page`'s doc comment for why an all-zero page
+/// skips verification instead of failing it.
+pub const CHECKSUM_RANGE: std::ops::Range<usize> = 0..4;
+
+/// The byte range, just after `CHECKSUM_RANGE`, reserved for the page's
 /// `pageLSN`: the log sequence number of the last WAL record that
 /// describes a change to this page's bytes. The write-ahead rule is
 /// enforced by comparing this against the log's own durable LSN before the
 /// page is allowed to reach disk (see `BufferPool::flush_frame`), so every
 /// page layout built on top of `Page` (slotted heap pages, B+tree nodes)
-/// must treat these 8 bytes as reserved, not available for its own layout.
-pub const PAGE_LSN_RANGE: std::ops::Range<usize> = 0..8;
+/// must treat these 8 bytes, together with `CHECKSUM_RANGE`, as reserved,
+/// not available for its own layout.
+pub const PAGE_LSN_RANGE: std::ops::Range<usize> = 4..12;
 
 /// A single fixed-size page: the unit of I/O between the disk manager and
 /// the buffer pool, and the unit of layout for slotted-page heap storage

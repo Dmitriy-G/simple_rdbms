@@ -137,6 +137,13 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
             match &record.kind {
                 LogRecordKind::Update { page_id, offset, after, .. }
                 | LogRecordKind::Clr { page_id, offset, after, .. } => {
+                    // TODO(M12.2): `page_lsn` reads `page_id` through the
+                    // ordinary buffer-pool path, so a `StorageError::
+                    // ChecksumMismatch` on a torn or corrupted page
+                    // propagates via `?` and aborts recovery outright. Once
+                    // the double-write buffer lands, a torn page found here
+                    // should be reconstructed from its double-write copy
+                    // instead of failing recovery.
                     if pool.page_lsn(*page_id)? < record.lsn {
                         pool.stamp_write(*page_id, *offset as usize, after, record.lsn)?;
                     }

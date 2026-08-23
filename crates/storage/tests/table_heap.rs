@@ -126,9 +126,10 @@ fn inserting_into_a_never_initialized_page_still_works() -> Result<(), Box<dyn E
 fn slot_count_above_max_slots_still_reports_corruption() -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;
     let (page_id, mut guard) = pool.new_page(TXN)?;
-    // Byte 8 is the start of the slotted-page header (`page_lsn` occupies
-    // the reserved `0..8` prefix; see `heap::SLOT_COUNT_RANGE`).
-    guard.write(TXN, 8, &(MAX_SLOTS + 1).to_le_bytes())?;
+    // Byte 12 is the start of the slotted-page header (the checksum and
+    // `page_lsn` occupy the reserved `0..12` prefix; see
+    // `heap::SLOT_COUNT_RANGE`).
+    guard.write(TXN, 12, &(MAX_SLOTS + 1).to_le_bytes())?;
     drop(guard);
 
     let heap = TableHeap::open(&pool, page_id);

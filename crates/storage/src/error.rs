@@ -64,6 +64,22 @@ pub enum StorageError {
         /// A human-readable description of what failed validation.
         reason: String,
     },
+
+    /// A page's stored CRC-32 checksum (`page::CHECKSUM_RANGE`) does not
+    /// match the checksum recomputed over its bytes at read time - the
+    /// page's on-disk bytes were altered by something other than
+    /// `DiskManager::write_page` (media corruption, a torn write, disk
+    /// bit rot). Detection only: recovering from this by reconstructing the
+    /// page from a double-write buffer is a following task, not this one.
+    #[error("checksum mismatch on page {page_id}: expected {expected:#010x}, got {actual:#010x}")]
+    ChecksumMismatch {
+        /// The offending page, identified by its raw page number.
+        page_id: u32,
+        /// The checksum stored in the page's `CHECKSUM_RANGE`.
+        expected: u32,
+        /// The checksum recomputed over the page's `4..PAGE_SIZE` bytes.
+        actual: u32,
+    },
 }
 
 impl From<StorageError> for common::Error {

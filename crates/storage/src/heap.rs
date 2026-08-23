@@ -15,15 +15,16 @@ use crate::page::PageGuard;
 const NO_NEXT_PAGE: PageId = PageId(0);
 
 /// Byte layout of a slotted page's header, which sits just after the
-/// page-wide `page_lsn` prefix (`page::PAGE_LSN_RANGE`, bytes `0..8`).
-const SLOT_COUNT_RANGE: std::ops::Range<usize> = 8..10;
+/// page-wide checksum (`page::CHECKSUM_RANGE`, bytes `0..4`) and `page_lsn`
+/// (`page::PAGE_LSN_RANGE`, bytes `4..12`) prefixes.
+const SLOT_COUNT_RANGE: std::ops::Range<usize> = 12..14;
 /// Bytes of tuple data currently used (see `slotted_data_used`).
-const DATA_USED_RANGE: std::ops::Range<usize> = 10..12;
-const NEXT_PAGE_ID_RANGE: std::ops::Range<usize> = 12..16;
-/// The offset the slot array starts at: `page_lsn` (8 bytes) followed by
-/// the slotted-page header (`slot_count`, `data_used`, `next_page_id`; 8
-/// more bytes).
-const HEADER_SIZE: usize = 16;
+const DATA_USED_RANGE: std::ops::Range<usize> = 14..16;
+const NEXT_PAGE_ID_RANGE: std::ops::Range<usize> = 16..20;
+/// The offset the slot array starts at: the checksum (4 bytes) and
+/// `page_lsn` (8 bytes) prefixes followed by the slotted-page header
+/// (`slot_count`, `data_used`, `next_page_id`; 8 more bytes).
+const HEADER_SIZE: usize = 20;
 /// Each slot is a (u16 offset, u16 len) pair.
 const SLOT_SIZE: usize = 4;
 
