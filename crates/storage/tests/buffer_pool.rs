@@ -10,6 +10,7 @@ use common::TxnId;
 use storage::StorageError;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
+use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
@@ -24,9 +25,13 @@ const MARKER_OFFSET: usize = 100;
 fn open_pool(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+    let dwb = DoubleWriteBuffer::open(
+        dir.path().join("test.db.dwb"),
+        DoubleWriteBuffer::DEFAULT_CAPACITY,
+    )?;
     let log = LogManager::open(dir.path().join("test.db.wal"))?;
     let replacer = Box::new(LruKReplacer::new(pool_size, 2));
-    Ok((BufferPool::new(disk, log, pool_size, replacer), dir))
+    Ok((BufferPool::new(disk, dwb, log, pool_size, replacer), dir))
 }
 
 /// Like `open_pool`, but with `k = 1` so the replacer's victim choice is
@@ -36,9 +41,13 @@ fn open_pool(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dy
 fn open_pool_lru(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+    let dwb = DoubleWriteBuffer::open(
+        dir.path().join("test.db.dwb"),
+        DoubleWriteBuffer::DEFAULT_CAPACITY,
+    )?;
     let log = LogManager::open(dir.path().join("test.db.wal"))?;
     let replacer = Box::new(LruKReplacer::new(pool_size, 1));
-    Ok((BufferPool::new(disk, log, pool_size, replacer), dir))
+    Ok((BufferPool::new(disk, dwb, log, pool_size, replacer), dir))
 }
 
 /// Allocates and immediately releases `n` throwaway pages, to apply

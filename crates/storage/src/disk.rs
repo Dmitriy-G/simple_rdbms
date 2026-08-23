@@ -2,11 +2,10 @@ use std::fs::OpenOptions;
 use std::path::PathBuf;
 
 use common::PageId;
-use common::crc::crc32;
 
 use crate::block_device::{BlockDevice, FileDevice};
 use crate::error::StorageError;
-use crate::page::{CHECKSUM_RANGE, Page};
+use crate::page::{self, CHECKSUM_RANGE, Page};
 
 /// The 8-byte magic string identifying a FerroDB database file, stored at
 /// the start of page 0 - just after page 0's own checksum and `page_lsn`
@@ -156,6 +155,26 @@ impl DiskManager {
         }
     }
 
+    /// Reads `page_id`'s raw bytes from disk into `page`, without verifying
+    /// its checksum. Used internally by `read_page` (which then verifies)
+    /// and by `recovery::recover_double_write`, which must inspect a
+    /// possibly-torn real page's bytes without that inspection itself
+    /// turning into a `ChecksumMismatch` error - the whole point of that
+    /// pass is to decide what to do about a torn page, not to fail on one.
+    pub(crate) fn read_page_unchecked(
+        &mut self,
+        page_id: PageId,
+        page: &mut Page,
+    ) -> Result<(), StorageError> {
+        let offset = self.offset_of(page_id);
+        let device_len = self.device.size()?;
+        if offset + self.page_size as u64 > device_len {
+            return Err(StorageError::PageNotFound(page_id.0));
+        }
+        self.device.read_at(offset, page.data_mut())?;
+        Ok(())
+    }
+
     /// Reads the page at `page_id` from disk into `page`, verifying its
     /// CRC-32 checksum (recomputed over bytes `4..PAGE_SIZE` and compared
     /// against the stored value in `CHECKSUM_RANGE`) unless the page is
@@ -170,40 +189,26 @@ impl DiskManager {
     /// Reading a page that was never allocated (at or past the file's
     /// current extent) is an error rather than yielding zeroed bytes.
     pub fn read_page(&mut self, page_id: PageId, page: &mut Page) -> Result<(), StorageError> {
-        let offset = self.offset_of(page_id);
-        let device_len = self.device.size()?;
-        if offset + self.page_size as u64 > device_len {
-            return Err(StorageError::PageNotFound(page_id.0));
-        }
-        self.device.read_at(offset, page.data_mut())?;
-
-        let bytes = page.data();
-        if bytes.iter().any(|&b| b != 0) {
-            let expected = read_u32(bytes, CHECKSUM_RANGE.start);
-            let actual = crc32(&bytes[CHECKSUM_RANGE.end..]);
-            if expected != actual {
-                return Err(StorageError::ChecksumMismatch {
-                    page_id: page_id.0,
-                    expected,
-                    actual,
-                });
-            }
+        self.read_page_unchecked(page_id, page)?;
+        if !page::checksum_ok(page.data()) {
+            let expected = read_u32(page.data(), CHECKSUM_RANGE.start);
+            let actual = page::checksum_of(page.data());
+            return Err(StorageError::ChecksumMismatch { page_id: page_id.0, expected, actual });
         }
         Ok(())
     }
 
     /// Writes `page`'s contents to its slot on disk. Copies the page into a
-    /// scratch buffer, stamps a freshly computed CRC-32 (over bytes
-    /// `4..PAGE_SIZE`) into the scratch copy's `CHECKSUM_RANGE`, and writes
-    /// that - never mutating `page` itself. The checksum is derived data,
-    /// not page content: stamping it into the resident frame would be an
-    /// unlogged mutation of a page the buffer pool believes is unchanged,
-    /// exactly the invariant the write-ahead rule exists to prevent.
+    /// scratch buffer, stamps a freshly computed CRC-32 into the scratch
+    /// copy's `CHECKSUM_RANGE`, and writes that - never mutating `page`
+    /// itself. The checksum is derived data, not page content: stamping it
+    /// into the resident frame would be an unlogged mutation of a page the
+    /// buffer pool believes is unchanged, exactly the invariant the
+    /// write-ahead rule exists to prevent.
     pub fn write_page(&mut self, page_id: PageId, page: &Page) -> Result<(), StorageError> {
         let offset = self.offset_of(page_id);
         let mut scratch = *page.data();
-        let crc = crc32(&scratch[CHECKSUM_RANGE.end..]);
-        scratch[CHECKSUM_RANGE].copy_from_slice(&crc.to_le_bytes());
+        page::stamp_checksum(&mut scratch);
         self.device.write_at(offset, &scratch)?;
         Ok(())
     }
@@ -263,14 +268,13 @@ impl DiskManager {
     /// content that later reads through `read_page` (e.g.
     /// `BufferPool::catalog_first_page`) will verify.
     fn write_header(&mut self) -> Result<(), StorageError> {
-        let mut buf = vec![0u8; self.page_size];
+        let mut buf = [0u8; crate::page::PAGE_SIZE];
         buf[header::MAGIC_RANGE].copy_from_slice(MAGIC);
         buf[header::VERSION_RANGE].copy_from_slice(&HEADER_VERSION.to_le_bytes());
         buf[header::CATALOG_FIRST_PAGE_RANGE].copy_from_slice(&u32::MAX.to_le_bytes());
         buf[header::PAGE_SIZE_RANGE].copy_from_slice(&(self.page_size as u32).to_le_bytes());
 
-        let crc = crc32(&buf[CHECKSUM_RANGE.end..]);
-        buf[CHECKSUM_RANGE].copy_from_slice(&crc.to_le_bytes());
+        page::stamp_checksum(&mut buf);
 
         self.device.write_at(0, &buf)?;
         Ok(())

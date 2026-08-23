@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use common::{FrameId, Lsn, PageId, TxnId};
 
 use crate::disk::{DiskManager, header};
+use crate::dwb::DoubleWriteBuffer;
 use crate::error::StorageError;
 use crate::page::{Page, PageGuard};
 use crate::replacer::Replacer;
@@ -23,9 +24,12 @@ use crate::wal::{LogManager, LogRecord, LogRecordKind};
 /// an exclusive borrow of the whole pool. Each lock guards a specific
 /// piece of bookkeeping:
 ///   - `disk_manager`: serializes the (rare) actual disk I/O calls.
+///   - `dwb`: the double-write buffer every dirty page is copied into
+///     (and that copy synced) before the page itself reaches its real
+///     location - see `flush_pages`.
 ///   - `log_manager`: the write-ahead log every page mutation is recorded
 ///     into before it reaches this pool's own bytes (see `PageGuard::write`
-///     and `flush_frame`).
+///     and `flush_pages`).
 ///   - `page_table`/`frame_page`: the two-way `PageId <-> FrameId` mapping.
 ///   - `pin_counts`/`dirty`: per-frame `Cell`s, one independent lock each.
 ///   - `replacer`: the eviction policy's own bookkeeping.
@@ -36,6 +40,7 @@ use crate::wal::{LogManager, LogRecord, LogRecordKind};
 ///     `&mut` borrows of the same frame's bytes never occur.
 pub struct BufferPool {
     disk_manager: RefCell<DiskManager>,
+    dwb: RefCell<DoubleWriteBuffer>,
     log_manager: RefCell<LogManager>,
     frames: Vec<UnsafeCell<Page>>,
     page_table: RefCell<HashMap<PageId, FrameId>>,
@@ -78,10 +83,12 @@ pub struct WriteObservation {
 
 impl BufferPool {
     /// Creates a buffer pool of `pool_size` frames over `disk_manager`,
-    /// using `replacer` to choose eviction victims and logging every page
-    /// mutation through `log_manager` before it is applied.
+    /// using `replacer` to choose eviction victims, logging every page
+    /// mutation through `log_manager` before it is applied, and protecting
+    /// every flush against a torn write through `dwb` (see `flush_pages`).
     pub fn new(
         disk_manager: DiskManager,
+        dwb: DoubleWriteBuffer,
         log_manager: LogManager,
         pool_size: usize,
         replacer: Box<dyn Replacer>,
@@ -94,6 +101,7 @@ impl BufferPool {
 
         Self {
             disk_manager: RefCell::new(disk_manager),
+            dwb: RefCell::new(dwb),
             log_manager: RefCell::new(log_manager),
             frames,
             page_table: RefCell::new(HashMap::new()),
@@ -163,16 +171,30 @@ impl BufferPool {
     pub fn flush_page(&self, page_id: PageId) -> Result<(), StorageError> {
         let frame_id = self.frame_of(page_id)?;
         if self.dirty_since_lsn[frame_id.0 as usize].get().is_some() {
-            self.flush_frame(frame_id, page_id)?;
+            self.flush_pages(&[(frame_id, page_id)])?;
         }
         Ok(())
     }
 
-    /// Flushes every dirty resident page to disk.
+    /// Flushes every dirty resident page to disk, batching them through the
+    /// double-write buffer in groups of at most `dwb.capacity()` pages -
+    /// one double-write round trip per group rather than per page, which is
+    /// where batching actually pays for the doubled writes `flush_pages`
+    /// costs (see its own doc comment).
     pub fn flush_all(&self) -> Result<(), StorageError> {
-        let page_ids: Vec<PageId> = self.page_table.borrow().keys().copied().collect();
-        for page_id in page_ids {
-            self.flush_page(page_id)?;
+        let dirty: Vec<(FrameId, PageId)> = self
+            .frame_page
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, page_id)| {
+                let page_id = page_id.get()?;
+                self.dirty_since_lsn[idx].get().is_some().then_some((FrameId(idx as u32), page_id))
+            })
+            .collect();
+
+        let capacity = self.dwb.borrow().capacity().max(1);
+        for batch in dirty.chunks(capacity) {
+            self.flush_pages(batch)?;
         }
         Ok(())
     }
@@ -246,7 +268,7 @@ impl BufferPool {
         let idx = frame_id.0 as usize;
         if let Some(victim_page_id) = self.frame_page[idx].get() {
             if self.dirty_since_lsn[idx].get().is_some() {
-                self.flush_frame(frame_id, victim_page_id)?;
+                self.flush_pages(&[(frame_id, victim_page_id)])?;
             }
             self.page_table.borrow_mut().remove(&victim_page_id);
             self.frame_page[idx].set(None);
@@ -301,34 +323,78 @@ impl BufferPool {
         }
     }
 
-    /// Writes a dirty frame to disk, enforcing the write-ahead rule: the
-    /// log record covering this page's most recent change must be durable
-    /// *before* the page itself reaches disk. `flush_frame` is the sole
-    /// call site of `DiskManager::write_page` for a resident page, so this
-    /// is the one place that guarantee needs to be enforced.
-    fn flush_frame(&self, frame_id: FrameId, page_id: PageId) -> Result<(), StorageError> {
-        let idx = frame_id.0 as usize;
-        // SAFETY: called either on an unpinned victim frame (about to be
-        // evicted, so nothing else touches it) or via `flush_page`, which
-        // only needs read access to bytes a caller's own guard already
-        // has permission to read.
-        let page = unsafe { &*self.frames[idx].get() };
-        let page_lsn = page.page_lsn();
-        self.log_manager.borrow_mut().flush(page_lsn)?;
+    /// Flushes a batch of currently-dirty, resident pages to disk through
+    /// the double-write buffer. Every entry in `pages` must already be
+    /// dirty and safe from concurrent reassignment - an eviction victim
+    /// (about to be reused, so nothing else touches it) or a page
+    /// `flush_page`/`flush_all` already found dirty; `flush_pages` itself
+    /// does not re-check either condition.
+    ///
+    /// Implements the write-ahead rule (the log must be durable to the
+    /// batch's *highest* `page_lsn` before anything reaches the
+    /// double-write buffer - not before each page individually, and not
+    /// merely before the real file, which is what made a torn write
+    /// unrecoverable before this existed) and the double-write protocol
+    /// itself: write every page's image to `dwb` and sync it (so the batch
+    /// is now recoverable even if nothing below has happened yet), only
+    /// then write every page to its real location and sync that, then
+    /// clear `dwb`. A crash at any point along the way leaves either a
+    /// real page untouched by this batch (nothing below the point of the
+    /// crash ran) or a torn real page with an intact `dwb` copy
+    /// `recovery::recover_double_write` can restore from - never a torn
+    /// real page with no way back.
+    fn flush_pages(&self, pages: &[(FrameId, PageId)]) -> Result<(), StorageError> {
+        if pages.is_empty() {
+            return Ok(());
+        }
+        debug_assert!(
+            pages.len() <= self.dwb.borrow().capacity(),
+            "flush batch of {} pages exceeds the double-write buffer's capacity",
+            pages.len()
+        );
+
+        // SAFETY: every frame named here is either an eviction victim
+        // (about to be reused, so nothing else touches it) or a page
+        // `flush_page`/`flush_all` already confirmed dirty and resident -
+        // both only need read access to bytes a caller's own guard already
+        // has permission to read, same as the original single-page flush.
+        let snapshot: Vec<Page> = pages
+            .iter()
+            .map(|&(frame_id, _)| unsafe { (*self.frames[frame_id.0 as usize].get()).clone() })
+            .collect();
+
+        let max_page_lsn = snapshot.iter().map(Page::page_lsn).max().unwrap_or(Lsn(0));
+        self.log_manager.borrow_mut().flush(max_page_lsn)?;
         let durable_lsn = self.log_manager.borrow().durable_lsn();
         debug_assert!(
-            durable_lsn >= page_lsn,
-            "page {page_id:?} reached disk with page_lsn {page_lsn:?} ahead of durable_lsn \
+            durable_lsn >= max_page_lsn,
+            "batch reached disk with max page_lsn {max_page_lsn:?} ahead of durable_lsn \
              {durable_lsn:?}"
         );
         #[cfg(any(test, feature = "test-util"))]
-        self.write_observations.borrow_mut().push(WriteObservation {
-            page_id,
-            page_lsn,
-            durable_lsn,
-        });
-        self.disk_manager.borrow_mut().write_page(page_id, page)?;
-        self.dirty_since_lsn[idx].set(None);
+        for page in &snapshot {
+            self.write_observations.borrow_mut().push(WriteObservation {
+                page_id: page.id(),
+                page_lsn: page.page_lsn(),
+                durable_lsn,
+            });
+        }
+
+        self.dwb.borrow_mut().write_batch(&snapshot)?;
+
+        {
+            let mut disk = self.disk_manager.borrow_mut();
+            for page in &snapshot {
+                disk.write_page(page.id(), page)?;
+            }
+            disk.sync()?;
+        }
+
+        self.dwb.borrow_mut().clear_batch()?;
+
+        for &(frame_id, _) in pages {
+            self.dirty_since_lsn[frame_id.0 as usize].set(None);
+        }
         Ok(())
     }
 

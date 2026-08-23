@@ -379,17 +379,25 @@ impl LogManager {
 
     /// Opens a log backed by an arbitrary `BlockDevice`, for tests and
     /// crash-injection fault wrapping. A brand-new (zero-length) device gets
-    /// a fresh `MAGIC` header written to it. An existing device has its
-    /// header validated first, then is scanned forward from `HEADER_LEN`,
-    /// validating each record's CRC, to find the durable boundary and
-    /// rebuild the per-transaction `prev_lsn` chain; any trailing bytes past
-    /// the last valid record (a torn write from a crash mid-append) are
-    /// truncated away, so appends after reopening always start from a clean
-    /// boundary.
+    /// a fresh `MAGIC` header written to it - and so, treated identically,
+    /// does one shorter than a whole header: the header is written exactly
+    /// once, in a single `write_at` at the very start of a database's life,
+    /// before any record could possibly have been appended, so a device
+    /// that's nonzero but still short of `HEADER_LEN` can only mean that
+    /// very first write was itself torn by a crash - there is nothing to
+    /// lose by reinitializing, since nothing could have been durably logged
+    /// yet either way. An existing device with a *complete* header (`len >=
+    /// HEADER_LEN`) has that header validated first, then is scanned
+    /// forward from `HEADER_LEN`, validating each record's CRC, to find the
+    /// durable boundary and rebuild the per-transaction `prev_lsn` chain;
+    /// any trailing bytes past the last valid record (a torn write from a
+    /// crash mid-append) are truncated away, so appends after reopening
+    /// always start from a clean boundary.
     pub fn open_with_device(mut device: Box<dyn BlockDevice>) -> Result<Self, StorageError> {
         let device_len = device.size()?;
 
-        if device_len == 0 {
+        if device_len < HEADER_LEN {
+            device.set_len(0)?;
             device.write_at(0, MAGIC)?;
             return Ok(Self {
                 device,
@@ -398,14 +406,6 @@ impl LogManager {
                 durable_lsn: HEADER_LEN,
                 last_lsn_by_txn: HashMap::new(),
                 bytes_appended: 0,
-            });
-        }
-
-        if device_len < HEADER_LEN {
-            return Err(StorageError::CorruptLogHeader {
-                reason: format!(
-                    "log file is {device_len} bytes, shorter than its {HEADER_LEN}-byte header"
-                ),
             });
         }
 

@@ -6,6 +6,7 @@ use std::error::Error;
 use common::TxnId;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
+use storage::dwb::DoubleWriteBuffer;
 use storage::heap::SlottedPage;
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
@@ -16,9 +17,13 @@ const TXN: TxnId = TxnId(0);
 fn open_pool() -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+    let dwb = DoubleWriteBuffer::open(
+        dir.path().join("test.db.dwb"),
+        DoubleWriteBuffer::DEFAULT_CAPACITY,
+    )?;
     let log = LogManager::open(dir.path().join("test.db.wal"))?;
     let replacer = Box::new(LruKReplacer::new(4, 2));
-    Ok((BufferPool::new(disk, log, 4, replacer), dir))
+    Ok((BufferPool::new(disk, dwb, log, 4, replacer), dir))
 }
 
 #[test]

@@ -12,6 +12,7 @@ use std::error::Error;
 use common::{Lsn, PageId, TxnId};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
+use storage::dwb::DoubleWriteBuffer;
 use storage::heap::TableHeap;
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
@@ -196,7 +197,7 @@ fn offset_lsns_survive_reopen() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// The invariant `BufferPool::flush_frame` and M7's recovery both depend
+/// The invariant `BufferPool::flush_pages` and M7's recovery both depend
 /// on: a page never reaches disk before the log record describing its most
 /// recent change is durable. A three-frame pool against hundreds of
 /// inserted tuples forces repeated eviction under pressure, so
@@ -206,8 +207,12 @@ fn offset_lsns_survive_reopen() -> Result<(), Box<dyn Error>> {
 fn wal_ordering_holds_across_an_eviction_heavy_workload() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+    let dwb = DoubleWriteBuffer::open(
+        dir.path().join("test.db.dwb"),
+        DoubleWriteBuffer::DEFAULT_CAPACITY,
+    )?;
     let log = LogManager::open(dir.path().join("test.db.wal"))?;
-    let pool = BufferPool::new(disk, log, 3, Box::new(LruKReplacer::new(3, 2)));
+    let pool = BufferPool::new(disk, dwb, log, 3, Box::new(LruKReplacer::new(3, 2)));
 
     let mut heap = TableHeap::create(&pool, TxnId(0))?;
     let payload = vec![0x7Au8; 200];

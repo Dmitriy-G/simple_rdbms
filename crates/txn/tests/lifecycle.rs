@@ -7,6 +7,7 @@ use std::error::Error;
 use common::{Lsn, TxnId};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
+use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
@@ -15,8 +16,10 @@ use txn::{IsolationLevel, TransactionManager, write_checkpoint};
 
 fn open_pool(dir: &std::path::Path) -> Result<BufferPool, Box<dyn Error>> {
     let disk = DiskManager::open(dir.join("test.db"), PAGE_SIZE)?;
+    let dwb =
+        DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
     let log = LogManager::open(dir.join("test.db.wal"))?;
-    Ok(BufferPool::new(disk, log, 8, Box::new(LruKReplacer::new(8, 2))))
+    Ok(BufferPool::new(disk, dwb, log, 8, Box::new(LruKReplacer::new(8, 2))))
 }
 
 #[test]

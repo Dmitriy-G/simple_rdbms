@@ -96,6 +96,16 @@ pub enum DurabilityModel {
     /// what it just wrote), so only what a *crash* would lose differs from
     /// `WriteIsDurable`.
     RequiresSync,
+    /// Like `WriteIsDurable` for every call that doesn't trip the fault -
+    /// immediately durable in full - but the tripped `write_at` call itself
+    /// is torn rather than lost: the first half of its buffer still lands
+    /// on the inner device before the call reports its error. Models a
+    /// single `write_at` being interrupted mid-sector by a crash or power
+    /// loss, which neither `WriteIsDurable` (loses the whole call) nor
+    /// `RequiresSync` (loses it unless synced) can produce - the failure
+    /// mode M12's checksum and double-write buffer exist to detect and
+    /// repair.
+    TornWrite,
 }
 
 /// A `write_at`/`set_len` call not yet covered by a `sync_all`, under
@@ -205,9 +215,21 @@ impl BlockDevice for FaultyDevice {
     }
 
     fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
-        self.tick()?;
+        if let Err(err) = self.tick() {
+            if self.model == DurabilityModel::TornWrite {
+                // Best-effort: the call is already failing, so a failure to
+                // even write the torn half is not itself reported - it
+                // just means an even shorter tear than intended, still a
+                // torn write either way.
+                let half = buf.len() / 2;
+                let _ = self.inner.write_at(offset, &buf[..half]);
+            }
+            return Err(err);
+        }
         match self.model {
-            DurabilityModel::WriteIsDurable => self.inner.write_at(offset, buf),
+            DurabilityModel::WriteIsDurable | DurabilityModel::TornWrite => {
+                self.inner.write_at(offset, buf)
+            }
             DurabilityModel::RequiresSync => {
                 self.pending.push(PendingOp::Write { offset, bytes: buf.to_vec() });
                 Ok(())
@@ -218,7 +240,7 @@ impl BlockDevice for FaultyDevice {
     fn set_len(&mut self, len: u64) -> io::Result<()> {
         self.tick()?;
         match self.model {
-            DurabilityModel::WriteIsDurable => self.inner.set_len(len),
+            DurabilityModel::WriteIsDurable | DurabilityModel::TornWrite => self.inner.set_len(len),
             DurabilityModel::RequiresSync => {
                 self.pending.push(PendingOp::SetLen(len));
                 Ok(())

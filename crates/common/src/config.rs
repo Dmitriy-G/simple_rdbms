@@ -17,6 +17,11 @@ pub struct DbConfig {
     /// the write-ahead log since the last one, bounding how much of the log
     /// a future recovery's Analysis pass has to scan.
     pub checkpoint_byte_threshold: u64,
+    /// The number of page-image slots the double-write buffer's
+    /// `<db_path>.dwb` file holds, capping how many dirty pages
+    /// `BufferPool::flush_all` can cover in a single batch before it must
+    /// split into more than one.
+    pub dwb_capacity: usize,
 }
 
 impl DbConfig {
@@ -29,6 +34,9 @@ impl DbConfig {
     /// The default checkpoint trigger: 4 MiB of log growth.
     pub const DEFAULT_CHECKPOINT_BYTE_THRESHOLD: u64 = 4 * 1024 * 1024;
 
+    /// The default double-write buffer capacity: 64 page-image slots.
+    pub const DEFAULT_DWB_CAPACITY: usize = 64;
+
     /// Builds a config pointing at `db_path` with default sizing.
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
@@ -36,6 +44,7 @@ impl DbConfig {
             page_size: Self::DEFAULT_PAGE_SIZE,
             buffer_pool_size: Self::DEFAULT_BUFFER_POOL_SIZE,
             checkpoint_byte_threshold: Self::DEFAULT_CHECKPOINT_BYTE_THRESHOLD,
+            dwb_capacity: Self::DEFAULT_DWB_CAPACITY,
         }
     }
 }

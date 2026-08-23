@@ -18,6 +18,7 @@ use common::TxnId;
 use storage::block_device::{BlockDevice, FaultyDevice, FileDevice};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
+use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
@@ -45,14 +46,18 @@ fn faulty_pool(
         fail_at,
     ));
     let disk = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
+    let dwb =
+        DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
     let log = LogManager::open_with_device(wal_device)?;
-    Ok(BufferPool::new(disk, log, 16, Box::new(LruKReplacer::new(16, 2))))
+    Ok(BufferPool::new(disk, dwb, log, 16, Box::new(LruKReplacer::new(16, 2))))
 }
 
 fn real_pool(dir: &Path) -> Result<BufferPool, Box<dyn Error>> {
     let disk = DiskManager::open(dir.join("test.db"), PAGE_SIZE)?;
+    let dwb =
+        DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
     let log = LogManager::open(dir.join("test.db.wal"))?;
-    Ok(BufferPool::new(disk, log, 16, Box::new(LruKReplacer::new(16, 2))))
+    Ok(BufferPool::new(disk, dwb, log, 16, Box::new(LruKReplacer::new(16, 2))))
 }
 
 /// Exactly what `Database::open_with_managers` does the very first time a

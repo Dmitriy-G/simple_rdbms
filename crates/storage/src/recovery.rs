@@ -18,8 +18,74 @@ use std::collections::HashMap;
 use common::{Lsn, PageId, TxnId};
 
 use crate::buffer::BufferPool;
+use crate::disk::DiskManager;
+use crate::dwb::DoubleWriteBuffer;
 use crate::error::StorageError;
+use crate::page::{self, Page};
 use crate::wal::{CHECKPOINT_TXN, HEADER_LEN, LogRecordKind};
+
+/// Repairs a real-file page torn by a crash mid-write, using an in-flight
+/// double-write buffer batch, if there is one. Must run before `recover`
+/// (and before any `BufferPool` exists to run it against): ARIES's Redo
+/// pass trusts every page it reads to be otherwise intact, so a page torn
+/// by a crash must be restored *first* - this is what lets a
+/// `ChecksumMismatch` surviving to `recover`'s own Redo pass stay a hard,
+/// unrecoverable error (real media corruption) rather than something Redo
+/// itself has to work around.
+///
+/// For each page id the double-write buffer's header names: reads that
+/// slot's copy and checks *its own* checksum first. A bad copy means the
+/// crash landed while the copy itself was still being written (protocol
+/// steps 1-2) - the real page was never touched by this batch, so it is
+/// already fine and there is nothing to restore it from. A good copy means
+/// it's safe to compare against the real page: if the real page's own
+/// checksum fails, it was torn by this batch's real-file write (step 4)
+/// and is restored from the copy; if it verifies, it is left alone -
+/// either this batch never reached it or reached it completely, and both
+/// are consistent states Redo can work from unmodified. A real page that
+/// isn't durably extended to *at all* yet (`PageNotFound`) is treated the
+/// same as "never reached it": this batch's own real-file write (step 4)
+/// never got that far, but the page's `AllocPage` record is already
+/// durable in the WAL (it could not have been dirtied otherwise), so
+/// ordinary ARIES redo will reconstruct it from an all-zero start the same
+/// way it already does for any page whose first-ever write never reached
+/// disk - restoring it here would be redundant at best, and, if a later
+/// entry in this same batch happens to extend the file first (zero-filling
+/// this page's still-untouched region as a side effect), indistinguishable
+/// from a legitimately empty page, which is exactly the state redo expects
+/// to start from anyway.
+pub fn recover_double_write(
+    disk: &mut DiskManager,
+    dwb: &mut DoubleWriteBuffer,
+) -> Result<(), StorageError> {
+    let Some(page_ids) = dwb.read_batch()? else {
+        return Ok(());
+    };
+
+    for (index, page_id) in page_ids.into_iter().enumerate() {
+        let slot = dwb.read_slot(index)?;
+        if !page::checksum_ok(&slot) {
+            continue;
+        }
+
+        let mut real_page = Page::new(page_id);
+        match disk.read_page_unchecked(page_id, &mut real_page) {
+            Ok(()) => {
+                if !page::checksum_ok(real_page.data()) {
+                    let mut restored = Page::new(page_id);
+                    restored.data_mut().copy_from_slice(&slot);
+                    disk.write_page(page_id, &restored)?;
+                }
+            }
+            Err(StorageError::PageNotFound(_)) => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    disk.sync()?;
+    dwb.clear_batch()?;
+    Ok(())
+}
 
 /// Runs Analysis, Redo, and Undo against `pool`'s write-ahead log, leaving
 /// every page consistent with the log's most recent durable state and every
@@ -137,13 +203,6 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
             match &record.kind {
                 LogRecordKind::Update { page_id, offset, after, .. }
                 | LogRecordKind::Clr { page_id, offset, after, .. } => {
-                    // TODO(M12.2): `page_lsn` reads `page_id` through the
-                    // ordinary buffer-pool path, so a `StorageError::
-                    // ChecksumMismatch` on a torn or corrupted page
-                    // propagates via `?` and aborts recovery outright. Once
-                    // the double-write buffer lands, a torn page found here
-                    // should be reconstructed from its double-write copy
-                    // instead of failing recovery.
                     if pool.page_lsn(*page_id)? < record.lsn {
                         pool.stamp_write(*page_id, *offset as usize, after, record.lsn)?;
                     }
@@ -241,6 +300,7 @@ mod tests {
     use crate::block_device::{BlockDevice, CountingDevice, FileDevice};
     use crate::buffer::BufferPool;
     use crate::disk::DiskManager;
+    use crate::dwb::DoubleWriteBuffer;
     use crate::page::PAGE_SIZE;
     use crate::replacer::LruKReplacer;
     use crate::wal::LogManager;
@@ -272,8 +332,12 @@ mod tests {
             bytes.clone(),
         ));
         let log = LogManager::open_with_device(device)?;
+        let dwb = DoubleWriteBuffer::open(
+            dir.path().join("test.db.dwb"),
+            DoubleWriteBuffer::DEFAULT_CAPACITY,
+        )?;
 
-        let pool = BufferPool::new(disk, log, 8, Box::new(LruKReplacer::new(8, 2)));
+        let pool = BufferPool::new(disk, dwb, log, 8, Box::new(LruKReplacer::new(8, 2)));
 
         const N: usize = 5_000;
         let txn_id = TxnId(1);

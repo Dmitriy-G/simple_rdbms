@@ -15,7 +15,7 @@
 //!
 //! ## Durability models
 //!
-//! Every sweep below runs under both of `FaultyDevice`'s
+//! Every sweep below runs under every one of `FaultyDevice`'s
 //! `storage::block_device::DurabilityModel`s:
 //!
 //! - `WriteIsDurable` (the harness's original model): a completed
@@ -32,14 +32,23 @@
 //!   platter. Real systems lose writes this way constantly; `WriteIsDurable`
 //!   alone can never exercise it, because nothing before `RequiresSync`
 //!   existed for it to be tested by.
+//! - `TornWrite`: the tripped `write_at` call itself lands only half-written
+//!   on the inner device before reporting its error - a single `write_at`
+//!   interrupted mid-sector, which neither of the models above can produce.
+//!   This is the M12 failure class: a checksum (part 1) detects it, and the
+//!   double-write buffer (part 2) is what lets recovery repair it instead of
+//!   just reporting it. Applied uniformly to all three files (data, WAL,
+//!   double-write buffer) like the other models, which also exercises a
+//!   torn WAL record (handled by its own per-record CRC, independent of
+//!   this file) and a torn double-write buffer slot or header (handled by
+//!   `recovery::recover_double_write` treating a bad copy as "skip it,"
+//!   not just a torn real-file page).
 //!
-//! Neither model - nor anything else in this file - covers a torn write (a
-//! single `write_at` call landing only partially), a disk that lies about
-//! having synced (some consumer SSDs and virtualized/cloud block devices
-//! under certain configurations), or outright media failure (bit rot, a
-//! dead sector). Those require injecting corruption *within* an
-//! otherwise-successful write or sync, not just failing the call outright,
-//! and are left to M12.
+//! None of the three models cover a disk that lies about having synced
+//! (some consumer SSDs and virtualized/cloud block devices under certain
+//! configurations), or media failure large enough to fool CRC-32 in both a
+//! page and its double-write copy at once. Those are outside what fault
+//! injection at the `write_at`/`sync_all` call boundary can express at all.
 
 use std::cell::Cell;
 use std::error::Error;
@@ -51,9 +60,9 @@ use common::DbConfig;
 use engine::{Database, ResultSet, Tuple};
 use storage::block_device::{BlockDevice, DurabilityModel, FaultyDevice, FileDevice};
 
-/// A `Database::open_with_devices` call's pair of devices: one for the
-/// database file, one for the write-ahead log.
-type DevicePair = (Box<dyn BlockDevice>, Box<dyn BlockDevice>);
+/// A `Database::open_with_devices` call's trio of devices: the database
+/// file, the write-ahead log, and the double-write buffer.
+type DeviceTriple = (Box<dyn BlockDevice>, Box<dyn BlockDevice>, Box<dyn BlockDevice>);
 
 /// One table's name alongside every row in it, in the order produced.
 type TableRows = (String, Vec<Tuple>);
@@ -63,8 +72,8 @@ fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
     OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
 }
 
-/// Builds the pair of `BlockDevice`s a `Database::open_with_devices` call
-/// needs, both sharing `counter` and armed to fail at write `fail_at` under
+/// Builds the trio of `BlockDevice`s a `Database::open_with_devices` call
+/// needs, all sharing `counter` and armed to fail at write `fail_at` under
 /// `model`, so that "fail at write N" counts across the whole system rather
 /// than per file - matching how a real crash lands mid-workload regardless
 /// of which file the Nth write happened to target.
@@ -73,9 +82,10 @@ fn faulty_devices(
     counter: &Rc<Cell<u64>>,
     fail_at: u64,
     model: DurabilityModel,
-) -> Result<DevicePair, Box<dyn Error>> {
+) -> Result<DeviceTriple, Box<dyn Error>> {
     let db_file = open_file(&dir.join("test.db"))?;
     let wal_file = open_file(&dir.join("test.db.wal"))?;
+    let dwb_file = open_file(&dir.join("test.db.dwb"))?;
     let db_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
         Box::new(FileDevice::new(db_file)),
         counter.clone(),
@@ -88,7 +98,13 @@ fn faulty_devices(
         fail_at,
         model,
     ));
-    Ok((db_device, wal_device))
+    let dwb_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
+        Box::new(FileDevice::new(dwb_file)),
+        counter.clone(),
+        fail_at,
+        model,
+    ));
+    Ok((db_device, wal_device, dwb_device))
 }
 
 fn config(dir: &Path) -> DbConfig {
@@ -105,9 +121,10 @@ fn config(dir: &Path) -> DbConfig {
 fn total_write_count(workload: &[String]) -> Result<u64, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let counter = Rc::new(Cell::new(0));
-    let (db_device, wal_device) =
+    let (db_device, wal_device, dwb_device) =
         faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::WriteIsDurable)?;
-    let mut db = Database::open_with_devices(config(dir.path()), db_device, wal_device)?;
+    let mut db =
+        Database::open_with_devices(config(dir.path()), db_device, wal_device, dwb_device)?;
     for stmt in workload {
         db.execute(stmt)?;
     }
@@ -148,10 +165,11 @@ fn run_until_crash(
     config: DbConfig,
     db_device: Box<dyn BlockDevice>,
     wal_device: Box<dyn BlockDevice>,
+    dwb_device: Box<dyn BlockDevice>,
     workload: &[String],
 ) -> Result<usize, Box<dyn Error>> {
     let mut safe_prefix = 0usize;
-    if let Ok(mut db) = Database::open_with_devices(config, db_device, wal_device) {
+    if let Ok(mut db) = Database::open_with_devices(config, db_device, wal_device, dwb_device) {
         let mut acked = 0usize;
         let mut in_txn = false;
         for stmt in workload {
@@ -194,8 +212,9 @@ fn assert_workload_is_crash_safe(
         let db_path_dir = dir.path();
 
         let counter = Rc::new(Cell::new(0));
-        let (db_device, wal_device) = faulty_devices(db_path_dir, &counter, n, model)?;
-        let safe_prefix = run_until_crash(config(db_path_dir), db_device, wal_device, workload)?;
+        let (db_device, wal_device, dwb_device) = faulty_devices(db_path_dir, &counter, n, model)?;
+        let safe_prefix =
+            run_until_crash(config(db_path_dir), db_device, wal_device, dwb_device, workload)?;
 
         // A couple of secondary crashes *during* the next recovery attempt
         // itself, on the very same files, before the final clean reopen.
@@ -204,9 +223,10 @@ fn assert_workload_is_crash_safe(
         // succeeds.
         for recovery_fail_at in [1u64, 2] {
             let inner_counter = Rc::new(Cell::new(0));
-            let (db_device, wal_device) =
+            let (db_device, wal_device, dwb_device) =
                 faulty_devices(db_path_dir, &inner_counter, recovery_fail_at, model)?;
-            let _ = Database::open_with_devices(config(db_path_dir), db_device, wal_device);
+            let _ =
+                Database::open_with_devices(config(db_path_dir), db_device, wal_device, dwb_device);
         }
 
         // Reopen for real: recovery must leave a fully consistent database
@@ -314,9 +334,10 @@ fn total_write_count_after(prefix: &[String], workload: &[String]) -> Result<u64
     }
 
     let counter = Rc::new(Cell::new(0));
-    let (db_device, wal_device) =
+    let (db_device, wal_device, dwb_device) =
         faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::WriteIsDurable)?;
-    let mut db = Database::open_with_devices(config(dir.path()), db_device, wal_device)?;
+    let mut db =
+        Database::open_with_devices(config(dir.path()), db_device, wal_device, dwb_device)?;
     for stmt in workload {
         db.execute(stmt)?;
     }
@@ -353,6 +374,7 @@ fn assert_two_generation_workload_is_crash_safe(
     setup: &[String],
     gen1: &[String],
     gen2: &[String],
+    model: DurabilityModel,
 ) -> Result<(), Box<dyn Error>> {
     let k1 = total_write_count_after(setup, gen1)?;
     assert!(k1 > 0, "generation 1 must perform at least one write");
@@ -373,9 +395,9 @@ fn assert_two_generation_workload_is_crash_safe(
 
         // Generation 1: runs under fault injection until it crashes.
         let counter = Rc::new(Cell::new(0));
-        let (db_device, wal_device) =
-            faulty_devices(db_path_dir, &counter, n1, DurabilityModel::WriteIsDurable)?;
-        let safe_prefix1 = run_until_crash(config(db_path_dir), db_device, wal_device, gen1)?;
+        let (db_device, wal_device, dwb_device) = faulty_devices(db_path_dir, &counter, n1, model)?;
+        let safe_prefix1 =
+            run_until_crash(config(db_path_dir), db_device, wal_device, dwb_device, gen1)?;
 
         // Reopen for real: recovery must leave a fully consistent database
         // behind. Closing it cleanly means generation 2 below starts from a
@@ -413,8 +435,9 @@ fn assert_two_generation_workload_is_crash_safe(
         let reference_state = observable_state(&mut reference)?;
         assert_eq!(
             recovered_state, reference_state,
-            "n1={n1}/{k1}: recovered state after two crash generations must match replaying \
-             exactly generation 1's safely-committed prefix (generation 2 never commits)"
+            "model={model:?}, n1={n1}/{k1}: recovered state after two crash generations must \
+             match replaying exactly generation 1's safely-committed prefix (generation 2 never \
+             commits)"
         );
     }
     Ok(())
@@ -445,6 +468,22 @@ fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point
         &two_generation_setup(),
         &two_generation_gen1(),
         &two_generation_gen2(),
+        DurabilityModel::WriteIsDurable,
+    )
+}
+
+/// Same as above, but under `DurabilityModel::TornWrite`: a torn write to
+/// the real data file mid-flush must be repaired by the double-write buffer
+/// before recovery ever gets to the transaction-id-reuse hazard this sweep
+/// exists to catch, not compound it.
+#[test]
+fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point_with_torn_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_two_generation_workload_is_crash_safe(
+        &two_generation_setup(),
+        &two_generation_gen1(),
+        &two_generation_gen2(),
+        DurabilityModel::TornWrite,
     )
 }
 
@@ -460,6 +499,12 @@ fn many_small_inserts_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 }
 
 #[test]
+fn many_small_inserts_survive_a_crash_at_every_write_with_torn_writes() -> Result<(), Box<dyn Error>>
+{
+    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::TornWrite)
+}
+
+#[test]
 fn page_boundary_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::WriteIsDurable)
 }
@@ -471,6 +516,12 @@ fn page_boundary_inserts_survive_a_crash_at_every_write_with_unsynced_writes_los
 }
 
 #[test]
+fn page_boundary_inserts_survive_a_crash_at_every_write_with_torn_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::TornWrite)
+}
+
+#[test]
 fn create_table_then_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::WriteIsDurable)
 }
@@ -479,6 +530,12 @@ fn create_table_then_inserts_survive_a_crash_at_every_write() -> Result<(), Box<
 fn create_table_then_inserts_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::RequiresSync)
+}
+
+#[test]
+fn create_table_then_inserts_survive_a_crash_at_every_write_with_torn_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::TornWrite)
 }
 
 #[test]
@@ -500,6 +557,15 @@ fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write_with
 }
 
 #[test]
+fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write_with_torn_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &interleaved_allocation_and_catalog_writes(),
+        DurabilityModel::TornWrite,
+    )
+}
+
+#[test]
 fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write()
 -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::WriteIsDurable)
@@ -509,4 +575,10 @@ fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write()
 fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
     assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::RequiresSync)
+}
+
+#[test]
+fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write_with_torn_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::TornWrite)
 }

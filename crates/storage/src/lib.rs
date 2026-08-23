@@ -13,6 +13,7 @@ pub mod block_device;
 pub mod btree;
 pub mod buffer;
 pub mod disk;
+pub mod dwb;
 mod error;
 pub mod heap;
 pub mod page;

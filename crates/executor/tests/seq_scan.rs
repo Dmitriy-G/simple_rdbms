@@ -11,6 +11,7 @@ use common::{TableId, TxnId};
 use executor::{Executor, ExecutorContext, SeqScanExecutor};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
+use storage::dwb::DoubleWriteBuffer;
 use storage::heap::TableHeap;
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
@@ -23,9 +24,14 @@ const TXN: TxnId = TxnId(0);
 fn open_pool(pool_size: usize) -> (BufferPool, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("create temp dir");
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE).expect("open disk");
+    let dwb = DoubleWriteBuffer::open(
+        dir.path().join("test.db.dwb"),
+        DoubleWriteBuffer::DEFAULT_CAPACITY,
+    )
+    .expect("open double-write buffer");
     let log = LogManager::open(dir.path().join("test.db.wal")).expect("open log");
     let replacer = Box::new(LruKReplacer::new(pool_size, 2));
-    (BufferPool::new(disk, log, pool_size, replacer), dir)
+    (BufferPool::new(disk, dwb, log, pool_size, replacer), dir)
 }
 
 /// Creates a single-column (`n BIGINT`) table and inserts `n` in `0..count`,

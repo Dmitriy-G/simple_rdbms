@@ -87,6 +87,23 @@ undo against (M6), there was nothing to roll back to.
 from M7, giving single-transaction atomicity independent of how many other
 transactions are (or aren't) running concurrently.
 
+## M12 — Surviving a torn page write
+**Problem:** even a single page write is not atomic at the hardware level —
+a page-sized write can be interrupted mid-sector, leaving a page with some
+old bytes and some new ones. That's a different failure mode than anything
+above: M5 handles the file being short a whole page, and the WAL (M6–M7)
+handles multi-page operations being interrupted between pages, but neither
+notices a single page that is itself internally torn, and redo would
+otherwise trust such a page as intact.
+**Solution:** a CRC-32 checksum per page to detect tearing, and a
+double-write buffer — every dirty page's image is written to a separate
+file and synced *before* the real write, so a torn real write can be
+repaired from that intact copy on the next open instead of merely being
+detected. Sequenced ahead of M9 here, before the B+tree exists: the flush
+path (`BufferPool::flush_all` and per-page eviction) is cheaper to change
+now than once M9's tree splits start writing several related pages per
+operation.
+
 ## M9 — Answering point/range lookups without a full scan
 **Problem:** a sequential scan is the only access path so far; queries that
 touch a small fraction of a table still pay for reading all of it.
@@ -109,16 +126,3 @@ expensive fast.
 **Solution:** additional join algorithms and a cost-based optimizer that
 chooses among them (and among access paths) using table and index
 statistics.
-
-## M12 — Surviving a torn page write
-**Problem:** even a single page write is not atomic at the hardware level —
-a page-sized write can be interrupted mid-sector, leaving a page with some
-old bytes and some new ones. That's a different failure mode than anything
-above: M5 handles the file being short a whole page, and the WAL (M6–M7)
-handles multi-page operations being interrupted between pages, but neither
-notices a single page that is itself internally torn, and redo would
-otherwise trust such a page as intact.
-**Solution:** a checksum per page to detect tearing, and either a
-double-write buffer or full-page WAL images (the first write to a page
-after each checkpoint logs the whole page, not just the delta) to
-reconstruct it when torn.

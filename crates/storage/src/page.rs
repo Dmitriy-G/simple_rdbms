@@ -28,6 +28,40 @@ pub const CHECKSUM_RANGE: std::ops::Range<usize> = 0..4;
 /// not available for its own layout.
 pub const PAGE_LSN_RANGE: std::ops::Range<usize> = 4..12;
 
+/// The CRC-32 checksum `bytes` should hold in `CHECKSUM_RANGE` for its
+/// content to be intact: computed over everything past the checksum field
+/// itself (`CHECKSUM_RANGE.end..PAGE_SIZE`).
+pub fn checksum_of(bytes: &[u8; PAGE_SIZE]) -> u32 {
+    common::crc::crc32(&bytes[CHECKSUM_RANGE.end..])
+}
+
+/// Recomputes `bytes`'s checksum and stamps it into `CHECKSUM_RANGE`.
+pub fn stamp_checksum(bytes: &mut [u8; PAGE_SIZE]) {
+    let crc = checksum_of(bytes);
+    bytes[CHECKSUM_RANGE].copy_from_slice(&crc.to_le_bytes());
+}
+
+/// Whether `bytes` is a complete, uncorrupted page: either all zero (the
+/// sentinel for a page whose initializing write never reached disk - see
+/// `heap::NO_NEXT_PAGE`'s doc comment for why that's deliberately valid,
+/// not corrupt) or its stored checksum matches `checksum_of`. Shared by
+/// `disk::DiskManager::read_page` (which reports a mismatch as
+/// `StorageError::ChecksumMismatch`) and the double-write buffer's
+/// recovery pass (`recovery::recover_double_write`), which instead needs
+/// to *decide* what to do with a bad copy rather than fail on one.
+pub fn checksum_ok(bytes: &[u8; PAGE_SIZE]) -> bool {
+    if bytes.iter().all(|&b| b == 0) {
+        return true;
+    }
+    let expected = u32::from_le_bytes([
+        bytes[CHECKSUM_RANGE.start],
+        bytes[CHECKSUM_RANGE.start + 1],
+        bytes[CHECKSUM_RANGE.start + 2],
+        bytes[CHECKSUM_RANGE.start + 3],
+    ]);
+    expected == checksum_of(bytes)
+}
+
 /// A single fixed-size page: the unit of I/O between the disk manager and
 /// the buffer pool, and the unit of layout for slotted-page heap storage
 /// and B+tree nodes. Holds raw bytes; interpreting them (as a heap page, an
@@ -101,12 +135,14 @@ impl Page {
 /// # use common::TxnId;
 /// # use storage::buffer::BufferPool;
 /// # use storage::disk::DiskManager;
+/// # use storage::dwb::DoubleWriteBuffer;
 /// # use storage::replacer::LruKReplacer;
 /// # use storage::wal::LogManager;
 /// # let dir = tempfile::tempdir().unwrap();
 /// # let disk = DiskManager::open(dir.path().join("t.db"), storage::page::PAGE_SIZE).unwrap();
+/// # let dwb = DoubleWriteBuffer::open(dir.path().join("t.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY).unwrap();
 /// # let log = LogManager::open(dir.path().join("t.db.wal")).unwrap();
-/// # let pool = BufferPool::new(disk, log, 4, Box::new(LruKReplacer::new(4, 2)));
+/// # let pool = BufferPool::new(disk, dwb, log, 4, Box::new(LruKReplacer::new(4, 2)));
 /// let (page_id, guard) = pool.new_page(TxnId(0)).unwrap();
 /// drop(guard);
 /// pool.unpin_page(page_id, false).unwrap(); // no such method on `BufferPool`

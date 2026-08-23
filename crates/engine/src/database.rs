@@ -5,6 +5,7 @@ use planner::{Binder, BoundStatement, PhysicalPlan, to_physical};
 use sql::{Lexer, Parser, Statement};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
+use storage::dwb::DoubleWriteBuffer;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
@@ -50,7 +51,10 @@ impl Database {
         wal_path.push(".wal");
         let log_manager = LogManager::open(wal_path)?;
         let disk_manager = DiskManager::open(config.db_path.clone(), config.page_size)?;
-        Self::open_with_managers(config, disk_manager, log_manager)
+        let mut dwb_path = config.db_path.clone().into_os_string();
+        dwb_path.push(".dwb");
+        let dwb = DoubleWriteBuffer::open(dwb_path, config.dwb_capacity)?;
+        Self::open_with_managers(config, disk_manager, dwb, log_manager)
     }
 
     /// Opens a database backed by caller-supplied `BlockDevice`s rather than
@@ -62,23 +66,31 @@ impl Database {
         config: DbConfig,
         db_device: Box<dyn storage::block_device::BlockDevice>,
         wal_device: Box<dyn storage::block_device::BlockDevice>,
+        dwb_device: Box<dyn storage::block_device::BlockDevice>,
     ) -> Result<Self> {
         let disk_manager = DiskManager::open_with_device(db_device, config.page_size, None)?;
         let log_manager = LogManager::open_with_device(wal_device)?;
-        Self::open_with_managers(config, disk_manager, log_manager)
+        let dwb = DoubleWriteBuffer::open_with_device(dwb_device, config.dwb_capacity)?;
+        Self::open_with_managers(config, disk_manager, dwb, log_manager)
     }
 
-    /// Shared tail of `open`/`open_with_devices`: stands up the buffer pool
-    /// over already-constructed managers, runs recovery, and loads the
+    /// Shared tail of `open`/`open_with_devices`: repairs any real-file
+    /// page a crash tore mid-write from the double-write buffer (must run
+    /// before recovery trusts page contents, and before any `BufferPool`
+    /// exists to run it against), stands up the buffer pool over the
+    /// already-constructed managers, runs ARIES recovery, and loads the
     /// catalog.
     fn open_with_managers(
         config: DbConfig,
-        disk_manager: DiskManager,
+        mut disk_manager: DiskManager,
+        mut dwb: DoubleWriteBuffer,
         log_manager: LogManager,
     ) -> Result<Self> {
+        recovery::recover_double_write(&mut disk_manager, &mut dwb)?;
+
         let replacer = Box::new(LruKReplacer::new(config.buffer_pool_size, REPLACER_K));
         let buffer_pool =
-            BufferPool::new(disk_manager, log_manager, config.buffer_pool_size, replacer);
+            BufferPool::new(disk_manager, dwb, log_manager, config.buffer_pool_size, replacer);
 
         let highest_txn_id = recovery::recover(&buffer_pool)?;
 
