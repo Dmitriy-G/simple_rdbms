@@ -9,18 +9,6 @@ use crate::persist::{decode_table_info, encode_table_info};
 use crate::schema::Schema;
 use crate::table_info::TableInfo;
 
-/// The system catalog: an in-memory registry of every table's metadata,
-/// keyed by name. Sits between the planner/executor and `storage`,
-/// resolving table and column names to the physical locations operators
-/// read from and write to.
-///
-/// Persisted as an ordinary `TableHeap` of its own, rooted at the database
-/// header's `catalog_first_page`: every `create_table` call appends an
-/// encoded `TableInfo` row to that heap, and `open` replays it to rebuild
-/// the in-memory index. A `Catalog` built with `new` instead of `open` has
-/// no catalog heap yet; `create_table` provisions one (and records its
-/// root page in the header) the first time it's called with a live
-/// `BufferPool`.
 #[derive(Debug, Default)]
 pub struct Catalog {
     tables_by_name: HashMap<String, TableInfo>,
@@ -30,16 +18,10 @@ pub struct Catalog {
 }
 
 impl Catalog {
-    /// Creates an empty catalog with no storage backing yet.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Builds an in-memory catalog directly from already-constructed table
-    /// entries, with no storage backing at all. Intended for tests that
-    /// need a populated catalog (e.g. to exercise the planner's binder)
-    /// without provisioning a `BufferPool`; `create_table` remains the way
-    /// to register a table that needs real heap storage.
     pub fn from_tables(tables: Vec<TableInfo>) -> Self {
         let mut catalog = Self::new();
         for info in tables {
@@ -50,13 +32,6 @@ impl Catalog {
         catalog
     }
 
-    /// Opens the catalog backed by `buffer_pool`: finds (or provisions) its
-    /// persisted table heap and loads every `TableInfo` row from it into
-    /// memory. `txn_id` is the transaction the catalog's own bootstrap heap
-    /// allocation (the first time a database is ever opened) is attributed
-    /// to; the caller is responsible for committing it, so that this
-    /// bootstrap write is a real, committed transaction rather than one
-    /// crash recovery would undo as a loser.
     pub fn open(buffer_pool: &BufferPool, txn_id: TxnId) -> Result<Self, CatalogError> {
         let mut catalog = Self::new();
         let catalog_first_page = catalog.ensure_catalog_heap(buffer_pool, txn_id)?;
@@ -72,8 +47,6 @@ impl Catalog {
         Ok(catalog)
     }
 
-    /// Registers a new table with the given `name` and `schema`, allocating
-    /// its heap storage and a fresh `TableId`, and persists its catalog row.
     pub fn create_table(
         &mut self,
         buffer_pool: &BufferPool,
@@ -99,12 +72,10 @@ impl Catalog {
         Ok(&self.tables_by_name[name])
     }
 
-    /// Looks up a table's metadata by name.
     pub fn get_table(&self, name: &str) -> Result<&TableInfo, CatalogError> {
         self.tables_by_name.get(name).ok_or_else(|| CatalogError::TableNotFound(name.to_string()))
     }
 
-    /// Looks up a table's metadata by its stable id.
     pub fn get_table_by_id(&self, table_id: TableId) -> Result<&TableInfo, CatalogError> {
         let name = self
             .tables_by_id
@@ -113,23 +84,17 @@ impl Catalog {
         self.tables_by_name.get(name).ok_or_else(|| CatalogError::TableNotFound(name.clone()))
     }
 
-    /// Every registered table's name, sorted for a deterministic order.
     pub fn table_names(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self.tables_by_name.keys().map(String::as_str).collect();
         names.sort_unstable();
         names
     }
 
-    /// Removes a table's metadata from the catalog. Does not reclaim its
-    /// heap storage.
     pub fn drop_table(&mut self, name: &str) -> Result<(), CatalogError> {
         let _ = name;
         todo!("remove the entry from tables_by_name, erroring if absent")
     }
 
-    /// Returns the catalog's own table heap's root page, provisioning one
-    /// (and recording it in the database header) if this is the first call
-    /// against a catalog that didn't come from `open`.
     fn ensure_catalog_heap(
         &mut self,
         buffer_pool: &BufferPool,

@@ -1,12 +1,3 @@
-//! Encodes and decodes `TableInfo` rows for the catalog's own persisted
-//! table heap, using `types`'s tuple encoder against a fixed row schema:
-//! `(table_id INTEGER, name TEXT, first_page INTEGER, schema_blob TEXT)`.
-//!
-//! `schema_blob` is this module's own hand-rolled encoding of a `Schema` —
-//! column count, then per column its name, type tag, `Varchar` length (if
-//! applicable), and nullability — hex-encoded so it round-trips safely
-//! through a `TEXT` column, which requires valid UTF-8. No serde.
-
 use common::{PageId, TableId};
 use types::{DataType, Encode, Tuple, Value};
 
@@ -15,9 +6,6 @@ use crate::error::CatalogError;
 use crate::schema::Schema;
 use crate::table_info::TableInfo;
 
-/// The fixed column types of a catalog row, in the order fields are
-/// encoded. The `Varchar` length parameter is not meaningful for decoding
-/// (only the length-prefixed bytes matter), so it's left at 0.
 const CATALOG_ROW_SCHEMA: [DataType; 4] =
     [DataType::Integer, DataType::Varchar(0), DataType::Integer, DataType::Varchar(0)];
 
@@ -104,7 +92,6 @@ fn decode_schema_blob(blob: &str) -> Result<Schema, CatalogError> {
     Ok(Schema::new(columns))
 }
 
-/// Encodes `info` as a catalog row's tuple bytes.
 pub(crate) fn encode_table_info(info: &TableInfo) -> Vec<u8> {
     let tuple = Tuple::new(vec![
         Value::Integer(info.table_id.0 as i32),
@@ -117,7 +104,6 @@ pub(crate) fn encode_table_info(info: &TableInfo) -> Vec<u8> {
     buf
 }
 
-/// Decodes a catalog row's tuple bytes back into a `TableInfo`.
 pub(crate) fn decode_table_info(bytes: &[u8]) -> Result<TableInfo, CatalogError> {
     let tuple = Tuple::decode(bytes, &CATALOG_ROW_SCHEMA)
         .map_err(|err| CatalogError::Corrupt(err.to_string()))?;

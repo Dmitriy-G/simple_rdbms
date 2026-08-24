@@ -1,12 +1,3 @@
-//! The catalog's own bootstrap heap allocation (`AllocPage`) and the
-//! database header's `catalog_first_page` pointer to it (a page-0 `Update`)
-//! are two separate WAL records that must become durable together or not at
-//! all - per `task.MD`'s "route page 0 through the WAL": a header pointing
-//! at a heap whose allocation never survived a crash would be a dangling
-//! pointer, not just wasted space. Sweeps every possible crash point across
-//! the very first ever open of a fresh database, since that's the one
-//! moment this sequence runs.
-
 use std::cell::Cell;
 use std::error::Error;
 use std::fs::OpenOptions;
@@ -60,10 +51,6 @@ fn real_pool(dir: &Path) -> Result<BufferPool, Box<dyn Error>> {
     Ok(BufferPool::new(disk, dwb, log, 16, Box::new(LruKReplacer::new(16, 2))))
 }
 
-/// Exactly what `Database::open_with_managers` does the very first time a
-/// database is ever opened: begin a real transaction, let `Catalog::open`
-/// provision its bootstrap heap (and point the header at it) if needed,
-/// then commit.
 fn run_bootstrap(pool: &BufferPool) -> Result<(), Box<dyn Error>> {
     pool.append_log(BOOTSTRAP_TXN, LogRecordKind::Begin)?;
     Catalog::open(pool, BOOTSTRAP_TXN)?;
@@ -76,9 +63,6 @@ fn run_bootstrap(pool: &BufferPool) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Runs `run_bootstrap` to completion against a fault-free, counting device
-/// pair, returning the number of writes it performs - the upper bound for
-/// the crash-injection sweep below.
 fn total_bootstrap_write_count(dir: &Path) -> Result<u64, Box<dyn Error>> {
     let counter = Rc::new(Cell::new(0));
     let pool = faulty_pool(dir, &counter, u64::MAX)?;
@@ -97,10 +81,6 @@ fn the_bootstrap_heap_and_its_header_pointer_become_durable_together_or_not_at_a
         let dir = tempfile::tempdir()?;
 
         let counter = Rc::new(Cell::new(0));
-        // A crash partway through: whatever step fails - including
-        // constructing the pool itself, which does its own durable writes
-        // - stop right there, exactly like a real crash. An `Err` here is
-        // expected and not itself a test failure.
         let attempt = || -> Result<(), Box<dyn Error>> {
             let pool = faulty_pool(dir.path(), &counter, n)?;
             run_bootstrap(&pool)
@@ -111,15 +91,7 @@ fn the_bootstrap_heap_and_its_header_pointer_become_durable_together_or_not_at_a
         recovery::recover(&recovered)?;
 
         match recovered.catalog_first_page()? {
-            // Neither the heap allocation nor the header pointer survived -
-            // fine, `Catalog::open` will provision a fresh one next time.
             None => {}
-            // The header claims a catalog heap exists at `page_id`: it must
-            // actually be one. If the allocation didn't survive along with
-            // it, this errors (most likely `PageNotFound`, reading past the
-            // file's real extent) instead of silently trusting a dangling
-            // pointer - which is exactly what this test is sweeping every
-            // crash point to rule out.
             Some(_) => {
                 let catalog = Catalog::open(&recovered, TxnId(1))?;
                 assert_eq!(

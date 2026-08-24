@@ -1,7 +1,3 @@
-//! Catalog persistence: tables created against one `BufferPool` must
-//! reappear, with identical schemas, when the database file is reopened;
-//! duplicate table names are rejected.
-
 use std::error::Error;
 
 use catalog::{Catalog, CatalogError, Column, Schema};
