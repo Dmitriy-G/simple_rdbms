@@ -1,5 +1,3 @@
-//! Asserts the crate compiles and its main types can be constructed.
-
 use common::TxnId;
 use txn::{IsolationLevel, LockManager, Transaction, TransactionManager, TransactionState};
 

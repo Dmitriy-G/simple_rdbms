@@ -1,7 +1,3 @@
-//! `TransactionManager::begin`/`commit`/`abort` and `write_checkpoint`
-//! against a real `BufferPool`, proving the wiring - not just that the
-//! types construct (see `smoke.rs`).
-
 use std::error::Error;
 
 use common::{Lsn, TxnId};

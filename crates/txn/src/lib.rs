@@ -1,12 +1,3 @@
-//! The transaction subsystem: transaction lifecycle, two-phase locking, and
-//! the multi-version concurrency control types used for snapshot
-//! isolation.
-//!
-//! `txn` depends on `storage` (a lock is taken on a physical `Rid`/`PageId`,
-//! and MVCC version chains live alongside the tuples they version) but not
-//! on `catalog` or `sql`: it has no notion of tables or SQL, only of
-//! transactions and the physical records they touch.
-
 #![forbid(unsafe_code)]
 
 mod checkpoint;
