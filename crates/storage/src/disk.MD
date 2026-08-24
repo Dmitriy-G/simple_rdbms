@@ -30,18 +30,29 @@ touching the file directly.
   to `8` when every page gained a 4-byte CRC-32 checksum prefix. No
   migration: a file written under an older version must be deleted and
   recreated.
-- `header` (`pub(crate)`) - the byte layout of the page-0 header: checksum
-  (4, reserved by every page) | `page_lsn` (8, reserved by every page) |
-  magic (8) | version (4) | `catalog_first_page` (4) | `page_size` (4) |
-  `last_checkpoint_lsn` (8), zero-padded to a full page. `page_count` is
-  deliberately not part of this layout - see `HEADER_VERSION`.
-  `catalog_first_page` and `last_checkpoint_lsn` are mutated exclusively
-  through `BufferPool` once the pool exists - fetching page 0 like any
-  other page and writing through `PageGuard::write`, so both become
-  redoable and undoable like any other page mutation. `DiskManager` itself
-  only ever *reads* this layout, and writes it directly, in full, exactly
-  once: stamping a brand-new file's very first header in `write_header`,
-  before there is any pool or log to write through.
+- `header` (`pub(crate)`) - the byte layout of the page-0 header, given as
+  five `Range<usize>` constants: `MAGIC_RANGE` (12..20) - the 8-byte magic
+  string; `VERSION_RANGE` (20..24) - `HEADER_VERSION`; `PAGE_SIZE_RANGE`
+  (28..32) - the page size the database was created with;
+  `CATALOG_FIRST_PAGE_RANGE` (24..28) - the catalog's first page id, or
+  `u32::MAX` if none yet; `LAST_CHECKPOINT_LSN_RANGE` (32..40) - the last
+  checkpoint's LSN, zero-padded beyond that to a full page. `page_count` is
+  deliberately not part of this layout - see `HEADER_VERSION`. The ranges
+  start at byte 12 rather than 0 because page 0 is an ordinary page like
+  any other: bytes 0..4 are its checksum (`page::CHECKSUM_RANGE`, added
+  when `HEADER_VERSION` bumped to `8`) and bytes 4..12 are its `page_lsn`
+  prefix (`page::PAGE_LSN_RANGE`, added when `HEADER_VERSION` bumped to
+  `7`, precisely so that `catalog_first_page`/`last_checkpoint_lsn` could
+  start being mutated through the ordinary `PageGuard::write` path) - so
+  this layout carries the same version history `HEADER_VERSION` documents,
+  not a layout frozen since version 1. `catalog_first_page` and
+  `last_checkpoint_lsn` are mutated exclusively through `BufferPool` once
+  the pool exists - fetching page 0 like any other page and writing
+  through `PageGuard::write`, so both become redoable and undoable like
+  any other page mutation. `DiskManager` itself only ever *reads* this
+  layout, and writes it directly, in full, exactly once: stamping a
+  brand-new file's very first header in `write_header`, before there is
+  any pool or log to write through.
 - `DiskManager` - owns the device and `next_page_id`. `DiskManager::open(path,
   page_size)` opens (creating if necessary) the database file at `path`.
   `DiskManager::open_with_device(device, page_size, path)` opens a database
