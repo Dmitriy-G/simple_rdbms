@@ -1,8 +1,3 @@
-//! `BEGIN`/`COMMIT`/`ROLLBACK` against a real (tempfile-backed) database:
-//! explicit transactions actually group statements atomically, nesting and
-//! stray `COMMIT`/`ROLLBACK` are rejected, a rolled-back `CREATE TABLE`
-//! really leaves no table (not just an empty heap), and autocommit still
-//! holds for bare statements outside any explicit transaction.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use common::DbConfig;
@@ -68,9 +63,6 @@ fn rolled_back_create_table_leaves_no_table_and_the_name_is_reusable_with_a_diff
 
     assert!(db.table_names().is_empty(), "the rolled-back table must not exist");
 
-    // A different schema for the same name must succeed - proves the
-    // catalog's in-memory map was actually reloaded, not just the heap
-    // page rolled back underneath a stale `tables_by_name` entry.
     db.execute("CREATE TABLE t (a INTEGER, b TEXT)").expect("recreate with a different schema");
     db.execute("INSERT INTO t VALUES (1, 'x')").expect("insert into the new table");
     assert_eq!(
@@ -88,8 +80,6 @@ fn a_select_inside_an_explicit_transaction_does_not_end_it() {
     db.execute("BEGIN").expect("begin");
     db.execute("INSERT INTO t VALUES (1)").expect("insert");
     rows_of(db.execute("SELECT * FROM t").expect("select mid-transaction"));
-    // If the SELECT had implicitly committed (autocommit leaking through),
-    // this second BEGIN would succeed instead of erroring.
     assert!(db.execute("BEGIN").is_err(), "the transaction begun above must still be open");
     db.execute("ROLLBACK").expect("rollback");
 }
@@ -127,9 +117,6 @@ fn a_bare_insert_outside_any_transaction_is_durable_once_execute_returns() {
         let mut db = Database::open(DbConfig::new(&path)).expect("open database");
         db.execute("CREATE TABLE t (a INTEGER)").expect("create table");
         db.execute("INSERT INTO t VALUES (1)").expect("autocommit insert");
-        // Dropped without `close`: only what `execute` already made
-        // durable (via `TransactionManager::commit`'s force-flush) may
-        // survive.
     }
 
     let mut db = Database::open(DbConfig::new(&path)).expect("reopen database");

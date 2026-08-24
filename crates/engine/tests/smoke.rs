@@ -1,4 +1,3 @@
-//! Asserts the crate compiles and its main type can be constructed.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use common::DbConfig;

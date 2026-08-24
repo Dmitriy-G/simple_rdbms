@@ -4,13 +4,6 @@ use executor::{
 };
 use planner::PhysicalPlan;
 
-/// Builds an operator tree from a `PhysicalPlan`, one `Executor` per node.
-/// The small factory `execute` needs to turn a plan into something it can
-/// actually pull tuples from.
-///
-/// `PhysicalPlan::CreateTable` never reaches here: `Database::execute`
-/// handles `CREATE TABLE` directly against the catalog before physical
-/// planning, since it has no tuple stream to pull.
 pub fn build_executor(plan: PhysicalPlan) -> Box<dyn Executor> {
     match plan {
         PhysicalPlan::SeqScan { table_id } => Box::new(SeqScanExecutor::new(table_id)),

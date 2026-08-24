@@ -1,5 +1,3 @@
-//! End-to-end tests of the full lex -> parse -> bind -> plan -> execute
-//! pipeline, against a real (tempfile-backed) database file.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use common::DbConfig;
@@ -66,8 +64,6 @@ fn where_clause_evaluates_eq_lt_and_or_and_excludes_null_predicate_rows() {
     let mut db = open(&dir);
 
     db.execute("CREATE TABLE t (a INTEGER, b INTEGER)").expect("create table");
-    // Row 3's predicate involves NULL and must evaluate to NULL (not
-    // false), but the row must still be excluded either way.
     db.execute("INSERT INTO t VALUES (1, 10), (2, 20), (3, NULL)").expect("insert");
 
     let (_, rows) =
@@ -134,12 +130,6 @@ fn repeated_close_and_reopen_cycles_accumulate_tables_without_extra_page_growth(
 
     let file_len = std::fs::metadata(&path).expect("stat database file").len();
     let page_size = DbConfig::DEFAULT_PAGE_SIZE as u64;
-    // Page 0 is the header, one more page is the catalog's own heap
-    // (provisioned once, by the first CREATE TABLE - see
-    // `Catalog::ensure_catalog_heap`), and each of the `CYCLES` tables gets
-    // exactly one heap page of its own. Any extra growth here would mean a
-    // reopen is re-deriving `next_page_id` wrong and allocating pages it
-    // doesn't need.
     let expected_pages = 2 + CYCLES as u64;
     assert_eq!(
         file_len,
