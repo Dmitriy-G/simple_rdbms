@@ -1,7 +1,3 @@
-//! Parses each statement form and asserts on the resulting AST, checks
-//! operator precedence, and checks that malformed input produces a located
-//! parse error (not a panic).
-
 use sql::{
     BinaryOperator, ColumnDef, CreateTableStatement, Expr, InsertStatement, Lexer, Parser,
     SelectItem, SelectStatement, SqlError, Statement, UnaryOperator,
@@ -148,7 +144,6 @@ fn parses_select_list_and_where_clause() {
 
 #[test]
 fn precedence_or_binds_looser_than_and() {
-    // a = 1 OR b = 2 AND c = 3  ==  a=1 OR (b=2 AND c=3)
     let stmt = parse("SELECT * FROM t WHERE a = 1 OR b = 2 AND c = 3");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
 
@@ -171,7 +166,6 @@ fn precedence_or_binds_looser_than_and() {
 
 #[test]
 fn parentheses_override_precedence() {
-    // (a = 1 OR b = 2) AND c = 3
     let stmt = parse("SELECT * FROM t WHERE (a = 1 OR b = 2) AND c = 3");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
 

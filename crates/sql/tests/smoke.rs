@@ -1,5 +1,3 @@
-//! Asserts the crate compiles and its main types can be constructed.
-
 use sql::{Expr, Lexer, Parser, Token, TokenKind};
 use types::Value;
 

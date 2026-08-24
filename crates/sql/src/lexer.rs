@@ -1,9 +1,6 @@
 use crate::error::SqlError;
 use crate::token::{Token, TokenKind};
 
-/// Turns SQL source text into a flat stream of `Token`s. Holds no
-/// knowledge of grammar; a `Parser` is what gives the token stream
-/// structure.
 pub struct Lexer<'a> {
     input: &'a str,
     bytes: &'a [u8],
@@ -11,13 +8,10 @@ pub struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    /// Creates a lexer over `input`.
     pub fn new(input: &'a str) -> Self {
         Self { input, bytes: input.as_bytes(), offset: 0 }
     }
 
-    /// Consumes the lexer, producing every token in `input` followed by a
-    /// trailing `TokenKind::Eof`.
     pub fn tokenize(mut self) -> Result<Vec<Token>, SqlError> {
         let mut tokens = Vec::new();
         loop {
@@ -46,7 +40,6 @@ impl<'a> Lexer<'a> {
         self.bytes.get(self.offset + delta).copied()
     }
 
-    /// Advances past whitespace and `--` line comments.
     fn skip_trivia(&mut self) {
         loop {
             match self.peek_byte() {
@@ -64,7 +57,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Scans a run of digits, optionally followed by a `.` and more digits.
     fn lex_number(&mut self) -> Result<TokenKind, SqlError> {
         let start = self.offset;
         self.advance_while(|b| b.is_ascii_digit());
@@ -87,10 +79,8 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Scans a single-quoted string literal starting at the opening quote,
-    /// with `''` treated as an escaped single quote.
     fn lex_string(&mut self, start: usize) -> Result<TokenKind, SqlError> {
-        self.offset += 1; // opening quote
+        self.offset += 1;
         let mut value = String::new();
         loop {
             match self.peek_byte() {
@@ -114,9 +104,6 @@ impl<'a> Lexer<'a> {
         Ok(TokenKind::StringLiteral(value))
     }
 
-    /// Scans an identifier, matching it case-insensitively against the
-    /// keyword set; anything that doesn't match a keyword becomes an
-    /// `Identifier` carrying the original (case-sensitive) spelling.
     fn lex_ident_or_keyword(&mut self) -> TokenKind {
         let start = self.offset;
         self.advance_while(|b| b == b'_' || b.is_ascii_alphanumeric());
@@ -145,7 +132,6 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Scans one punctuation or operator token.
     fn lex_punct(&mut self, start: usize) -> Result<TokenKind, SqlError> {
         let b = match self.peek_byte() {
             Some(b) => b,
