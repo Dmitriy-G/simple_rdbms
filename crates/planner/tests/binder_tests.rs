@@ -1,6 +1,3 @@
-//! Binds parsed statements against a populated catalog and checks that
-//! unknown columns/tables and type mismatches are rejected.
-
 use catalog::{Catalog, Column, Schema, TableInfo};
 use common::{PageId, TableId};
 use planner::{Binder, BoundExpr, BoundStatement, PlannerError};
@@ -129,7 +126,6 @@ fn rejects_insert_column_count_mismatch() {
 #[test]
 fn insert_without_column_list_defaults_missing_trailing_columns_are_not_allowed() {
     let catalog = catalog_with_users();
-    // 3 columns declared, only 2 values supplied, no explicit column list.
     match bind(&catalog, "INSERT INTO users VALUES (1, 'a')") {
         Err(PlannerError::ColumnCountMismatch { expected, found }) => {
             assert_eq!(expected, 3);

@@ -4,10 +4,6 @@ use crate::logical_plan::LogicalPlan;
 
 // TODO(M8): cost-based optimization
 
-/// Lowers a bound statement into a `LogicalPlan`. A `SELECT` always builds
-/// the fixed shape `Projection(Filter(Scan))` (dropping the `Filter` node
-/// when there is no `WHERE` clause); there is no optimizer yet to choose a
-/// different shape or access path.
 pub fn plan(statement: BoundStatement) -> Result<LogicalPlan, PlannerError> {
     let plan = match statement {
         BoundStatement::Select(select) => {

@@ -4,121 +4,69 @@ use types::{DataType, Value};
 
 use crate::error::PlannerError;
 
-/// A statement after binding: names resolved against the catalog and
-/// expressions type-checked, but still shaped like the SQL it came from
-/// rather than lowered to relational algebra.
 #[derive(Debug, Clone)]
 pub enum BoundStatement {
-    /// A bound `SELECT`.
     Select(BoundSelect),
-    /// A bound `INSERT`.
     Insert(BoundInsert),
-    /// A bound `CREATE TABLE`.
     CreateTable(BoundCreateTable),
 }
 
-/// A `SELECT` after binding.
 #[derive(Debug, Clone)]
 pub struct BoundSelect {
-    /// The resolved source table.
     pub table_id: TableId,
-    /// The projected expressions, resolved to column ordinals.
     pub projections: Vec<BoundExpr>,
-    /// Display names for `projections`, in the same order: the source
-    /// column's name for a bare column reference (including each column a
-    /// `*` expands to), or a positional `columnN` name for any other
-    /// expression, which has no name of its own to report.
     pub column_names: Vec<String>,
-    /// The optional, type-checked filter predicate.
     pub predicate: Option<BoundExpr>,
 }
 
-/// An `INSERT` after binding.
 #[derive(Debug, Clone)]
 pub struct BoundInsert {
-    /// The resolved destination table.
     pub table_id: TableId,
-    /// Each row's values, one bound expression per column of the target
-    /// table's schema (in schema order); columns not named in the
-    /// statement's optional column list are bound to `Value::Null`.
     pub rows: Vec<Vec<BoundExpr>>,
 }
 
-/// A `CREATE TABLE` after binding (mainly a name-collision check; there is
-/// no schema to resolve against yet since the table doesn't exist).
 #[derive(Debug, Clone)]
 pub struct BoundCreateTable {
-    /// The new table's name.
     pub table_name: String,
-    /// The new table's column definitions.
     pub columns: Vec<BoundColumnDef>,
 }
 
-/// A column definition after binding, e.g. after validating that its type
-/// is supported and its name does not repeat within the same statement.
 #[derive(Debug, Clone)]
 pub struct BoundColumnDef {
-    /// The column's name.
     pub name: String,
-    /// The column's declared type.
     pub data_type: DataType,
-    /// Whether the column allows `NULL`.
     pub nullable: bool,
 }
 
-/// A scalar expression after binding: column references are resolved to
-/// ordinal positions and literal/operator types have been checked.
 #[derive(Debug, Clone)]
 pub enum BoundExpr {
-    /// A literal value.
     Literal(Value),
-    /// A reference to the column at this ordinal position in the bound
-    /// source's schema.
     ColumnRef {
-        /// The column's ordinal position in the source schema.
         index: usize,
-        /// The column's resolved type, cached to avoid re-deriving it
-        /// during execution.
         data_type: DataType,
     },
-    /// A binary operator application, resolved and type-checked.
     BinaryOp {
-        /// The left-hand operand.
         left: Box<BoundExpr>,
-        /// The operator being applied.
         op: sql::BinaryOperator,
-        /// The right-hand operand.
         right: Box<BoundExpr>,
-        /// The expression's resolved result type.
         data_type: DataType,
     },
-    /// A unary operator application, resolved and type-checked.
     UnaryOp {
-        /// The operator being applied.
         op: sql::UnaryOperator,
-        /// The operand.
         expr: Box<BoundExpr>,
-        /// The expression's resolved result type.
         data_type: DataType,
     },
 }
 
-/// Binds parsed `sql` AST nodes against a `Catalog`, producing a
-/// `BoundStatement` with every name resolved and every expression
-/// type-checked. This is the boundary where "syntactically valid SQL"
-/// becomes "semantically valid against this database's schema".
 pub struct Binder<'a> {
     catalog: &'a Catalog,
 }
 
 impl<'a> Binder<'a> {
-    /// Creates a binder that resolves names against `catalog`.
     pub fn new(catalog: &'a Catalog) -> Self {
         Self { catalog }
     }
 
-    /// Binds a parsed statement, resolving every table/column reference and
-    /// type-checking every expression.
     pub fn bind(&self, statement: sql::Statement) -> Result<BoundStatement, PlannerError> {
         match statement {
             sql::Statement::Select(select) => Ok(BoundStatement::Select(self.bind_select(select)?)),
@@ -205,9 +153,6 @@ impl<'a> Binder<'a> {
                 .collect::<Result<_, _>>()?
         };
 
-        // Values in an INSERT have no source row to resolve column
-        // references against; binding against an empty schema turns any
-        // bare column reference into an `UnknownColumn` error.
         let empty_schema = Schema::new(Vec::new());
 
         let mut rows = Vec::with_capacity(insert.values.len());
@@ -262,11 +207,6 @@ impl<'a> Binder<'a> {
         BoundCreateTable { table_name: create.table, columns }
     }
 
-    /// Binds an expression against `schema`, resolving column references to
-    /// ordinals and type-checking every operator application. Returns the
-    /// bound expression along with its resolved type, or `None` if the
-    /// expression is a `NULL` literal (which has no type of its own and is
-    /// treated as compatible with any type it's checked against).
     fn bind_expr(
         &self,
         expr: &sql::Expr,
@@ -379,21 +319,10 @@ impl<'a> Binder<'a> {
     }
 }
 
-/// Whether `data_type` is a numeric type eligible for unary negation.
 fn is_numeric(data_type: DataType) -> bool {
     matches!(data_type, DataType::Integer | DataType::BigInt | DataType::Double)
 }
 
-/// Whether two resolved types may appear together in a comparison or an
-/// assignment, ignoring a `Varchar`'s declared maximum length (an identity
-/// property of the column, not of the value being compared against it).
-///
-/// This is deliberately asymmetric in spirit even though the check itself
-/// is symmetric: literals adapt to columns (see `coerce_literal_to_column`,
-/// applied before this check ever runs), but two column references never
-/// adapt to each other. By the time a comparison reaches this function,
-/// either operand still carrying a type that differs from the other's is a
-/// genuine mismatch, not something coercion should paper over.
 fn data_types_match(a: DataType, b: DataType) -> bool {
     match (a, b) {
         (DataType::Varchar(_), DataType::Varchar(_)) => true,
@@ -401,12 +330,6 @@ fn data_types_match(a: DataType, b: DataType) -> bool {
     }
 }
 
-/// If `value` is a literal whose type differs from `target` but can be
-/// exactly represented in it, narrows/widens it to `target`; otherwise
-/// returns `value` unchanged so the caller's normal type-mismatch check
-/// applies. Only a `BigInt` literal against an `Integer` target is
-/// coerced today (a literal integer that overflows `i32` in an `Integer`
-/// column), reported against `column_name` if it doesn't fit.
 fn coerce_literal_to_column(
     value: Value,
     target: DataType,
@@ -424,10 +347,6 @@ fn coerce_literal_to_column(
     }
 }
 
-/// Applies literal-to-column coercion to a comparison's operands: when one
-/// side is a bound literal and the other a column reference, the literal is
-/// coerced towards the column's type before the comparison's own type check
-/// runs. Column-to-column comparisons are returned unchanged.
 fn coerce_comparison_operands(
     left: BoundExpr,
     left_type: Option<DataType>,
