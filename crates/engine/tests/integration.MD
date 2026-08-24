@@ -49,6 +49,12 @@ pipeline, against a real (tempfile-backed) database file.
   offending text.
 - `select_from_nonexistent_table_is_an_error` - `SELECT * FROM missing`
   errors rather than panicking or returning an empty result.
+- `a_parse_error_carries_sqlstate_42601_and_its_byte_offset` - a lexer
+  error surfaced through `Database::execute` comes back as
+  `common::Error::Syntax { offset, .. }` with `sql_state() ==
+  SqlState::SYNTAX_ERROR`, and `offset` is exactly the byte position of
+  the offending character in the original source text - not just baked
+  into the rendered message.
 
 ## Usage Example
 

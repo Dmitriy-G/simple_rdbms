@@ -37,8 +37,11 @@ result or error.
   it was spelled in `CREATE TABLE`, e.g. `TEXT` rather than the parser's
   internal `Varchar(4294967295)` for it.
 - `print_result(result_set)` - prints a result set: an aligned text table
-  for a query's rows, `NULL` for SQL `NULL`, or a rows-affected line for
-  a statement with no output rows.
+  for a query's rows, `NULL` for SQL `NULL`, a rows-affected line for a
+  statement with no output rows, or `ROLLBACK` for
+  `engine::ResultSet::RolledBack` - a `COMMIT` that actually rolled back
+  because its transaction had already failed, matching the command tag a
+  real Postgres client would see in the same situation.
 - `print_table(columns, rows)` - prints `columns` and `rows` as a text
   table whose columns are padded to the widest cell (header included) in
   that column.

@@ -28,9 +28,13 @@ Errors raised while lexing or parsing SQL text.
 - `SqlError::render(source) -> String` - renders this error against the
   `source` it came from as a message followed by the offending line and a
   caret pointing at the exact byte offset.
-- `impl From<SqlError> for common::Error` - converts into the
-  workspace-wide error type as `Error::Parse`, carrying the original
-  error's `Display` text.
+
+There is deliberately no `impl From<SqlError> for common::Error` here:
+`common::Error::Syntax { message, offset }` needs both `render`'s
+output and `offset`, and both need the original source text, which only
+the caller holding that text has - so `engine::Database::execute` builds
+the `common::Error` directly rather than this crate converting into a
+workspace-wide error it can't fully populate on its own.
 
 ## Usage Example
 
@@ -44,8 +48,10 @@ if let Err(err) = tokens {
 }
 ```
 
-`engine::Database::execute` calls `SqlError::render` against the original
-SQL text before converting the error into `common::Error::Parse`, so a
-malformed statement's error message always shows the user exactly where
-in their query it went wrong; `tests/parser_tests.rs` checks
-`render`'s caret placement directly.
+`engine::Database::execute` calls `SqlError::render`/`SqlError::offset`
+against the original SQL text before building
+`common::Error::Syntax { message, offset }`, so a malformed
+statement's error message always shows the user exactly where in their
+query it went wrong, and the byte offset survives as data for a future
+client rather than only being embedded in prose; `tests/parser_tests.rs`
+checks `render`'s caret placement directly.

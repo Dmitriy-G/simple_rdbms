@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use common::DbConfig;
+use common::{DbConfig, SqlState};
 use engine::{Database, ResultSet};
 use types::Value;
 
@@ -13,6 +13,7 @@ fn rows_of(result: ResultSet) -> Vec<Vec<Value>> {
     match result {
         ResultSet::Rows { rows, .. } => rows.into_iter().map(|t| t.values().to_vec()).collect(),
         ResultSet::RowsAffected(n) => panic!("expected Rows, got RowsAffected({n})"),
+        ResultSet::RolledBack => panic!("expected Rows, got RolledBack"),
     }
 }
 
@@ -106,6 +107,46 @@ fn rollback_with_no_active_transaction_is_an_error() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let mut db = open(&dir);
     assert!(db.execute("ROLLBACK").is_err());
+}
+
+#[test]
+fn a_failed_statement_inside_begin_aborts_the_transaction_until_rollback() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER)").expect("create table");
+    db.execute("BEGIN").expect("begin");
+    db.execute("INSERT INTO t VALUES (1)").expect("insert 1");
+
+    let err = db.execute("SELECT * FROM missing").expect_err("selecting a missing table must fail");
+    assert_eq!(err.sql_state(), SqlState::UNDEFINED_TABLE);
+
+    let err = db
+        .execute("INSERT INTO t VALUES (2)")
+        .expect_err("a well-formed statement after the abort must still be rejected");
+    assert_eq!(err.sql_state(), SqlState::IN_FAILED_SQL_TRANSACTION);
+
+    db.execute("ROLLBACK").expect("rollback clears the aborted transaction");
+
+    db.execute("BEGIN").expect("a new transaction can begin after rollback");
+    rows_of(db.execute("SELECT * FROM t").expect("statements work again after rollback"));
+    db.execute("ROLLBACK").expect("rollback so the transaction doesn't leak into other tests");
+}
+
+#[test]
+fn commit_of_an_aborted_transaction_rolls_back_and_reports_it() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER)").expect("create table");
+    db.execute("BEGIN").expect("begin");
+    db.execute("INSERT INTO t VALUES (1)").expect("insert 1");
+    db.execute("SELECT * FROM missing").expect_err("selecting a missing table must fail");
+
+    let result = db.execute("COMMIT").expect("COMMIT on an aborted transaction is not an error");
+    assert_eq!(result, ResultSet::RolledBack);
+
+    assert_eq!(rows_of(db.execute("SELECT * FROM t").expect("select")), Vec::<Vec<Value>>::new());
 }
 
 #[test]

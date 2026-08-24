@@ -2,7 +2,7 @@ use catalog::{Catalog, Column, Schema};
 use common::{DbConfig, Error, Result, TxnId};
 use executor::ExecutorContext;
 use planner::{Binder, BoundStatement, PhysicalPlan, to_physical};
-use sql::{Lexer, Parser, Statement};
+use sql::{Lexer, Parser, SqlError, Statement};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::dwb::DoubleWriteBuffer;
@@ -17,17 +17,39 @@ use crate::result_set::ResultSet;
 
 const REPLACER_K: usize = 2;
 
+#[derive(Debug, Clone, Copy)]
+enum TxnSlot {
+    None,
+    Active(TxnId),
+    Aborted(TxnId),
+}
+
+impl TxnSlot {
+    fn txn_id(self) -> Option<TxnId> {
+        match self {
+            TxnSlot::None => None,
+            TxnSlot::Active(txn_id) | TxnSlot::Aborted(txn_id) => Some(txn_id),
+        }
+    }
+}
+
 pub struct Database {
     catalog: Catalog,
     buffer_pool: BufferPool,
     txn_manager: TransactionManager,
     checkpoint_byte_threshold: u64,
     bytes_at_last_checkpoint: u64,
-    active_txn: Option<TxnId>,
+    txn_slot: TxnSlot,
 }
 
 impl Database {
     pub fn open(config: DbConfig) -> Result<Self> {
+        Self::open_impl(config).inspect_err(|err| {
+            tracing::error!(sql_state = %err.sql_state(), %err, "failed to open database");
+        })
+    }
+
+    fn open_impl(config: DbConfig) -> Result<Self> {
         let mut wal_path = config.db_path.clone().into_os_string();
         wal_path.push(".wal");
         let log_manager = LogManager::open(wal_path)?;
@@ -77,7 +99,7 @@ impl Database {
             txn_manager,
             checkpoint_byte_threshold: config.checkpoint_byte_threshold,
             bytes_at_last_checkpoint,
-            active_txn: None,
+            txn_slot: TxnSlot::None,
         })
     }
 
@@ -99,8 +121,14 @@ impl Database {
     }
 
     pub fn execute(&mut self, sql: &str) -> Result<ResultSet> {
-        let tokens = Lexer::new(sql).tokenize().map_err(|err| Error::Parse(err.render(sql)))?;
-        let statement = Parser::new(tokens).parse().map_err(|err| Error::Parse(err.render(sql)))?;
+        self.execute_impl(sql).inspect_err(|err| {
+            tracing::error!(sql_state = %err.sql_state(), %err, "statement failed");
+        })
+    }
+
+    fn execute_impl(&mut self, sql: &str) -> Result<ResultSet> {
+        let tokens = Lexer::new(sql).tokenize().map_err(|err| syntax_error(&err, sql))?;
+        let statement = Parser::new(tokens).parse().map_err(|err| syntax_error(&err, sql))?;
 
         match &statement {
             Statement::Begin => return self.handle_begin(),
@@ -109,9 +137,9 @@ impl Database {
             _ => {}
         }
 
-        let bound = Binder::new(&self.catalog).bind(statement)?;
         let (txn_id, autocommit) = self.txn_for_statement()?;
-        let result = self.execute_bound(bound, txn_id);
+        let bound = Binder::new(&self.catalog).bind(statement).map_err(Error::from);
+        let result = bound.and_then(|bound| self.execute_bound(bound, txn_id));
 
         if autocommit {
             match &result {
@@ -123,36 +151,44 @@ impl Database {
                     let _ = self.txn_manager.abort(txn_id, &self.buffer_pool);
                 }
             }
+        } else if result.is_err() {
+            self.txn_slot = TxnSlot::Aborted(txn_id);
         }
         result
     }
 
     fn handle_begin(&mut self) -> Result<ResultSet> {
-        if self.active_txn.is_some() {
-            return Err(Error::Transaction(
-                "already inside a transaction; nested BEGIN is not allowed".to_string(),
-            ));
+        if self.txn_slot.txn_id().is_some() {
+            return Err(Error::NestedTransaction);
         }
         let txn_id = self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
-        self.active_txn = Some(txn_id);
+        self.txn_slot = TxnSlot::Active(txn_id);
         Ok(ResultSet::rows_affected(0))
     }
 
     fn handle_commit(&mut self) -> Result<ResultSet> {
-        let txn_id = self
-            .active_txn
-            .take()
-            .ok_or_else(|| Error::Transaction("no active transaction to COMMIT".to_string()))?;
-        self.txn_manager.commit(txn_id, &self.buffer_pool)?;
-        self.maybe_checkpoint()?;
-        Ok(ResultSet::rows_affected(0))
+        match self.txn_slot {
+            TxnSlot::None => Err(Error::NoActiveTransaction { statement: "COMMIT".to_string() }),
+            TxnSlot::Aborted(txn_id) => {
+                self.txn_manager.abort(txn_id, &self.buffer_pool)?;
+                self.txn_slot = TxnSlot::None;
+                self.maybe_checkpoint()?;
+                Ok(ResultSet::RolledBack)
+            }
+            TxnSlot::Active(txn_id) => {
+                self.txn_manager.commit(txn_id, &self.buffer_pool)?;
+                self.txn_slot = TxnSlot::None;
+                self.maybe_checkpoint()?;
+                Ok(ResultSet::rows_affected(0))
+            }
+        }
     }
 
     fn handle_rollback(&mut self) -> Result<ResultSet> {
         let txn_id = self
-            .active_txn
-            .take()
-            .ok_or_else(|| Error::Transaction("no active transaction to ROLLBACK".to_string()))?;
+            .txn_slot
+            .txn_id()
+            .ok_or_else(|| Error::NoActiveTransaction { statement: "ROLLBACK".to_string() })?;
         self.txn_manager.abort(txn_id, &self.buffer_pool)?;
 
         let reload_txn =
@@ -160,14 +196,16 @@ impl Database {
         self.catalog = Catalog::open(&self.buffer_pool, reload_txn)?;
         self.txn_manager.commit(reload_txn, &self.buffer_pool)?;
 
+        self.txn_slot = TxnSlot::None;
         self.maybe_checkpoint()?;
         Ok(ResultSet::rows_affected(0))
     }
 
     fn txn_for_statement(&mut self) -> Result<(TxnId, bool)> {
-        match self.active_txn {
-            Some(txn_id) => Ok((txn_id, false)),
-            None => {
+        match self.txn_slot {
+            TxnSlot::Active(txn_id) => Ok((txn_id, false)),
+            TxnSlot::Aborted(_) => Err(Error::TransactionAborted),
+            TxnSlot::None => {
                 let txn_id =
                     self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
                 Ok((txn_id, true))
@@ -237,4 +275,8 @@ impl Drop for Database {
         let _ = self.buffer_pool.flush_log_all();
         let _ = self.buffer_pool.flush_all();
     }
+}
+
+fn syntax_error(err: &SqlError, sql: &str) -> Error {
+    Error::Syntax { message: err.render(sql), offset: err.offset(sql) }
 }

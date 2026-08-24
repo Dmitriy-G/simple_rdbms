@@ -23,10 +23,7 @@ impl InsertExecutor {
 
 impl Executor for InsertExecutor {
     fn init(&mut self, ctx: &mut ExecutorContext<'_>) -> Result<(), ExecutorError> {
-        let table = ctx
-            .catalog
-            .get_table_by_id(self.table_id)
-            .map_err(|err| ExecutorError::Catalog(err.to_string()))?;
+        let table = ctx.catalog.get_table_by_id(self.table_id)?;
         self.first_page_id = Some(table.first_page_id);
         Ok(())
     }

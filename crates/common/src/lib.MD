@@ -15,6 +15,10 @@ edge back up into a higher layer.
   `config.MD`.
 - `Error` / `Result<T>` - the unified error type threaded through every
   layer, and its result alias. See `error.MD`.
+- `Severity` - `Error`/`Fatal`/`Panic`, an `Error`'s wire-protocol
+  severity. See `error.MD`.
+- `SqlState` - the SQLSTATE code identifying an `Error`'s condition. See
+  `sql_state.MD`.
 - `PageId`, `FrameId`, `TxnId`, `TableId`, `ColumnId`, `Lsn`, `Rid` -
   newtype identifiers for the core entities that flow between subsystems.
   See `ids.MD`.

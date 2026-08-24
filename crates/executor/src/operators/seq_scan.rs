@@ -21,10 +21,7 @@ impl SeqScanExecutor {
 
 impl Executor for SeqScanExecutor {
     fn init(&mut self, ctx: &mut ExecutorContext<'_>) -> Result<(), ExecutorError> {
-        let table = ctx
-            .catalog
-            .get_table_by_id(self.table_id)
-            .map_err(|err| ExecutorError::Catalog(err.to_string()))?;
+        let table = ctx.catalog.get_table_by_id(self.table_id)?;
         self.column_types = table.schema.columns().iter().map(|column| column.data_type).collect();
         self.current_page = Some(table.first_page_id);
         self.next_slot = 0;
@@ -37,7 +34,7 @@ impl Executor for SeqScanExecutor {
                 PageScan::Tuple { slot, bytes } => {
                     self.next_slot = slot + 1;
                     let tuple = Tuple::decode(&bytes, &self.column_types)
-                        .map_err(|err| ExecutorError::Evaluation(err.to_string()))?;
+                        .map_err(|err| ExecutorError::CorruptTuple(err.to_string()))?;
                     return Ok(Some(tuple));
                 }
                 PageScan::EndOfPage { next_page_id } => {

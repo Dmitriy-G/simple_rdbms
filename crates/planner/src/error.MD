@@ -20,9 +20,14 @@ Errors raised while binding a parsed statement against the catalog.
   an `Integer` column); `column` names the column it was bound against,
   `value` is the literal's original text as written in the source SQL, and
   `data_type` is the column's declared type the literal did not fit in.
-- `impl From<PlannerError> for common::Error` - converts into the
-  workspace-wide error type as `Error::Binder`, carrying the original
-  error's `Display` text.
+- `impl From<PlannerError> for common::Error` - matches each variant onto
+  the `common::Error` variant naming the same SQL condition:
+  `UnknownTable` -> `UndefinedTable`, `UnknownColumn` -> `UndefinedColumn`,
+  `ColumnCountMismatch` -> the identically-shaped `ColumnCountMismatch`,
+  `TypeMismatch` -> `DatatypeMismatch`, `AmbiguousColumn` -> the
+  identically-shaped `AmbiguousColumn`, `LiteralOutOfRange` ->
+  `NumericValueOutOfRange` (kept distinct from `DatatypeMismatch` since
+  "wrong magnitude" and "wrong shape" are different SQLSTATE classes).
 
 ## Usage Example
 
@@ -36,5 +41,6 @@ match Binder::new(&catalog).bind(statement) {
 ```
 
 Every fallible `Binder` method returns `Result<_, PlannerError>`; callers
-in `engine` propagate it with `?` and rely on the `From` impl to fold it
-into `common::Error` at the point it crosses into `Database::execute`.
+in `engine` propagate it with `?` and rely on the `From` impl to fold it,
+structured field by field, into `common::Error` at the point it crosses
+into `Database::execute`.

@@ -39,9 +39,3 @@ impl SqlError {
         format!("{self}\n{line}\n{caret}")
     }
 }
-
-impl From<SqlError> for common::Error {
-    fn from(err: SqlError) -> Self {
-        common::Error::Parse(err.to_string())
-    }
-}

@@ -4,6 +4,7 @@ use types::Tuple;
 pub enum ResultSet {
     Rows { columns: Vec<String>, rows: Vec<Tuple> },
     RowsAffected(usize),
+    RolledBack,
 }
 
 impl ResultSet {

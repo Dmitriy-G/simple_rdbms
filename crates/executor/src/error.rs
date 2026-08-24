@@ -5,18 +5,27 @@ pub enum ExecutorError {
     #[error("expression evaluation error: {0}")]
     Evaluation(String),
 
+    #[error("corrupt tuple: {0}")]
+    CorruptTuple(String),
+
+    #[error("not supported: {0}")]
+    NotSupported(String),
+
     #[error("storage error: {0}")]
     Storage(#[from] storage::StorageError),
 
-    #[error("transaction error: {0}")]
-    Transaction(String),
-
     #[error("catalog error: {0}")]
-    Catalog(String),
+    Catalog(#[from] catalog::CatalogError),
 }
 
 impl From<ExecutorError> for common::Error {
     fn from(err: ExecutorError) -> Self {
-        common::Error::Execution(err.to_string())
+        match err {
+            ExecutorError::Evaluation(detail) => common::Error::DatatypeMismatch { detail },
+            ExecutorError::CorruptTuple(detail) => common::Error::DataCorrupted { detail },
+            ExecutorError::NotSupported(detail) => common::Error::NotSupported(detail),
+            ExecutorError::Storage(err) => err.into(),
+            ExecutorError::Catalog(err) => err.into(),
+        }
     }
 }

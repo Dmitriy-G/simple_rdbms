@@ -3,14 +3,16 @@
 `BEGIN`/`COMMIT`/`ROLLBACK` against a real (tempfile-backed) database:
 explicit transactions actually group statements atomically, nesting and
 stray `COMMIT`/`ROLLBACK` are rejected, a rolled-back `CREATE TABLE`
-really leaves no table (not just an empty heap), and autocommit still
-holds for bare statements outside any explicit transaction.
+really leaves no table (not just an empty heap), autocommit still holds
+for bare statements outside any explicit transaction, and a statement
+that fails inside an explicit transaction aborts it - Postgres semantics,
+per CLAUDE.md's error-handling section.
 
 ## Key Components
 
 - `open(dir) -> Database` - opens a `Database` at `dir.join("test.db")`.
 - `rows_of(result) -> Vec<Vec<Value>>` - unwraps a `ResultSet::Rows` into
-  each row's values, panicking on `RowsAffected`.
+  each row's values, panicking on `RowsAffected`/`RolledBack`.
 - `rollback_of_inserts_leaves_the_table_empty` - two inserts inside a
   `BEGIN`/`ROLLBACK` leave the table with no rows.
 - `commit_of_inserts_keeps_them_and_survives_a_reopen` - two inserts
@@ -38,6 +40,18 @@ holds for bare statements outside any explicit transaction.
   `close`: only what `execute` already made durable (via
   `TransactionManager::commit`'s force-flush) may survive a drop without
   `close`, and that's still everything this test expects back.
+- `a_failed_statement_inside_begin_aborts_the_transaction_until_rollback`
+  - a `SELECT` against a missing table inside `BEGIN` fails with
+  `SqlState::UNDEFINED_TABLE`; every statement issued afterward, even a
+  well-formed one, is then rejected with `SqlState::IN_FAILED_SQL_TRANSACTION`
+  until `ROLLBACK`, after which a fresh `BEGIN` and ordinary statements
+  work again.
+- `commit_of_an_aborted_transaction_rolls_back_and_reports_it` - `COMMIT`
+  against a transaction already aborted by a failed statement is not
+  itself an error: it performs the deferred rollback and returns
+  `ResultSet::RolledBack` rather than the ordinary `RowsAffected(0)`, and
+  the transaction's writes are gone afterward, same as an explicit
+  `ROLLBACK` would leave them.
 
 ## Usage Example
 

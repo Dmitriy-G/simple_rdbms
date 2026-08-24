@@ -121,6 +121,27 @@ siblings, missing `.rs` siblings, a missing `## Key Components` or
 public item undocumented in its sibling `.MD`, a crate missing its
 `README.md`, or a disallowed comment all fail the build.
 
+## Error handling
+
+`common::Error` is the one error type every layer converges on; every
+variant is named after the SQL condition it represents (`UndefinedTable`,
+not `Catalog`) and carries structured fields rather than a formatted
+string, and `Error::sql_state()`/`Error::severity()`/`Error::is_retryable()`
+give it machine-readable identity (a SQLSTATE code, a wire-protocol
+severity, and whether a client should retry) without any server or client
+protocol existing yet. See `crates/common/src/error.MD` and
+`crates/common/src/sql_state.MD` for the full design and the exhaustive
+variant-to-code mapping.
+
+Errors are logged exactly once, at the boundary where they leave the
+engine - `engine::Database::open` for startup failures,
+`engine::Database::execute` for statement failures - and nowhere else.
+Every intermediate `?`/`From` conversion between layers must stay silent;
+logging at each layer a failure passes through produces the same failure
+reported five times at five levels of detail instead of once with full
+context. If a new fallible boundary is added above `engine`, it inherits
+this rule: log there, and only there.
+
 ## Commit and branch conventions
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/):

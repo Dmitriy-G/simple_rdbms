@@ -13,9 +13,12 @@ Errors raised by the system catalog.
   heap. `Corrupt(String)` is raised when a persisted catalog row can't be
   decoded back into a `TableInfo` (truncated row, invalid schema blob,
   unknown type tag).
-- `impl From<CatalogError> for common::Error` - converts into the
-  workspace-wide error type as `Error::Catalog`, carrying the original
-  error's `Display` text.
+- `impl From<CatalogError> for common::Error` - matches each variant onto
+  the `common::Error` variant naming the same SQL condition:
+  `TableAlreadyExists` -> `DuplicateTable`, `TableNotFound` ->
+  `UndefinedTable`, `ColumnNotFound { table, column }` -> `UndefinedColumn`
+  (with `name` formatted as `table.column`), `Storage` -> delegated to
+  `storage::StorageError`'s own conversion, `Corrupt` -> `DataCorrupted`.
 
 ## Usage Example
 
@@ -29,5 +32,6 @@ match catalog.get_table("missing") {
 ```
 
 Every fallible `Catalog` method returns `Result<_, CatalogError>`; callers
-in `engine` propagate it with `?` and rely on the `From` impl to fold it
-into `common::Error` at the point it crosses into `Database::execute`.
+in `engine` propagate it with `?` and rely on the `From` impl to fold it,
+structured field by field, into `common::Error` at the point it crosses
+into `Database::execute`.

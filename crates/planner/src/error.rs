@@ -24,6 +24,21 @@ pub enum PlannerError {
 
 impl From<PlannerError> for common::Error {
     fn from(err: PlannerError) -> Self {
-        common::Error::Binder(err.to_string())
+        match err {
+            PlannerError::UnknownTable(name) => common::Error::UndefinedTable { name },
+            PlannerError::UnknownColumn(name) => common::Error::UndefinedColumn { name },
+            PlannerError::ColumnCountMismatch { expected, found } => {
+                common::Error::ColumnCountMismatch { expected, found }
+            }
+            PlannerError::TypeMismatch(detail) => common::Error::DatatypeMismatch { detail },
+            PlannerError::AmbiguousColumn(name) => common::Error::AmbiguousColumn { name },
+            PlannerError::LiteralOutOfRange { column, value, data_type } => {
+                common::Error::NumericValueOutOfRange {
+                    column,
+                    value,
+                    data_type: format!("{data_type:?}"),
+                }
+            }
+        }
     }
 }

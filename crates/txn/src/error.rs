@@ -17,6 +17,13 @@ pub enum TxnError {
 
 impl From<TxnError> for common::Error {
     fn from(err: TxnError) -> Self {
-        common::Error::Transaction(err.to_string())
+        let detail = err.to_string();
+        match err {
+            TxnError::DeadlockVictim(_) => common::Error::SerializationFailure { detail },
+            TxnError::LockAfterUnlock(_) | TxnError::UnknownTransaction(_) => {
+                common::Error::Internal { detail }
+            }
+            TxnError::Storage(err) => err.into(),
+        }
     }
 }

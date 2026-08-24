@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use common::DbConfig;
+use common::{DbConfig, Error, SqlState};
 use engine::{Database, ResultSet};
 use types::Value;
 
@@ -15,6 +15,7 @@ fn rows_of(result: ResultSet) -> (Vec<String>, Vec<Vec<Value>>) {
             (columns, rows.into_iter().map(|t| t.values().to_vec()).collect())
         }
         ResultSet::RowsAffected(n) => panic!("expected Rows, got RowsAffected({n})"),
+        ResultSet::RolledBack => panic!("expected Rows, got RolledBack"),
     }
 }
 
@@ -215,4 +216,21 @@ fn select_from_nonexistent_table_is_an_error() {
     let result = db.execute("SELECT * FROM missing");
 
     assert!(result.is_err(), "expected an error, got {result:?}");
+}
+
+#[test]
+fn a_parse_error_carries_sqlstate_42601_and_its_byte_offset() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    let sql = "SELECT * FROM t WHERE a = @";
+    let err = db.execute(sql).expect_err("malformed SQL must fail to parse");
+
+    assert_eq!(err.sql_state(), SqlState::SYNTAX_ERROR);
+    match err {
+        Error::Syntax { offset, .. } => {
+            assert_eq!(offset, sql.find('@').expect("query contains the offending '@'"));
+        }
+        other => panic!("expected Error::Syntax, got {other:?}"),
+    }
 }

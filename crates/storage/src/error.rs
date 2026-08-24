@@ -41,6 +41,28 @@ pub enum StorageError {
 
 impl From<StorageError> for common::Error {
     fn from(err: StorageError) -> Self {
-        common::Error::Storage(err.to_string())
+        let message = err.to_string();
+        match err {
+            StorageError::Io(err) => common::Error::Io(err),
+            StorageError::BufferPoolExhausted => common::Error::BufferPoolExhausted,
+            StorageError::CorruptPage { page_id, reason } => {
+                common::Error::CorruptPage { page_id, reason }
+            }
+            StorageError::PageNotFound(page_id) => common::Error::PageNotFound { page_id },
+            StorageError::TruncatedFile { actual, expected, page_size } => {
+                common::Error::TruncatedFile { actual, expected, page_size }
+            }
+            StorageError::TupleTooLarge { size, max } => common::Error::TupleTooLarge { size, max },
+            StorageError::CorruptLogHeader { reason } => common::Error::CorruptLog { reason },
+            StorageError::ChecksumMismatch { page_id, expected, actual } => {
+                common::Error::ChecksumMismatch { page_id, expected, actual }
+            }
+            StorageError::DoubleWriteRestoreFailed { page_id } => {
+                common::Error::DoubleWriteRestoreFailed { page_id }
+            }
+            StorageError::InvalidDwbCapacity => {
+                common::Error::InvalidConfiguration { detail: message }
+            }
+        }
     }
 }

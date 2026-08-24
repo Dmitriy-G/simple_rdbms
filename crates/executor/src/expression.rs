@@ -88,7 +88,7 @@ fn evaluate_binary(
         | BinaryOperator::Minus
         | BinaryOperator::Multiply
         | BinaryOperator::Divide => {
-            Err(ExecutorError::Evaluation("arithmetic operators are not supported".to_string()))
+            Err(ExecutorError::NotSupported("arithmetic operators are not supported".to_string()))
         }
     }
 }

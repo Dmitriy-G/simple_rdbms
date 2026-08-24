@@ -124,6 +124,7 @@ fn print_result(result_set: &ResultSet) {
         ResultSet::RowsAffected(count) => {
             println!("OK ({count} row{})", if *count == 1 { "" } else { "s" })
         }
+        ResultSet::RolledBack => println!("ROLLBACK"),
     }
 }
 

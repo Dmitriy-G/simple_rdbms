@@ -4,7 +4,9 @@ mod config;
 pub mod crc;
 mod error;
 mod ids;
+mod sql_state;
 
 pub use config::DbConfig;
-pub use error::{Error, Result};
+pub use error::{Error, Result, Severity};
 pub use ids::{ColumnId, FrameId, Lsn, PageId, Rid, TableId, TxnId};
+pub use sql_state::SqlState;

@@ -10,10 +10,11 @@ Every other crate in the workspace is a layer; `engine` is where the
 layers are assembled (see `docs/adr/0002-crate-splitting.md`). Nothing
 below this crate knows about any other sibling — `sql` does not know about
 `executor`, `catalog` does not know about `planner` — `engine` is the only
-place that does, and it is also the only crate with no external
-dependencies of its own (see Dependencies): composing the other crates is
-all it does, so it needs no error type or utility crate beyond what they
-already provide.
+place that does; it composes the other crates rather than adding logic of
+its own, which is why it defines no error type of its own (see
+Dependencies) even though it does pull in `tracing` to log each error
+exactly once at the boundary it owns (`Database::open`/`Database::execute`
+- see CLAUDE.md's "log at the boundary" rule).
 
 `Database::open` runs a fixed three-step sequence, in this order, and the
 order is forced rather than incidental:
@@ -82,14 +83,17 @@ manager and MVCC are unwired, M10), and no cost-based optimization
 
 ## Dependencies
 
-Workspace only: `common`, `types`, `storage`, `catalog`, `sql`, `txn`,
-`planner`, `executor` — `engine` has no external crate dependencies of its
-own; it composes the layers below it and reuses `common::Error` rather
-than defining its own error type, since assembling the other crates never
-needs a new error variant. Dev-only: this crate again with its `test-util`
-feature enabled (for `Database::open_with_devices`, used by the
-crash-injection harness to open against fault-injecting `BlockDevice`s
-instead of real files), plus `tempfile`.
+Workspace: `common`, `types`, `storage`, `catalog`, `sql`, `txn`,
+`planner`, `executor` — `engine` composes the layers below it and reuses
+`common::Error` rather than defining its own error type, since assembling
+the other crates never needs a new error variant. External: `tracing`,
+for the one log line each `Database::open`/`execute` emits when it returns
+an error - the only external dependency this crate needs, since logging
+that once at the boundary is itself boundary-assembly, not domain logic.
+Dev-only: this crate again with its `test-util` feature enabled (for
+`Database::open_with_devices`, used by the crash-injection harness to open
+against fault-injecting `BlockDevice`s instead of real files), plus
+`tempfile`.
 
 ## Configuration
 

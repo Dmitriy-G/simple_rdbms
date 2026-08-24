@@ -20,6 +20,14 @@ pub enum CatalogError {
 
 impl From<CatalogError> for common::Error {
     fn from(err: CatalogError) -> Self {
-        common::Error::Catalog(err.to_string())
+        match err {
+            CatalogError::TableAlreadyExists(name) => common::Error::DuplicateTable { name },
+            CatalogError::TableNotFound(name) => common::Error::UndefinedTable { name },
+            CatalogError::ColumnNotFound { table, column } => {
+                common::Error::UndefinedColumn { name: format!("{table}.{column}") }
+            }
+            CatalogError::Storage(err) => err.into(),
+            CatalogError::Corrupt(detail) => common::Error::DataCorrupted { detail },
+        }
     }
 }

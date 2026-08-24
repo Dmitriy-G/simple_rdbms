@@ -4,8 +4,12 @@ Errors raised by the storage engine: disk I/O, buffer pool exhaustion,
 corrupt page layout, or WAL failures. This is the crate's one error type -
 every fallible operation in `storage` returns `Result<_, StorageError>`,
 and `catalog`/`txn`/`executor` each convert it into their own local error
-type at their boundary (see `common::Error::Storage`, which every variant
-here ultimately flows into via `.to_string()`).
+type at their boundary (see `common::Error`, which every variant here maps
+onto by hand - `ChecksumMismatch`/`CorruptPage`/`CorruptLogHeader`/
+`TruncatedFile`/`PageNotFound` all become a data-corruption `common::Error`
+variant, `BufferPoolExhausted`/`TupleTooLarge`/`DoubleWriteRestoreFailed`/
+`InvalidDwbCapacity` each become their own - see `common`'s `error.MD` for
+which).
 
 ## Key Components
 
@@ -44,10 +48,11 @@ here ultimately flows into via `.to_string()`).
   `BufferPool::flush_pages`'s `pages.len() <= capacity` assertion would
   debug-panic on the very first non-empty flush rather than failing
   cleanly at construction time.
-- `impl From<StorageError> for common::Error` - converts any `StorageError`
-  into `common::Error::Storage(err.to_string())`, the single point where
-  this crate's error type crosses into the shared one every crate above it
-  matches on.
+- `impl From<StorageError> for common::Error` - matches each `StorageError`
+  variant to the `common::Error` variant naming the same condition,
+  preserving its structured fields rather than collapsing them into a
+  formatted string; the single point where this crate's error type crosses
+  into the shared one every crate above it matches on.
 
 ## Usage Example
 
@@ -63,6 +68,6 @@ fn open_page(disk: &mut storage::disk::DiskManager, id: common::PageId) -> Resul
 
 Every public function in this crate that can fail returns
 `Result<_, StorageError>`; callers above `storage` (`catalog::CatalogError`,
-`txn`'s error paths, `executor::ExecutorError`) each wrap it with `?` and
-`.to_string()` into their own local error, and `common::Error::Storage`
-is where all of those eventually converge for `engine`/`cli` to match on.
+`txn::TxnError`, `executor::ExecutorError`) each wrap it with `#[from]` into
+their own local error, and `common::Error` is where all of those eventually
+converge for `engine`/`cli` to match on.

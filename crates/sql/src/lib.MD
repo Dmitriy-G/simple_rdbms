@@ -30,4 +30,4 @@ let statement = Parser::new(tokens).parse()?;
 `engine::Database::execute` runs exactly this two-step pipeline against
 each statement of SQL text it's given, rendering any `SqlError` against
 the original source (via `SqlError::render`) before wrapping it as
-`common::Error::Parse`.
+`common::Error::Syntax`, alongside the error's byte offset.
