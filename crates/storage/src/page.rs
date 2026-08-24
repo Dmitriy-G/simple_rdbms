@@ -63,22 +63,6 @@ impl Page {
     }
 }
 
-/// ```compile_fail
-/// # use common::TxnId;
-/// # use storage::buffer::BufferPool;
-/// # use storage::disk::DiskManager;
-/// # use storage::dwb::DoubleWriteBuffer;
-/// # use storage::replacer::LruKReplacer;
-/// # use storage::wal::LogManager;
-/// # let dir = tempfile::tempdir().unwrap();
-/// # let disk = DiskManager::open(dir.path().join("t.db"), storage::page::PAGE_SIZE).unwrap();
-/// # let dwb = DoubleWriteBuffer::open(dir.path().join("t.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY).unwrap();
-/// # let log = LogManager::open(dir.path().join("t.db.wal")).unwrap();
-/// # let pool = BufferPool::new(disk, dwb, log, 4, Box::new(LruKReplacer::new(4, 2)));
-/// let (page_id, guard) = pool.new_page(TxnId(0)).unwrap();
-/// drop(guard);
-/// pool.unpin_page(page_id, false).unwrap(); // no such method on `BufferPool`
-/// ```
 pub struct PageGuard<'pool> {
     pub(crate) page_id: PageId,
     pub(crate) frame_id: FrameId,

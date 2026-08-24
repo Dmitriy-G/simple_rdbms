@@ -98,6 +98,12 @@ because the other operand is definitely `true`.
 
 ## Docs
 
+- Every `crates/**/*.rs` file has a sibling `<stem>.MD` beside it in the
+  same directory (`buffer.rs` → `buffer.MD`) carrying that module's design
+  rationale and API reference — there are no `///`/`//!` rustdoc comments
+  in this codebase, so `cargo doc` won't have them either. See
+  `docs/adr/0006-sibling-md-documentation.md` for why, and `CLAUDE.md` for
+  the exact structure every `.MD` file follows.
 - `docs/ROADMAP.md` — milestones, framed as the database problem each one
   solves.
 - `docs/adr/` — architecture decision records.
