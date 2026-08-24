@@ -100,10 +100,12 @@ against fault-injecting `BlockDevice`s instead of real files), plus
 `engine` has no configuration constants of its own beyond
 `REPLACER_K = 2` (private, the buffer pool's LRU-K eviction parameter).
 Every sizing knob a `Database` is opened with — page size, buffer pool
-size, checkpoint byte threshold, double-write buffer capacity — comes from
-`common::DbConfig`, constructed by the caller (`Database::open`'s only
-argument) and threaded straight down into the disk manager, double-write
-buffer, and buffer pool.
+size, checkpoint byte threshold, double-write buffer capacity, slow-query
+warn threshold — comes from `common::DbConfig`, constructed by the caller
+(`Database::open`'s only argument) and threaded straight down into the
+disk manager, double-write buffer, buffer pool, and `Database::execute`'s
+own logging. Log output itself is controlled by `RUST_LOG` (`cli` wires up
+the subscriber; see CLAUDE.md's logging section), not by `DbConfig`.
 
 ## Testing
 

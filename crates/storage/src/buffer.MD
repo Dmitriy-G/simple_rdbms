@@ -48,7 +48,11 @@ comment in this file cites.
 - `BufferPool::fetch_page(&self, page_id) -> Result<PageGuard<'_>, StorageError>` -
   fetches `page_id`, pinning it and returning a guard. If the page is not
   already resident, brings it in from disk, evicting a victim frame via
-  the replacer if none is free.
+  the replacer if none is free. Emits a `trace!` naming `page_id` on
+  every call - this is the hottest path in the crate, so the event is
+  built from the already-owned `page_id.0` with no `format!`/allocation
+  outside the macro, cheap enough to leave enabled even though it's
+  almost never turned on.
 - `BufferPool::new_page(&self, txn_id) -> Result<(PageId, PageGuard<'_>), StorageError>` -
   allocates a brand-new page via the disk manager and pins it in the
   pool, returning a guard to it. Logs an `AllocPage` record on behalf of
@@ -87,7 +91,10 @@ comment in this file cites.
 - `BufferPool::allocate_frame(&self) -> Result<FrameId, StorageError>` -
   private. Finds a frame to hold a newly-fetched or newly-allocated page:
   reuses a never-used frame if one is free, otherwise asks the replacer
-  for an evictable victim, flushing it first if dirty.
+  for an evictable victim, flushing it first if dirty. Emits a `trace!`
+  naming the evicted page when a victim is chosen, and a `warn!` (every
+  frame pinned - eviction pressure an operator should know about) right
+  before returning `StorageError::BufferPoolExhausted`.
 - `BufferPool::install(&self, frame_id, page_id, page, dirty_since_lsn)` -
   private. Installs `page` into `frame_id`'s slot and records it under
   `page_id` in the page table. Only ever called on a frame that was just
@@ -99,7 +106,8 @@ comment in this file cites.
   private. Increment/decrement a frame's pin count and update the
   replacer's evictability accordingly.
 - `BufferPool::flush_pages(&self, pages) -> Result<(), StorageError>` -
-  private. Flushes a batch of currently-dirty, resident pages to disk
+  private. Emits a `trace!` naming the batch size before doing anything
+  else. Flushes a batch of currently-dirty, resident pages to disk
   through the double-write buffer. Every entry in `pages` must already be
   dirty and safe from concurrent reassignment; this does not re-check
   either condition. Implements the write-ahead rule (the log must be

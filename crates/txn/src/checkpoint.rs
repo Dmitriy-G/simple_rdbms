@@ -20,5 +20,6 @@ pub fn write_checkpoint(
     pool.set_last_checkpoint_lsn(header_txn, begin_lsn)?;
     txn_manager.commit(header_txn, pool)?;
 
+    tracing::info!(lsn = begin_lsn.0, "checkpoint complete");
     Ok(begin_lsn)
 }

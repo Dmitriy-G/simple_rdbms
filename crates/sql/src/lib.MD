@@ -17,6 +17,8 @@ hand is the point of this crate.
   `CreateTableStatement`, `ColumnDef`, `Expr`, `BinaryOperator`,
   `UnaryOperator` - the parsed AST types. See `ast.MD`.
 - `SqlError` - errors raised while lexing or parsing. See `error.MD`.
+- `fingerprint(sql) -> String` - redacts a statement's literal values for
+  safe logging above `debug`. See `fingerprint.MD`.
 
 ## Usage Example
 

@@ -126,7 +126,10 @@ that never committed - both driven by `storage::recovery`.
   appends `record` to the log, returning its assigned `Lsn`: its byte
   offset in the log stream, i.e. the durable file length plus the current
   in-memory buffer length. Only buffers the bytes in memory; call `flush`
-  to force them to disk.
+  to force them to disk. Emits a `trace!` naming the assigned `lsn` and
+  `txn_id` after appending - built entirely from values already computed
+  for the return value, so the hot path pays nothing extra when this
+  level is disabled.
 - `LogManager::flush(&mut self, up_to)` - forces every buffered record up
   to and including the one starting at `up_to` to disk. Idempotent:
   returns immediately if that record is already durable. The check is

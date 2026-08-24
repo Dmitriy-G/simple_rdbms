@@ -25,7 +25,9 @@ rules.
   write that could outlive a crash without ever being logged is exactly
   the bug that rule fixed. That header transaction is begun, written, and
   committed against `txn_manager` after the checkpoint records themselves
-  are logged and flushed.
+  are logged and flushed. Emits an `info!` naming `lsn` right before
+  returning - checkpoint completion is one of the events CLAUDE.md's
+  logging section calls out at `info` by name.
 
 ## Usage Example
 

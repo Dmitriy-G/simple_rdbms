@@ -2,6 +2,7 @@
 
 mod ast;
 mod error;
+mod fingerprint;
 mod lexer;
 mod parser;
 mod token;
@@ -11,6 +12,7 @@ pub use ast::{
     SelectStatement, Statement, UnaryOperator,
 };
 pub use error::SqlError;
+pub use fingerprint::fingerprint;
 pub use lexer::Lexer;
 pub use parser::Parser;
 pub use token::{Token, TokenKind};

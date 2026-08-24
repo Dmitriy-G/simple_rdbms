@@ -20,6 +20,7 @@ common = { workspace = true }
 types = { workspace = true }
 thiserror = { workspace = true }
 rand = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 # Self-referenced with `test-util` enabled so this crate's own integration
@@ -29,3 +30,5 @@ rand = { workspace = true }
 storage = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 proptest = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }

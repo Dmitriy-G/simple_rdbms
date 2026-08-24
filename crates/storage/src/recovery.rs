@@ -49,11 +49,21 @@ pub fn recover_double_write(
         }
     }
 
+    if !restored_pages.is_empty() {
+        tracing::warn!(
+            pages = restored_pages.len(),
+            "double-write buffer restored torn pages during recovery - the last shutdown was \
+             unclean"
+        );
+    }
+
     dwb.clear_batch()?;
     Ok(())
 }
 
+#[tracing::instrument(skip_all)]
 pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
+    let recovery_start = std::time::Instant::now();
     let start = pool.last_checkpoint_lsn()?.unwrap_or(Lsn(HEADER_LEN));
 
     let mut att: HashMap<TxnId, (Lsn, bool)> = HashMap::new();
@@ -74,10 +84,12 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
         }
     }
 
+    let mut records_scanned: u64 = 0;
     for record in pool.log_iter_from(start)? {
         if record.txn_id == CHECKPOINT_TXN {
             continue;
         }
+        records_scanned += 1;
 
         match &record.kind {
             LogRecordKind::End => {
@@ -108,11 +120,14 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
         }
     }
 
+    let winners = att.values().filter(|(_, committed)| *committed).count();
     let losers: Vec<(TxnId, Lsn)> = att
         .into_iter()
         .filter_map(|(txn_id, (last_lsn, committed))| (!committed).then_some((txn_id, last_lsn)))
         .collect();
+    let loser_count = losers.len();
 
+    let mut redo_replayed: u64 = 0;
     if let Some(&min_recovery_lsn) = dpt.values().min() {
         for record in pool.log_iter_from(min_recovery_lsn)? {
             match &record.kind {
@@ -120,10 +135,12 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
                 | LogRecordKind::Clr { page_id, offset, after, .. } => {
                     if pool.page_lsn(*page_id)? < record.lsn {
                         pool.stamp_write(*page_id, *offset as usize, after, record.lsn)?;
+                        redo_replayed += 1;
                     }
                 }
                 LogRecordKind::AllocPage { page_id } => {
                     pool.ensure_page_allocated(*page_id)?;
+                    redo_replayed += 1;
                 }
                 _ => {}
             }
@@ -137,7 +154,17 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
     pool.flush_log_all()?;
     pool.flush_all()?;
     pool.sync()?;
-    Ok(pool.max_txn_id())
+
+    let highest_txn_id = pool.max_txn_id();
+    tracing::info!(
+        winners,
+        losers = loser_count,
+        records_scanned,
+        redo_replayed,
+        duration_ms = recovery_start.elapsed().as_millis() as u64,
+        "recovery complete"
+    );
+    Ok(highest_txn_id)
 }
 
 pub fn undo_transaction(pool: &BufferPool, txn_id: TxnId, from: Lsn) -> Result<(), StorageError> {

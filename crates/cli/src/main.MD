@@ -11,8 +11,23 @@ result or error.
   `clap::Parser`: `db_path`, the path to the database file to open,
   created if it does not already exist (defaults to
   `"simple_rdbms.db"`).
-- `main() -> anyhow::Result<()>` - initializes tracing, parses `Cli`,
+- `main() -> anyhow::Result<()>` - calls `init_logging`, parses `Cli`,
   opens the `Database`, runs the REPL, and closes the database.
+- `init_logging()` - the one place in the workspace that constructs a
+  `tracing` subscriber (libraries emit, only a binary subscribes - see
+  CLAUDE.md's logging section): JSON output, level from `RUST_LOG`
+  (`EnvFilter::try_from_default_env`), defaulting to `info` if unset.
+  Written to **stderr**, not stdout, which is the one deliberate departure
+  from CLAUDE.md's "JSON to stdout only" rule: that rule is written for a
+  future headless server process, where stdout has no other job, but this
+  REPL's stdout is already a tested contract - query results and `OK`/
+  `ROLLBACK` acknowledgments (`crates/cli/tests/crash_recovery.rs` reads
+  them line by line from a piped child process) - and interleaving JSON
+  log lines into it would corrupt that output for any script or human
+  reading it. `docker logs`/Kubernetes capture stderr exactly as readily
+  as stdout, so nothing about "captured by the container runtime" is lost
+  by this choice; only "and never stdout instead" is not honored here,
+  specifically because this binary is a REPL and not the future server.
 - `run_repl(db) -> anyhow::Result<()>` - reads statements from stdin,
   buffering lines until a `;` terminates one, printing that statement's
   result or error before prompting for the next. A leading `.`-command

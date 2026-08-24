@@ -142,6 +142,64 @@ reported five times at five levels of detail instead of once with full
 context. If a new fallible boundary is added above `engine`, it inherits
 this rule: log there, and only there.
 
+## Logging
+
+Structured logging via `tracing`, built for a container from the start:
+JSON records, no log files, no file paths in config. A binary's own
+subscriber decides where those records go; libraries never do — every
+crate below a binary only ever calls `tracing::{trace,debug,info,warn,error}!`
+or `#[tracing::instrument]`, never constructs a subscriber. Today that
+subscriber is initialized exactly once, in `cli::init_logging`, at `info`
+by default and controlled by `RUST_LOG`
+(`crates/cli/src/main.MD`); a future server binary initializes its own the
+same way. `cli` writes to **stderr**, not stdout — see
+`crates/cli/src/main.MD` for why: stdout there is an existing, tested REPL
+contract, not the general rule's target. A future headless server binary
+writes JSON to stdout only, exactly as the rule says, since it has no
+competing use for that stream.
+
+Three nested spans carry correlation automatically to every event inside
+them, so no lower layer has to thread ids through by hand: a connection
+span (`conn_id`, opened once per `Database`, entered for its whole
+lifetime), a transaction span (`txn_id`, `isolation`, entered around every
+statement that joins an explicit transaction), and a statement span
+(`stmt_id`, `statement_kind`, one per `Database::execute` call). See
+`crates/engine/src/database.MD` for exactly how they nest and the one
+case (autocommit) where a transaction's own fields end up nested under
+its statement's span instead of the reverse.
+
+**Never log user data above `DEBUG`.** A database log is a
+data-exfiltration path. At `info`, a statement is logged as a normalized
+fingerprint with literals replaced by `?` (`sql::fingerprint` — see
+`crates/sql/src/fingerprint.MD`), never the raw text. Full SQL text and
+the literal values it contains go at `debug` and no higher — the same
+rule, since a literal in the fingerprinted-away spot is already visible
+in the raw text at that level. Row *data* — anything read back from a
+table, a `Vec<Tuple>` a query produced — is different: it never gets
+logged at any level, `trace` included, full stop; there is no debugging
+need `?rows` is worth the exfiltration risk for.
+
+What to log, by level: `error` — recovery failure, checksum mismatch,
+unrecoverable I/O, any `Severity::Fatal`. `warn` — transaction abort, a
+double-write-buffer restore during recovery (the last shutdown was
+unclean), a statement past `DbConfig::slow_query_warn_threshold_ms`,
+buffer-pool eviction pressure (every frame pinned). `info` — startup and
+shutdown, connection open/close, the recovery summary (records scanned,
+winners, losers, duration), checkpoint completion with its LSN, and a
+statement's fingerprint once it succeeds. `debug` — a statement's full SQL
+and the physical plan chosen for it. `trace` — page fetch/evict, WAL
+record append, page flush. The startup line (`engine::Database::open_with_managers`)
+is the most valuable one in the whole system: it records the durability
+configuration — page size, buffer pool frames, DWB capacity, whether
+checksums are on — and the recovery outcome, so a later question of
+whether a lost write was possible has a one-line answer.
+
+Hot-path discipline: `trace!` inside `BufferPool::fetch_page` and
+`LogManager::append` is fine — a disabled level compiles down to a cheap
+check — but nothing on those paths may build a `String` or call `format!`
+outside the macro, and no page pin or latch may be held across a logging
+call.
+
 ## Commit and branch conventions
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/):

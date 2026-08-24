@@ -14,7 +14,7 @@ struct Cli {
 }
 
 fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    init_logging();
 
     let cli = Cli::parse();
     let config = DbConfig::new(cli.db_path);
@@ -24,6 +24,12 @@ fn main() -> anyhow::Result<()> {
 
     db.close()?;
     Ok(())
+}
+
+fn init_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt().json().with_writer(std::io::stderr).with_env_filter(filter).init();
 }
 
 fn run_repl(db: &mut Database) -> anyhow::Result<()> {

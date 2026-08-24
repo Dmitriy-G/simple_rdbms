@@ -302,6 +302,7 @@ impl LogManager {
         self.bytes_appended += bytes.len() as u64;
         self.buffer.extend_from_slice(&bytes);
         self.last_lsn_by_txn.insert(record.txn_id, lsn.0);
+        tracing::trace!(lsn = lsn.0, txn_id = record.txn_id.0, "append");
         Ok(lsn)
     }
 

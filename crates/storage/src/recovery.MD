@@ -50,8 +50,12 @@ calls it directly rather than reimplementing undo.
   would take the only remaining intact copy down with it; if any restored
   page still fails its checksum, this returns
   `StorageError::DoubleWriteRestoreFailed` naming it, leaving the batch in
-  place for a later attempt to retry.
-- `recover(pool) -> Result<Option<TxnId>, StorageError>` - runs Analysis,
+  place for a later attempt to retry. Logs a `warn!` naming how many pages
+  it actually restored, if any - a non-empty restore means the previous
+  shutdown was unclean, which an operator watching logs wants to know even
+  though this function itself recovered from it cleanly.
+- `recover(pool) -> Result<Option<TxnId>, StorageError>` -
+  `#[tracing::instrument(skip_all)]`. Runs Analysis,
   Redo, and Undo against `pool`'s write-ahead log, leaving every page
   consistent with the log's most recent durable state and every
   transaction that never committed fully undone. Idempotent: safe to call
@@ -91,7 +95,14 @@ calls it directly rather than reimplementing undo.
   exactly why Undo runs after, not instead of, this pass. Recovery leaves
   a durable, checkpoint-able database behind rather than relying on later
   no-force flushes to eventually catch up: it calls `flush_log_all`,
-  `flush_all`, and `sync` before returning.
+  `flush_all`, and `sync` before returning. Emits a single `info!`
+  "recovery complete" summary just before returning: `winners` (committed
+  transactions the Analysis pass saw), `losers` (transactions Undo rolled
+  back), `records_scanned` (the Analysis pass's own forward-scan record
+  count), `redo_replayed` (how many Redo actually applied, as opposed to
+  skipped because the page's `page_lsn` already covered them), and
+  `duration_ms` - the line an operator reads after a crash to know what
+  recovery actually did, not just that it finished.
 - `undo_transaction(pool, txn_id, from) -> Result<(), StorageError>` -
   undoes `txn_id`'s writes, walking its log chain backward starting from
   `from` (that transaction's most recent LSN). For each `Update` found,

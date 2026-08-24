@@ -1,5 +1,7 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use catalog::{Catalog, Column, Schema};
-use common::{DbConfig, Error, Result, TxnId};
+use common::{DbConfig, Error, Result, Severity, TxnId};
 use executor::ExecutorContext;
 use planner::{Binder, BoundStatement, PhysicalPlan, to_physical};
 use sql::{Lexer, Parser, SqlError, Statement};
@@ -16,6 +18,8 @@ use crate::executor_factory::build_executor;
 use crate::result_set::ResultSet;
 
 const REPLACER_K: usize = 2;
+
+static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy)]
 enum TxnSlot {
@@ -39,7 +43,11 @@ pub struct Database {
     txn_manager: TransactionManager,
     checkpoint_byte_threshold: u64,
     bytes_at_last_checkpoint: u64,
+    slow_query_warn_threshold_ms: u64,
     txn_slot: TxnSlot,
+    txn_span: Option<tracing::Span>,
+    next_stmt_id: u64,
+    _conn_span: tracing::span::EnteredSpan,
 }
 
 impl Database {
@@ -50,6 +58,7 @@ impl Database {
     }
 
     fn open_impl(config: DbConfig) -> Result<Self> {
+        let conn_span = new_connection_span();
         let mut wal_path = config.db_path.clone().into_os_string();
         wal_path.push(".wal");
         let log_manager = LogManager::open(wal_path)?;
@@ -57,7 +66,7 @@ impl Database {
         let mut dwb_path = config.db_path.clone().into_os_string();
         dwb_path.push(".dwb");
         let dwb = DoubleWriteBuffer::open(dwb_path, config.dwb_capacity)?;
-        Self::open_with_managers(config, disk_manager, dwb, log_manager)
+        Self::open_with_managers(config, disk_manager, dwb, log_manager, conn_span)
     }
 
     #[cfg(any(test, feature = "test-util"))]
@@ -67,10 +76,11 @@ impl Database {
         wal_device: Box<dyn storage::block_device::BlockDevice>,
         dwb_device: Box<dyn storage::block_device::BlockDevice>,
     ) -> Result<Self> {
+        let conn_span = new_connection_span();
         let disk_manager = DiskManager::open_with_device(db_device, config.page_size, None)?;
         let log_manager = LogManager::open_with_device(wal_device)?;
         let dwb = DoubleWriteBuffer::open_with_device(dwb_device, config.dwb_capacity)?;
-        Self::open_with_managers(config, disk_manager, dwb, log_manager)
+        Self::open_with_managers(config, disk_manager, dwb, log_manager, conn_span)
     }
 
     fn open_with_managers(
@@ -78,6 +88,7 @@ impl Database {
         mut disk_manager: DiskManager,
         mut dwb: DoubleWriteBuffer,
         log_manager: LogManager,
+        conn_span: tracing::span::EnteredSpan,
     ) -> Result<Self> {
         recovery::recover_double_write(&mut disk_manager, &mut dwb)?;
 
@@ -93,13 +104,27 @@ impl Database {
         txn_manager.commit(bootstrap_txn, &buffer_pool)?;
 
         let bytes_at_last_checkpoint = buffer_pool.log_bytes_appended();
+
+        tracing::info!(
+            page_size = config.page_size,
+            buffer_pool_frames = config.buffer_pool_size,
+            dwb_capacity = config.dwb_capacity,
+            checksums_enabled = true,
+            recovered_highest_txn_id = ?highest_txn_id,
+            "database opened"
+        );
+
         Ok(Self {
             catalog,
             buffer_pool,
             txn_manager,
             checkpoint_byte_threshold: config.checkpoint_byte_threshold,
             bytes_at_last_checkpoint,
+            slow_query_warn_threshold_ms: config.slow_query_warn_threshold_ms,
             txn_slot: TxnSlot::None,
+            txn_span: None,
+            next_stmt_id: 1,
+            _conn_span: conn_span,
         })
     }
 
@@ -108,6 +133,7 @@ impl Database {
         self.buffer_pool.flush_log_all()?;
         self.buffer_pool.flush_all()?;
         self.buffer_pool.sync()?;
+        tracing::info!("connection closed");
         Ok(())
     }
 
@@ -121,14 +147,41 @@ impl Database {
     }
 
     pub fn execute(&mut self, sql: &str) -> Result<ResultSet> {
-        self.execute_impl(sql).inspect_err(|err| {
-            tracing::error!(sql_state = %err.sql_state(), %err, "statement failed");
-        })
+        let stmt_id = self.next_stmt_id;
+        self.next_stmt_id += 1;
+
+        let txn_span = self.txn_span.clone();
+        let _txn_guard = txn_span.as_ref().map(tracing::Span::enter);
+
+        let start = std::time::Instant::now();
+        let result = self.execute_impl(sql, stmt_id);
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+
+        match &result {
+            Ok(_) => {
+                tracing::info!(fingerprint = %sql::fingerprint(sql), "statement executed");
+                if elapsed_ms >= self.slow_query_warn_threshold_ms {
+                    tracing::warn!(duration_ms = elapsed_ms, "slow query");
+                }
+            }
+            Err(err) => match err.severity() {
+                Severity::Error => {
+                    tracing::warn!(sql_state = %err.sql_state(), %err, "statement failed");
+                }
+                Severity::Fatal | Severity::Panic => {
+                    tracing::error!(sql_state = %err.sql_state(), %err, "statement failed");
+                }
+            },
+        }
+        result
     }
 
-    fn execute_impl(&mut self, sql: &str) -> Result<ResultSet> {
+    #[tracing::instrument(skip_all, fields(stmt_id = stmt_id, statement_kind = tracing::field::Empty))]
+    fn execute_impl(&mut self, sql: &str, stmt_id: u64) -> Result<ResultSet> {
+        tracing::debug!(sql, "parsing statement");
         let tokens = Lexer::new(sql).tokenize().map_err(|err| syntax_error(&err, sql))?;
         let statement = Parser::new(tokens).parse().map_err(|err| syntax_error(&err, sql))?;
+        tracing::Span::current().record("statement_kind", statement_kind(&statement));
 
         match &statement {
             Statement::Begin => return self.handle_begin(),
@@ -161,8 +214,12 @@ impl Database {
         if self.txn_slot.txn_id().is_some() {
             return Err(Error::NestedTransaction);
         }
-        let txn_id = self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
+        let isolation_level = IsolationLevel::ReadCommitted;
+        let txn_id = self.txn_manager.begin(&self.buffer_pool, isolation_level)?;
         self.txn_slot = TxnSlot::Active(txn_id);
+        self.txn_span = Some(
+            tracing::info_span!("transaction", txn_id = txn_id.0, isolation = ?isolation_level),
+        );
         Ok(ResultSet::rows_affected(0))
     }
 
@@ -172,12 +229,14 @@ impl Database {
             TxnSlot::Aborted(txn_id) => {
                 self.txn_manager.abort(txn_id, &self.buffer_pool)?;
                 self.txn_slot = TxnSlot::None;
+                self.txn_span = None;
                 self.maybe_checkpoint()?;
                 Ok(ResultSet::RolledBack)
             }
             TxnSlot::Active(txn_id) => {
                 self.txn_manager.commit(txn_id, &self.buffer_pool)?;
                 self.txn_slot = TxnSlot::None;
+                self.txn_span = None;
                 self.maybe_checkpoint()?;
                 Ok(ResultSet::rows_affected(0))
             }
@@ -197,6 +256,7 @@ impl Database {
         self.txn_manager.commit(reload_txn, &self.buffer_pool)?;
 
         self.txn_slot = TxnSlot::None;
+        self.txn_span = None;
         self.maybe_checkpoint()?;
         Ok(ResultSet::rows_affected(0))
     }
@@ -228,6 +288,7 @@ impl Database {
             }
             BoundStatement::Insert(insert) => {
                 let physical = to_physical(planner::plan(BoundStatement::Insert(insert))?);
+                tracing::debug!(plan = ?physical, "executing plan");
                 let rows = self.run(physical, txn_id)?;
                 let inserted = rows
                     .first()
@@ -242,6 +303,7 @@ impl Database {
             BoundStatement::Select(select) => {
                 let column_names = select.column_names.clone();
                 let physical = to_physical(planner::plan(BoundStatement::Select(select))?);
+                tracing::debug!(plan = ?physical, "executing plan");
                 let rows = self.run(physical, txn_id)?;
                 Ok(ResultSet::rows(column_names, rows))
             }
@@ -274,6 +336,24 @@ impl Drop for Database {
     fn drop(&mut self) {
         let _ = self.buffer_pool.flush_log_all();
         let _ = self.buffer_pool.flush_all();
+    }
+}
+
+fn new_connection_span() -> tracing::span::EnteredSpan {
+    let conn_id = NEXT_CONN_ID.fetch_add(1, Ordering::Relaxed);
+    let span = tracing::info_span!("connection", conn_id).entered();
+    tracing::info!("connection opened");
+    span
+}
+
+fn statement_kind(statement: &Statement) -> &'static str {
+    match statement {
+        Statement::Select(_) => "SELECT",
+        Statement::Insert(_) => "INSERT",
+        Statement::CreateTable(_) => "CREATE TABLE",
+        Statement::Begin => "BEGIN",
+        Statement::Commit => "COMMIT",
+        Statement::Rollback => "ROLLBACK",
     }
 }
 

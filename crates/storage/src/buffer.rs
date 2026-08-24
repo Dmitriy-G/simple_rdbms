@@ -83,6 +83,7 @@ impl BufferPool {
     }
 
     pub fn fetch_page(&self, page_id: PageId) -> Result<PageGuard<'_>, StorageError> {
+        tracing::trace!(page_id = page_id.0, "fetch_page");
         #[cfg(any(test, feature = "test-util"))]
         self.fetch_count.set(self.fetch_count.get() + 1);
         if let Some(&frame_id) = self.page_table.borrow().get(&page_id) {
@@ -173,11 +174,17 @@ impl BufferPool {
             return Ok(frame_id);
         }
 
-        let frame_id =
-            self.replacer.borrow_mut().evict().ok_or(StorageError::BufferPoolExhausted)?;
+        let Some(frame_id) = self.replacer.borrow_mut().evict() else {
+            tracing::warn!(
+                pool_size = self.frames.len(),
+                "buffer pool exhausted: every frame is pinned"
+            );
+            return Err(StorageError::BufferPoolExhausted);
+        };
 
         let idx = frame_id.0 as usize;
         if let Some(victim_page_id) = self.frame_page[idx].get() {
+            tracing::trace!(page_id = victim_page_id.0, frame_id = frame_id.0, "evict");
             if self.dirty_since_lsn[idx].get().is_some() {
                 self.flush_pages(&[(frame_id, victim_page_id)])?;
             }
@@ -232,6 +239,7 @@ impl BufferPool {
         if pages.is_empty() {
             return Ok(());
         }
+        tracing::trace!(pages = pages.len(), "flush_pages");
         debug_assert!(
             pages.len() <= self.dwb.borrow().capacity(),
             "flush batch of {} pages exceeds the double-write buffer's capacity",

@@ -21,12 +21,14 @@ impl TransactionManager {
         Self { active: HashMap::new(), next_txn_id }
     }
 
+    #[tracing::instrument(skip_all, fields(txn_id = tracing::field::Empty, isolation = ?isolation_level))]
     pub fn begin(
         &mut self,
         pool: &BufferPool,
         isolation_level: IsolationLevel,
     ) -> Result<TxnId, TxnError> {
         let txn_id = TxnId(self.next_txn_id);
+        tracing::Span::current().record("txn_id", txn_id.0);
         debug_assert!(
             self.active.keys().all(|&active_id| txn_id > active_id),
             "begin assigned {txn_id:?}, which does not exceed every already-active id \
@@ -39,6 +41,7 @@ impl TransactionManager {
         Ok(txn_id)
     }
 
+    #[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]
     pub fn commit(&mut self, txn_id: TxnId, pool: &BufferPool) -> Result<(), TxnError> {
         self.active.get(&txn_id).ok_or(TxnError::UnknownTransaction(txn_id.0))?;
         let commit_lsn = pool.append_log(txn_id, LogRecordKind::Commit)?;
@@ -48,8 +51,10 @@ impl TransactionManager {
         Ok(())
     }
 
+    #[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]
     pub fn abort(&mut self, txn_id: TxnId, pool: &BufferPool) -> Result<(), TxnError> {
         self.active.get(&txn_id).ok_or(TxnError::UnknownTransaction(txn_id.0))?;
+        tracing::warn!("transaction abort");
         if let Some(last_lsn) = pool.last_lsn(txn_id) {
             recovery::undo_transaction(pool, txn_id, last_lsn)?;
         }

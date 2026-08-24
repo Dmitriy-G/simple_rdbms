@@ -22,23 +22,31 @@ transaction had already written.
   could even make a brand new, never-committed transaction look already
   committed.
 - `TransactionManager::begin(&mut self, pool, isolation_level) -> Result<TxnId, TxnError>` -
-  begins a new transaction at the given isolation level: assigns it the
-  next id, logs a `Begin` record, and tracks it as active. Returns its id.
-  A debug assertion checks the freshly assigned id exceeds every already-
-  active id, catching an id counter that was not seeded past every id the
-  log has ever used.
+  `#[tracing::instrument(skip_all, fields(txn_id, isolation = ?isolation_level))]`,
+  recording `txn_id` once it's assigned (it isn't known until inside the
+  function body, so the field starts `Empty` and is filled via
+  `Span::current().record`). Begins a new transaction at the given
+  isolation level: assigns it the next id, logs a `Begin` record, and
+  tracks it as active. Returns its id. A debug assertion checks the
+  freshly assigned id exceeds every already-active id, catching an id
+  counter that was not seeded past every id the log has ever used.
 - `TransactionManager::commit(&mut self, txn_id, pool) -> Result<(), TxnError>` -
-  commits `txn_id`: logs a `Commit` record and force-flushes the log up to
-  it (so an acknowledged commit can never be lost to a crash), logs `End`,
-  and removes it from the active set.
+  `#[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]`. Commits
+  `txn_id`: logs a `Commit` record and force-flushes the log up to it (so
+  an acknowledged commit can never be lost to a crash), logs `End`, and
+  removes it from the active set.
 - `TransactionManager::abort(&mut self, txn_id, pool) -> Result<(), TxnError>` -
-  aborts `txn_id`: undoes every write it made (via
-  `storage::recovery::undo_transaction`, the same routine crash recovery's
-  own Undo pass uses), then removes it from the active set. The undo chain
-  starts from `pool.last_lsn(txn_id)` — the log's own record of this
-  transaction's most recent append — rather than any value cached at
-  `begin` time, since writes made through `PageGuard::write` append
-  directly to the log without going back through this manager.
+  `#[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]`, and emits
+  a `warn!` as soon as `txn_id` is confirmed active - every abort, crash
+  recovery's own Undo pass aside, is an operator-relevant event by
+  definition (see CLAUDE.md's logging section). Aborts `txn_id`: undoes
+  every write it made (via `storage::recovery::undo_transaction`, the
+  same routine crash recovery's own Undo pass uses), then removes it from
+  the active set. The undo chain starts from `pool.last_lsn(txn_id)` — the
+  log's own record of this transaction's most recent append — rather than
+  any value cached at `begin` time, since writes made through
+  `PageGuard::write` append directly to the log without going back
+  through this manager.
 - `TransactionManager::get(&self, txn_id) -> Result<&Transaction, TxnError>` -
   looks up the current state of an active transaction.
 - `TransactionManager::active_snapshot(&self, pool) -> Vec<(TxnId, Lsn)>` -

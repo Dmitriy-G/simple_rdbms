@@ -7,6 +7,7 @@ pub struct DbConfig {
     pub buffer_pool_size: usize,
     pub checkpoint_byte_threshold: u64,
     pub dwb_capacity: usize,
+    pub slow_query_warn_threshold_ms: u64,
 }
 
 impl DbConfig {
@@ -18,6 +19,8 @@ impl DbConfig {
 
     pub const DEFAULT_DWB_CAPACITY: usize = 64;
 
+    pub const DEFAULT_SLOW_QUERY_WARN_THRESHOLD_MS: u64 = 100;
+
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
@@ -25,6 +28,7 @@ impl DbConfig {
             buffer_pool_size: Self::DEFAULT_BUFFER_POOL_SIZE,
             checkpoint_byte_threshold: Self::DEFAULT_CHECKPOINT_BYTE_THRESHOLD,
             dwb_capacity: Self::DEFAULT_DWB_CAPACITY,
+            slow_query_warn_threshold_ms: Self::DEFAULT_SLOW_QUERY_WARN_THRESHOLD_MS,
         }
     }
 }

@@ -18,11 +18,15 @@ resolved rather than reaching back up to ask for them.
   scan. `dwb_capacity` is the number of page-image slots the double-write
   buffer's `<db_path>.dwb` file holds, capping how many dirty pages
   `BufferPool::flush_all` can cover in a single batch before it must split
-  into more than one.
+  into more than one. `slow_query_warn_threshold_ms` is how long a
+  statement may run before `Database::execute` logs it at `warn` instead
+  of the ordinary `debug` per-statement line - see CLAUDE.md's logging
+  section.
 - `DbConfig::DEFAULT_PAGE_SIZE` - 4 KiB, matching common OS page sizes.
 - `DbConfig::DEFAULT_BUFFER_POOL_SIZE` - 64 frames.
 - `DbConfig::DEFAULT_CHECKPOINT_BYTE_THRESHOLD` - 4 MiB of log growth.
 - `DbConfig::DEFAULT_DWB_CAPACITY` - 64 page-image slots.
+- `DbConfig::DEFAULT_SLOW_QUERY_WARN_THRESHOLD_MS` - 100ms.
 - `DbConfig::new(db_path) -> Self` - builds a config pointing at `db_path`
   with every other field left at its default.
 
