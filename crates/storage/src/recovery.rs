@@ -50,6 +50,7 @@ pub fn recover_double_write(
     }
 
     if !restored_pages.is_empty() {
+        metrics::counter!("dwb_pages_restored_total").increment(restored_pages.len() as u64);
         tracing::warn!(
             pages = restored_pages.len(),
             "double-write buffer restored torn pages during recovery - the last shutdown was \
@@ -156,12 +157,15 @@ pub fn recover(pool: &BufferPool) -> Result<Option<TxnId>, StorageError> {
     pool.sync()?;
 
     let highest_txn_id = pool.max_txn_id();
+    let elapsed = recovery_start.elapsed();
+    metrics::histogram!("recovery_duration_seconds").record(elapsed.as_secs_f64());
+    metrics::counter!("recovery_losers_total").increment(loser_count as u64);
     tracing::info!(
         winners,
         losers = loser_count,
         records_scanned,
         redo_replayed,
-        duration_ms = recovery_start.elapsed().as_millis() as u64,
+        duration_ms = elapsed.as_millis() as u64,
         "recovery complete"
     );
     Ok(highest_txn_id)

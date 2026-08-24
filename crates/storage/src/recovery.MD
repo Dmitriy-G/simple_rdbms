@@ -53,7 +53,10 @@ calls it directly rather than reimplementing undo.
   place for a later attempt to retry. Logs a `warn!` naming how many pages
   it actually restored, if any - a non-empty restore means the previous
   shutdown was unclean, which an operator watching logs wants to know even
-  though this function itself recovered from it cleanly.
+  though this function itself recovered from it cleanly - and increments
+  `dwb_pages_restored_total` (a `metrics` counter - see
+  `docs/ROADMAP.md`'s M13 entry) by that same count, so "was the last
+  shutdown unclean" is answerable from a dashboard, not just a log line.
 - `recover(pool) -> Result<Option<TxnId>, StorageError>` -
   `#[tracing::instrument(skip_all)]`. Runs Analysis,
   Redo, and Undo against `pool`'s write-ahead log, leaving every page
@@ -102,7 +105,11 @@ calls it directly rather than reimplementing undo.
   count), `redo_replayed` (how many Redo actually applied, as opposed to
   skipped because the page's `page_lsn` already covered them), and
   `duration_ms` - the line an operator reads after a crash to know what
-  recovery actually did, not just that it finished.
+  recovery actually did, not just that it finished. Also records the same
+  duration into the `recovery_duration_seconds` histogram and adds
+  `loser_count` to `recovery_losers_total` (both `metrics` instruments,
+  per `docs/ROADMAP.md`'s M13 entry) - the dashboard-queryable form of the
+  same two facts.
 - `undo_transaction(pool, txn_id, from) -> Result<(), StorageError>` -
   undoes `txn_id`'s writes, walking its log chain backward starting from
   `from` (that transaction's most recent LSN). For each `Update` found,

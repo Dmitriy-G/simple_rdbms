@@ -102,6 +102,7 @@ impl DiskManager {
             return Err(StorageError::PageNotFound(page_id.0));
         }
         self.device.read_at(offset, page.data_mut())?;
+        metrics::counter!("disk_pages_read_total").increment(1);
         Ok(())
     }
 
@@ -120,6 +121,7 @@ impl DiskManager {
         let mut scratch = *page.data();
         page::stamp_checksum(&mut scratch);
         self.device.write_at(offset, &scratch)?;
+        metrics::counter!("disk_pages_written_total").increment(1);
         Ok(())
     }
 

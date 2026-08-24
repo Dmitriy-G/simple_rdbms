@@ -34,7 +34,8 @@ transaction had already written.
   `#[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]`. Commits
   `txn_id`: logs a `Commit` record and force-flushes the log up to it (so
   an acknowledged commit can never be lost to a crash), logs `End`, and
-  removes it from the active set.
+  removes it from the active set, then increments `transactions_committed_total`
+  (a `metrics` counter - see `docs/ROADMAP.md`'s M13 entry).
 - `TransactionManager::abort(&mut self, txn_id, pool) -> Result<(), TxnError>` -
   `#[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]`, and emits
   a `warn!` as soon as `txn_id` is confirmed active - every abort, crash
@@ -46,7 +47,8 @@ transaction had already written.
   log's own record of this transaction's most recent append — rather than
   any value cached at `begin` time, since writes made through
   `PageGuard::write` append directly to the log without going back
-  through this manager.
+  through this manager. Increments `transactions_aborted_total` once the
+  undo chain (and the log records it wrote) is complete.
 - `TransactionManager::get(&self, txn_id) -> Result<&Transaction, TxnError>` -
   looks up the current state of an active transaction.
 - `TransactionManager::active_snapshot(&self, pool) -> Vec<(TxnId, Lsn)>` -

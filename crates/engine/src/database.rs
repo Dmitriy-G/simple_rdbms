@@ -181,15 +181,22 @@ impl Database {
         tracing::debug!(sql, "parsing statement");
         let tokens = Lexer::new(sql).tokenize().map_err(|err| syntax_error(&err, sql))?;
         let statement = Parser::new(tokens).parse().map_err(|err| syntax_error(&err, sql))?;
-        tracing::Span::current().record("statement_kind", statement_kind(&statement));
+        let kind = statement_kind(&statement);
+        tracing::Span::current().record("statement_kind", kind);
 
-        match &statement {
-            Statement::Begin => return self.handle_begin(),
-            Statement::Commit => return self.handle_commit(),
-            Statement::Rollback => return self.handle_rollback(),
-            _ => {}
-        }
+        let query_start = std::time::Instant::now();
+        let result = match statement {
+            Statement::Begin => self.handle_begin(),
+            Statement::Commit => self.handle_commit(),
+            Statement::Rollback => self.handle_rollback(),
+            other => self.execute_non_control_statement(other),
+        };
+        metrics::histogram!("query_duration_seconds", "statement_kind" => kind)
+            .record(query_start.elapsed().as_secs_f64());
+        result
+    }
 
+    fn execute_non_control_statement(&mut self, statement: Statement) -> Result<ResultSet> {
         let (txn_id, autocommit) = self.txn_for_statement()?;
         let bound = Binder::new(&self.catalog).bind(statement).map_err(Error::from);
         let result = bound.and_then(|bound| self.execute_bound(bound, txn_id));

@@ -1,0 +1,16 @@
+services:
+  simple_rdbms:
+    build: .
+    image: simple_rdbms_server:latest
+    ports:
+      # Metrics/health, deliberately separate from any future SQL port -
+      # see crates/server/src/main.MD.
+      - "9090:9090"
+    volumes:
+      - simple_rdbms_data:/data
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+    stop_grace_period: 10s
+
+volumes:
+  simple_rdbms_data:

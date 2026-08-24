@@ -69,7 +69,10 @@ touching the file directly.
   `recovery::recover_double_write`, which must inspect a possibly-torn
   real page's bytes without that inspection itself turning into a
   `ChecksumMismatch` error - the whole point of that pass is to decide
-  what to do about a torn page, not to fail on one.
+  what to do about a torn page, not to fail on one. Increments
+  `disk_pages_read_total` (a `metrics` counter - see `docs/ROADMAP.md`'s
+  M13 entry) here rather than in `read_page`, so every real disk read is
+  counted once regardless of which of the two callers made it.
 - `DiskManager::read_page(&mut self, page_id, page)` - reads the page at
   `page_id` from disk into `page`, verifying its CRC-32 checksum unless
   the page is entirely zero. Skipping verification for an all-zero page is
@@ -87,7 +90,8 @@ touching the file directly.
   checksum is derived data, not page content: stamping it into the
   resident frame would be an unlogged mutation of a page the buffer pool
   believes is unchanged, exactly the invariant the write-ahead rule exists
-  to prevent.
+  to prevent. Increments `disk_pages_written_total` once the write
+  succeeds.
 - `DiskManager::allocate_page(&mut self) -> Result<PageId, StorageError>` -
   allocates a new page id by extending the file, without writing any
   tuple data to it yet. `set_len` is the only durable act of allocation -

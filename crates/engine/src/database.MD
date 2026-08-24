@@ -124,19 +124,29 @@ those lower layers needing to know a connection or a transaction exists.
   starts empty and is filled via `Span::current().record` once the
   `Statement` exists. Logs `debug!` with the full, unredacted `sql` before
   parsing - the one place this crate is allowed to do that (see CLAUDE.md).
-  Parses, binds, plans, and executes one SQL statement, returning its
-  result set. `BEGIN`/`START TRANSACTION`, `COMMIT`, and `ROLLBACK` are
-  handled directly here, before binding - they reference no tables or
-  columns, so binding is meaningless for them. Every other statement asks
-  `txn_for_statement` for the transaction to run under (which rejects it
-  outright if `txn_slot` is `Aborted`), then binds and executes it as one
-  fallible step. On autocommit failure the statement's just-begun
-  transaction is undone rather than left dangling for a future crash
-  recovery to clean up (if the abort itself fails there's nothing more
-  useful to report than the original error, so that failure is
-  swallowed); on failure *inside an explicit transaction*, `txn_slot`
-  becomes `Aborted` instead - the transaction is not undone yet, matching
-  the Postgres semantics `common::Error::TransactionAborted` documents.
+  Parses the statement, then dispatches: `BEGIN`/`START TRANSACTION`,
+  `COMMIT`, and `ROLLBACK` go straight to their `handle_*` method (they
+  reference no tables or columns, so binding is meaningless for them);
+  everything else goes to `execute_non_control_statement`. Times just the
+  dispatch call (not parsing) and records it into the
+  `query_duration_seconds` histogram labeled `statement_kind` - never by
+  statement text, which would give Prometheus unbounded label cardinality
+  (see `docs/ROADMAP.md`'s M13 entry) - regardless of whether the
+  statement succeeded or failed.
+- `Database::execute_non_control_statement(&mut self, statement) -> Result<ResultSet>`
+  - private. The part of the old single-function dispatch that isn't
+  `BEGIN`/`COMMIT`/`ROLLBACK`, split out so `execute_impl` can time
+  *only* this call for `query_duration_seconds` without also timing
+  parsing. Asks `txn_for_statement` for the transaction to run under
+  (which rejects it outright if `txn_slot` is `Aborted`), then binds and
+  executes the statement as one fallible step. On autocommit failure the
+  statement's just-begun transaction is undone rather than left dangling
+  for a future crash recovery to clean up (if the abort itself fails
+  there's nothing more useful to report than the original error, so that
+  failure is swallowed); on failure *inside an explicit transaction*,
+  `txn_slot` becomes `Aborted` instead - the transaction is not undone
+  yet, matching the Postgres semantics `common::Error::TransactionAborted`
+  documents.
 - `Database::handle_begin(&mut self) -> Result<ResultSet>` - private.
   `BEGIN`/`START TRANSACTION`: opens an explicit transaction and creates
   its `txn_span` (`txn_id`, `isolation` fields) - a plain `Span`, not

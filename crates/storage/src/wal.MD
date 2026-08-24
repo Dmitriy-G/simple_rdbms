@@ -129,7 +129,10 @@ that never committed - both driven by `storage::recovery`.
   to force them to disk. Emits a `trace!` naming the assigned `lsn` and
   `txn_id` after appending - built entirely from values already computed
   for the return value, so the hot path pays nothing extra when this
-  level is disabled.
+  level is disabled. Increments `wal_bytes_written_total` (a `metrics`
+  counter - see `docs/ROADMAP.md`'s M13 entry) by the encoded record's
+  byte length; despite the name this counts bytes buffered, not yet
+  necessarily fsync'd - `flush`'s own counter is what tracks durability.
 - `LogManager::flush(&mut self, up_to)` - forces every buffered record up
   to and including the one starting at `up_to` to disk. Idempotent:
   returns immediately if that record is already durable. The check is
@@ -140,7 +143,11 @@ that never committed - both driven by `storage::recovery`.
   required. `durable_lsn` only ever advances in whole-record increments
   (every flush durable-izes the entire buffer at once), so `durable_lsn >
   up_to.0` correctly implies the *whole* record at `up_to` is durable, not
-  just its first byte.
+  just its first byte. Times the `sync_all` call specifically (not the
+  preceding buffered `write_at`), incrementing `wal_fsync_total` and
+  recording `wal_fsync_duration_seconds` - per `docs/ROADMAP.md`'s M13
+  entry, "commit latency lives here," since `TransactionManager::commit`
+  calls this synchronously before acknowledging a commit.
 - `LogManager::flush_all(&mut self)` - forces every record appended so
   far to disk, regardless of what any individual page needs. Used at
   clean shutdown.

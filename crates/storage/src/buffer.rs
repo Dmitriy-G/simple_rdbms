@@ -87,10 +87,12 @@ impl BufferPool {
         #[cfg(any(test, feature = "test-util"))]
         self.fetch_count.set(self.fetch_count.get() + 1);
         if let Some(&frame_id) = self.page_table.borrow().get(&page_id) {
+            metrics::counter!("buffer_pool_hits_total").increment(1);
             self.pin(frame_id);
             return Ok(PageGuard { page_id, frame_id, pool: self });
         }
 
+        metrics::counter!("buffer_pool_misses_total").increment(1);
         let frame_id = self.allocate_frame()?;
         let mut page = Page::new(page_id);
         self.disk_manager.borrow_mut().read_page(page_id, &mut page)?;
@@ -185,6 +187,7 @@ impl BufferPool {
         let idx = frame_id.0 as usize;
         if let Some(victim_page_id) = self.frame_page[idx].get() {
             tracing::trace!(page_id = victim_page_id.0, frame_id = frame_id.0, "evict");
+            metrics::counter!("buffer_pool_evictions_total").increment(1);
             if self.dirty_since_lsn[idx].get().is_some() {
                 self.flush_pages(&[(frame_id, victim_page_id)])?;
             }
@@ -216,6 +219,7 @@ impl BufferPool {
     fn pin(&self, frame_id: FrameId) {
         let idx = frame_id.0 as usize;
         self.pin_counts[idx].set(self.pin_counts[idx].get() + 1);
+        metrics::gauge!("buffer_pool_pinned_frames").increment(1.0);
         let mut replacer = self.replacer.borrow_mut();
         replacer.record_access(frame_id);
         replacer.set_evictable(frame_id, false);
@@ -230,6 +234,7 @@ impl BufferPool {
         }
         let remaining = count - 1;
         self.pin_counts[idx].set(remaining);
+        metrics::gauge!("buffer_pool_pinned_frames").decrement(1.0);
         if remaining == 0 {
             self.replacer.borrow_mut().set_evictable(frame_id, true);
         }
@@ -274,6 +279,7 @@ impl BufferPool {
         }
 
         self.dwb.borrow_mut().write_batch(&snapshot)?;
+        metrics::counter!("dwb_batches_written_total").increment(1);
 
         {
             let mut disk = self.disk_manager.borrow_mut();

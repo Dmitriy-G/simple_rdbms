@@ -1,5 +1,5 @@
 [package]
-name = "txn"
+name = "server"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,12 +8,20 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "simple_rdbms_server"
+path = "src/main.rs"
+
 [dependencies]
 common = { workspace = true }
-storage = { workspace = true }
-thiserror = { workspace = true }
+engine = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+ctrlc = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

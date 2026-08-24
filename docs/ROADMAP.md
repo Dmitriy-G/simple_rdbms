@@ -126,3 +126,45 @@ expensive fast.
 **Solution:** additional join algorithms and a cost-based optimizer that
 chooses among them (and among access paths) using table and index
 statistics.
+
+## M13 — Answering "is this database healthy" from outside the process
+**Problem:** everything through M12 makes the engine correct and durable,
+but correctness isn't observable from outside the process — an operator
+running this in a container has no way to ask "is the buffer pool
+thrashing," "did the last shutdown leave torn pages behind," or "has
+recovery finished yet" without reading structured logs after the fact.
+Docker and Kubernetes also need a machine-checkable answer to a narrower
+but load-bearing question: can this container take traffic right now?
+ARIES recovery on a large log can take minutes, during which the process
+is alive but must not be routed statements yet - a single combined
+health check would either have the orchestrator kill it mid-recovery or
+route work into a database that can't serve it.
+**Solution:** a `metrics`-facade counter/gauge/histogram set covering the
+buffer pool, disk, WAL, double-write buffer, checkpoints, transactions,
+and recovery, exposed as Prometheus text on its own port; separate
+liveness ("the process is up") and readiness ("recovery has completed")
+HTTP endpoints, with an explicit `Starting` state between them; a new
+headless `server` binary (`crates/server`) built for exactly this,
+distinct from the interactive `cli` REPL; and container packaging
+(`Dockerfile`, `docker-compose.yml`) with a non-root user, the database
+file on a named volume, and `SIGTERM` handled as a graceful checkpoint
+-and-close instead of every restart paying for a full crash recovery.
+
+## M14 — Speaking SQL over the network
+**Problem:** every milestone through M13 still requires an in-process
+`Database` handle - `cli`'s REPL and `server`'s metrics/health endpoints
+both open the database directly in the same process that uses it. Nothing
+external can submit a statement over a network connection, which is what
+"database server" ordinarily means and what M13's `server` binary is a
+skeleton for.
+**Solution:** a PostgreSQL wire protocol frontend via `pgwire`, so
+existing Postgres clients and drivers work against this engine without a
+bespoke client library. Placed explicitly after M10 (concurrent
+transactions): a wire protocol means multiple network connections
+submitting statements at the same time, and M8's single-threaded,
+serially-executed atomicity is not the same guarantee as real isolation
+under concurrent access - M10's lock manager and MVCC are what make
+"transaction" mean the same thing to a wire-protocol client that it means
+to a Postgres server. See `docs/adr/0007-postgres-wire-protocol.md` for
+why Postgres's protocol was chosen over Arrow Flight SQL or a bespoke
+driver.

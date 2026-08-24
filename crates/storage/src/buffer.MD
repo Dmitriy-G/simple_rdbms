@@ -52,7 +52,11 @@ comment in this file cites.
   every call - this is the hottest path in the crate, so the event is
   built from the already-owned `page_id.0` with no `format!`/allocation
   outside the macro, cheap enough to leave enabled even though it's
-  almost never turned on.
+  almost never turned on. Also increments `buffer_pool_hits_total` or
+  `buffer_pool_misses_total` (`metrics` crate counters - see
+  `docs/ROADMAP.md`'s M13 entry) depending on which branch is taken - the
+  hit ratio these two produce is, per that entry, "the single most
+  diagnostic number in a database."
 - `BufferPool::new_page(&self, txn_id) -> Result<(PageId, PageGuard<'_>), StorageError>` -
   allocates a brand-new page via the disk manager and pins it in the
   pool, returning a guard to it. Logs an `AllocPage` record on behalf of
@@ -92,7 +96,8 @@ comment in this file cites.
   private. Finds a frame to hold a newly-fetched or newly-allocated page:
   reuses a never-used frame if one is free, otherwise asks the replacer
   for an evictable victim, flushing it first if dirty. Emits a `trace!`
-  naming the evicted page when a victim is chosen, and a `warn!` (every
+  naming the evicted page when a victim is chosen (incrementing
+  `buffer_pool_evictions_total` alongside it), and a `warn!` (every
   frame pinned - eviction pressure an operator should know about) right
   before returning `StorageError::BufferPoolExhausted`.
 - `BufferPool::install(&self, frame_id, page_id, page, dirty_since_lsn)` -
@@ -104,9 +109,14 @@ comment in this file cites.
   or `None` for a page freshly read from disk.
 - `BufferPool::pin(&self, frame_id)`/`unpin_frame(&self, frame_id)` -
   private. Increment/decrement a frame's pin count and update the
-  replacer's evictability accordingly.
+  replacer's evictability accordingly, moving the `buffer_pool_pinned_frames`
+  gauge the same direction.
 - `BufferPool::flush_pages(&self, pages) -> Result<(), StorageError>` -
-  private. Emits a `trace!` naming the batch size before doing anything
+  private. Emits a `trace!` naming the batch size before doing anything,
+  and increments `dwb_batches_written_total` once the batch's double-write
+  copy is durable (a nonzero rate here, per `docs/ROADMAP.md`'s M13 entry,
+  is expected steady-state traffic, unlike `dwb_pages_restored_total` -
+  see `recovery.MD` - which should be zero outside a crash).
   else. Flushes a batch of currently-dirty, resident pages to disk
   through the double-write buffer. Every entry in `pages` must already be
   dirty and safe from concurrent reassignment; this does not re-check

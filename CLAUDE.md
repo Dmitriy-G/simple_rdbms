@@ -50,6 +50,7 @@ planner  -> common, types, catalog, sql
 executor -> common, types, catalog, storage, txn, planner
 engine   -> all of the above
 cli      -> engine, common
+server   -> engine, common
 ```
 
 No cycles, no back-edges, and no edge beyond this list. This is enforced

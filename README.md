@@ -46,7 +46,8 @@ cargo test --workspace
 | [`planner`](crates/planner/README.md) | Binder, logical/physical plans, optimizer rule trait. |
 | [`executor`](crates/executor/README.md) | Volcano-style pull operators over a physical plan. |
 | [`engine`](crates/engine/README.md) | `Database` facade: wires every layer together behind `execute(sql)`. |
-| [`cli`](crates/cli/README.md) | The only binary: a REPL over `engine`. |
+| [`cli`](crates/cli/README.md) | The interactive binary: a REPL over `engine`. |
+| [`server`](crates/server/README.md) | The headless binary: metrics, health/readiness, and graceful shutdown for a container. |
 
 See `docs/diagrams/crate-dependencies.mmd` for the dependency graph, and
 `docs/adr/0002-crate-splitting.md` for why the layers are crates rather
@@ -95,6 +96,23 @@ Alice and Bob on the first clause, and Carol on the second — even though
 Carol's `age` is `NULL` and `age > 20 AND age < 40` evaluates to `NULL`
 (not `false`) for her row, three-valued `OR` still resolves to `true`
 because the other operand is definitely `true`.
+
+## Running in a container
+
+`crates/server` is a separate, headless binary from `cli` — no REPL, no
+stdin — built for Docker/Kubernetes: Prometheus metrics and liveness/
+readiness endpoints on their own port, a graceful `SIGTERM` shutdown
+(checkpoint, flush, close), and the database file on a named volume so
+`docker rm` doesn't take the data with it.
+
+```sh
+docker compose up --build
+curl http://localhost:9090/health/ready
+curl http://localhost:9090/metrics
+```
+
+See `crates/server/README.md`, `Dockerfile`, `docker-compose.yml`, and
+`docs/ROADMAP.md`'s M13 entry.
 
 ## Docs
 

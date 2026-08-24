@@ -303,6 +303,7 @@ impl LogManager {
         self.buffer.extend_from_slice(&bytes);
         self.last_lsn_by_txn.insert(record.txn_id, lsn.0);
         tracing::trace!(lsn = lsn.0, txn_id = record.txn_id.0, "append");
+        metrics::counter!("wal_bytes_written_total").increment(bytes.len() as u64);
         Ok(lsn)
     }
 
@@ -312,7 +313,11 @@ impl LogManager {
         }
         let offset = self.device.size()?;
         self.device.write_at(offset, &self.buffer)?;
+        let fsync_start = std::time::Instant::now();
         self.device.sync_all()?;
+        metrics::counter!("wal_fsync_total").increment(1);
+        metrics::histogram!("wal_fsync_duration_seconds")
+            .record(fsync_start.elapsed().as_secs_f64());
         self.buffer.clear();
         self.durable_lsn = self.next_lsn;
         Ok(())

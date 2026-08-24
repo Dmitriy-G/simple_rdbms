@@ -48,6 +48,7 @@ impl TransactionManager {
         pool.flush_log(commit_lsn)?;
         pool.append_log(txn_id, LogRecordKind::End)?;
         self.active.remove(&txn_id);
+        metrics::counter!("transactions_committed_total").increment(1);
         Ok(())
     }
 
@@ -59,6 +60,7 @@ impl TransactionManager {
             recovery::undo_transaction(pool, txn_id, last_lsn)?;
         }
         self.active.remove(&txn_id);
+        metrics::counter!("transactions_aborted_total").increment(1);
         Ok(())
     }
 
