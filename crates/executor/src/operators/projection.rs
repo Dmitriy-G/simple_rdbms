@@ -6,15 +6,12 @@ use crate::error::ExecutorError;
 use crate::executor::Executor;
 use crate::expression::evaluate;
 
-/// Pulls tuples from `child` and evaluates `expressions` against each one,
-/// producing a tuple of the results in place of the input row.
 pub struct ProjectionExecutor {
     expressions: Vec<BoundExpr>,
     child: Box<dyn Executor>,
 }
 
 impl ProjectionExecutor {
-    /// Creates a projection of `expressions` over `child`'s output.
     pub fn new(expressions: Vec<BoundExpr>, child: Box<dyn Executor>) -> Self {
         Self { expressions, child }
     }

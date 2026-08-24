@@ -5,10 +5,6 @@ use crate::context::ExecutorContext;
 use crate::error::ExecutorError;
 use crate::executor::Executor;
 
-/// Joins `left` and `right` by, for each row of `left`, rescanning all of
-/// `right` and keeping combined rows where `predicate` holds. The simplest
-/// join algorithm and the only one this operator set supports; a
-/// cost-based optimizer choosing between join algorithms is future work.
 pub struct NestedLoopJoinExecutor {
     #[allow(dead_code)]
     left: Box<dyn Executor>,
@@ -19,8 +15,6 @@ pub struct NestedLoopJoinExecutor {
 }
 
 impl NestedLoopJoinExecutor {
-    /// Creates a nested-loop join of `left` (outer) and `right` (inner) on
-    /// `predicate`.
     pub fn new(left: Box<dyn Executor>, right: Box<dyn Executor>, predicate: BoundExpr) -> Self {
         Self { left, right, predicate }
     }

@@ -5,15 +5,6 @@ use types::{Tuple, Value};
 
 use crate::error::ExecutorError;
 
-/// Evaluates a bound expression against `tuple`, producing the resulting
-/// runtime value. Column references are resolved by ordinal position
-/// against `tuple`'s schema-ordered values.
-///
-/// Follows SQL three-valued logic throughout: a comparison with a `NULL`
-/// operand yields `Value::Null` rather than `true`/`false`, and `AND`/`OR`
-/// only short-circuit to a definite result when one operand is definite
-/// enough to decide the outcome regardless of the other (`NULL AND false`
-/// is `false`, `NULL OR true` is `true`), otherwise they too yield `NULL`.
 pub fn evaluate(expr: &BoundExpr, tuple: &Tuple) -> Result<Value, ExecutorError> {
     match expr {
         BoundExpr::Literal(value) => Ok(value.clone()),
@@ -114,9 +105,6 @@ fn matches_comparison(op: BinaryOperator, ordering: Ordering) -> bool {
     }
 }
 
-/// SQL three-valued `AND`: `false` on either side is decisive regardless of
-/// the other operand; only when neither side is definitely `false` does a
-/// `NULL` operand make the result `NULL` instead of `true`.
 fn three_valued_and(left: Value, right: Value) -> Result<Value, ExecutorError> {
     match (as_bool(left)?, as_bool(right)?) {
         (Some(false), _) | (_, Some(false)) => Ok(Value::Boolean(false)),
@@ -125,9 +113,6 @@ fn three_valued_and(left: Value, right: Value) -> Result<Value, ExecutorError> {
     }
 }
 
-/// SQL three-valued `OR`: `true` on either side is decisive regardless of
-/// the other operand; only when neither side is definitely `true` does a
-/// `NULL` operand make the result `NULL` instead of `false`.
 fn three_valued_or(left: Value, right: Value) -> Result<Value, ExecutorError> {
     match (as_bool(left)?, as_bool(right)?) {
         (Some(true), _) | (_, Some(true)) => Ok(Value::Boolean(true)),

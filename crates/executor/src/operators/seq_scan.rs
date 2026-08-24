@@ -6,15 +6,6 @@ use crate::context::ExecutorContext;
 use crate::error::ExecutorError;
 use crate::executor::Executor;
 
-/// Reads every tuple of a table's heap file, in physical storage order.
-/// The leaf operator for any plan that reads a table without an index.
-///
-/// Holds only a cursor (`current_page`, `next_slot`) rather than a
-/// materialized copy of the table: each `next` fetches the current page,
-/// reads the next live slot on it, decodes one tuple, and drops the page's
-/// guard before returning, following `next_page_id` once a page is
-/// exhausted. Memory use is therefore independent of table size, and no
-/// page stays pinned across a `next` call.
 pub struct SeqScanExecutor {
     table_id: TableId,
     column_types: Vec<DataType>,
@@ -23,7 +14,6 @@ pub struct SeqScanExecutor {
 }
 
 impl SeqScanExecutor {
-    /// Creates a scan over `table_id`.
     pub fn new(table_id: TableId) -> Self {
         Self { table_id, column_types: Vec::new(), current_page: None, next_slot: 0 }
     }

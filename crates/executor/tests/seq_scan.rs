@@ -1,9 +1,3 @@
-//! `SeqScanExecutor`'s lazy, page-at-a-time cursor: tuples come back in
-//! storage order without materializing the whole table, laziness is
-//! observable (pulling one tuple never fetches pages beyond the first),
-//! and two scans interleaved over the same table each still yield the
-//! full, correct result — exercising the buffer pool's sole-owner pin
-//! protocol alongside the cursor.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use catalog::{Catalog, Column, Schema};
@@ -34,9 +28,6 @@ fn open_pool(pool_size: usize) -> (BufferPool, tempfile::TempDir) {
     (BufferPool::new(disk, dwb, log, pool_size, replacer), dir)
 }
 
-/// Creates a single-column (`n BIGINT`) table and inserts `n` in `0..count`,
-/// enough rows to span several pages against a small pool. Returns the
-/// table's id and the values expected back, in scan order.
 fn seed_table(pool: &BufferPool, catalog: &mut Catalog, count: i64) -> (TableId, Vec<i64>) {
     let schema = Schema::new(vec![Column::new("n", DataType::BigInt, false)]);
     let info = catalog.create_table(pool, TXN, "t", schema).expect("create table");
@@ -82,8 +73,6 @@ fn scan_spanning_pages_preserves_insertion_order() {
 fn pulling_one_tuple_never_fetches_pages_beyond_the_first() {
     let (pool, _dir) = open_pool(4);
     let mut catalog = Catalog::new();
-    // Comfortably more than fit on one page, so a full scan would touch
-    // several pages if it weren't lazy.
     let (table_id, _expected) = seed_table(&pool, &mut catalog, 800);
 
     let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted);

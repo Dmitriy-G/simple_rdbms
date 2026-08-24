@@ -8,11 +8,6 @@ use crate::error::ExecutorError;
 use crate::executor::Executor;
 use crate::expression::evaluate;
 
-/// Inserts `rows` into a table's heap file. Yields exactly one output row —
-/// a single `BigInt` column holding the number of rows inserted — then
-/// `None`. There is no plan shape for `INSERT ... SELECT` in this grammar,
-/// so unlike the other operators this is a leaf: `rows` are literal value
-/// expressions from the `VALUES` clause, not pulled from a child executor.
 pub struct InsertExecutor {
     table_id: TableId,
     rows: Vec<Vec<BoundExpr>>,
@@ -21,8 +16,6 @@ pub struct InsertExecutor {
 }
 
 impl InsertExecutor {
-    /// Creates an insert into `table_id` of `rows`, one `BoundExpr` per
-    /// column of the target table's schema, in schema order.
     pub fn new(table_id: TableId, rows: Vec<Vec<BoundExpr>>) -> Self {
         Self { table_id, rows, first_page_id: None, done: false }
     }
@@ -49,8 +42,6 @@ impl Executor for InsertExecutor {
         })?;
         let mut heap = TableHeap::open(ctx.buffer_pool, first_page_id);
 
-        // Insert values reference no columns (the binder rejects any that
-        // do), so they evaluate against an empty tuple.
         let empty = Tuple::new(Vec::new());
         let mut count: i64 = 0;
         for row in &self.rows {

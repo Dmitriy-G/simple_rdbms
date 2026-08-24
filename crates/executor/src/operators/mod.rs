@@ -1,5 +1,3 @@
-//! Concrete `Executor` implementations, one per physical plan node kind.
-
 mod filter;
 mod insert;
 mod nested_loop_join;
