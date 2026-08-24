@@ -100,9 +100,26 @@ rather than moving: `// SAFETY:` comments on `unsafe` blocks (required by
 clippy's `undocumented_unsafe_blocks`) and `// TODO(Mx):` milestone
 markers. Every other `///`, `//!`, and ordinary `//` comment is disallowed.
 
-`scripts/check_docs.sh` enforces this in CI: missing `.MD` siblings,
-missing `.rs` siblings, a missing `## Key Components` heading, or a
-disallowed comment all fail the build.
+Every crate under `crates/` also carries a `crates/<crate>/README.md`
+(lowercase, distinct from the uppercase `.MD` module docs) with a fixed
+outline: a one/two-sentence role statement, then `## Architecture` (where
+the crate sits in the layered workspace and why), `## Key Components` (one
+bullet per module, linking to its `.MD`), `## Features` (what works today,
+what's deliberately stubbed, referencing `docs/ROADMAP.md` milestones by
+number), `## Dependencies` (workspace edges plus external crates and why),
+`## Configuration` (knobs and defaults, or a one-line "none"), and
+`## Testing` (where tests live and how to run just this crate). It is the
+outside view of the crate - why it exists, what it offers - while
+`src/lib.MD` documents the crate root module itself; the two must not
+duplicate content, only cross-link. A new crate ships with its README in
+the same commit that adds it, same as a new `.rs` file ships with its
+`.MD`.
+
+`scripts/check_docs.sh` enforces all of this in CI: missing `.MD`
+siblings, missing `.rs` siblings, a missing `## Key Components` or
+`## Usage Example` heading, an `.MD` file's title not matching its stem, a
+public item undocumented in its sibling `.MD`, a crate missing its
+`README.md`, or a disallowed comment all fail the build.
 
 ## Commit and branch conventions
 

@@ -9,6 +9,8 @@
 #   - every `pub fn`/`struct`/`enum`/`trait`/`const`/`type` name declared in
 #     a .rs file is mentioned somewhere in its sibling .MD, unless waived by
 #     a `<!-- check_docs: allow-undocumented NAME... -->` line in that .MD
+#   - every crates/*/Cargo.toml directory (i.e. every crate) has a
+#     crates/<crate>/README.md
 #   - no such .rs file has a `///` or `//!` doc comment, or a `//` comment
 #     that isn't `// SAFETY:` or `// TODO(`
 #
@@ -78,6 +80,11 @@ while IFS= read -r rs; do
         grep -q -F "$name" "$md" || fail "$rs: public item '$name' is not mentioned in $md"
     done < <(grep -hoE '\bpub (fn|struct|enum|trait|const|type) [A-Za-z_][A-Za-z0-9_]*' "$rs" | awk '{print $NF}')
 done < <(find crates -name '*.rs')
+
+while IFS= read -r toml; do
+    dir="$(dirname "$toml")"
+    [ -f "$dir/README.md" ] || fail "$dir has a Cargo.toml but no README.md"
+done < <(find crates -name 'Cargo.toml')
 
 comment_re='(^|[[:space:]])(//.*)$'
 

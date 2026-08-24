@@ -37,16 +37,16 @@ cargo test --workspace
 
 | Crate | Responsibility |
 | --- | --- |
-| [`common`](crates/common) | Shared error type, `Result` alias, newtype ids, top-level config. |
-| [`types`](crates/types) | `DataType`/`Value`, null handling, comparison, tuple encode/decode. |
-| [`storage`](crates/storage) | Disk manager, buffer pool, slotted-page heap files, B+tree, WAL. |
-| [`catalog`](crates/catalog) | Table/column metadata, in-memory for now. |
-| [`sql`](crates/sql) | Hand-written lexer and recursive-descent parser, AST types. |
-| [`txn`](crates/txn) | Transaction lifecycle, lock manager, isolation levels, MVCC types. |
-| [`planner`](crates/planner) | Binder, logical/physical plans, optimizer rule trait. |
-| [`executor`](crates/executor) | Volcano-style pull operators over a physical plan. |
-| [`engine`](crates/engine) | `Database` facade: wires every layer together behind `execute(sql)`. |
-| [`cli`](crates/cli) | The only binary: a REPL over `engine`. |
+| [`common`](crates/common/README.md) | Shared error type, `Result` alias, newtype ids, top-level config. |
+| [`types`](crates/types/README.md) | `DataType`/`Value`, null handling, comparison, tuple encode/decode. |
+| [`storage`](crates/storage/README.md) | Disk manager, buffer pool, slotted-page heap files, B+tree, WAL. |
+| [`catalog`](crates/catalog/README.md) | Table/column metadata, in-memory for now. |
+| [`sql`](crates/sql/README.md) | Hand-written lexer and recursive-descent parser, AST types. |
+| [`txn`](crates/txn/README.md) | Transaction lifecycle, lock manager, isolation levels, MVCC types. |
+| [`planner`](crates/planner/README.md) | Binder, logical/physical plans, optimizer rule trait. |
+| [`executor`](crates/executor/README.md) | Volcano-style pull operators over a physical plan. |
+| [`engine`](crates/engine/README.md) | `Database` facade: wires every layer together behind `execute(sql)`. |
+| [`cli`](crates/cli/README.md) | The only binary: a REPL over `engine`. |
 
 See `docs/diagrams/crate-dependencies.mmd` for the dependency graph, and
 `docs/adr/0002-crate-splitting.md` for why the layers are crates rather
