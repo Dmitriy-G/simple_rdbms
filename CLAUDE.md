@@ -223,3 +223,16 @@ hash map/set iteration order, or thread scheduling. Use `tempfile` for
 anything touching the filesystem so tests don't collide or leave state
 behind, and seed any randomness (`proptest` included) rather than relying
 on ambient entropy.
+
+An inline `#[cfg(test)] mod tests` in `src/` is justified only when the
+test needs access to a private item that should stay private — nothing
+else earns the gate. Everything else, including a test that merely
+happens to sit near the code it exercises, goes in `tests/`, driven
+through the crate's public API: `#[cfg(test)]` only takes effect when
+compiling a crate's own unit-test binary, so anything gated behind it is
+invisible to `tests/`, and a binary-only crate has no `tests/`-reachable
+target at all unless it also ships a `[lib]`. When a test helper needs to
+be shared across multiple files under `tests/`, it lives in
+`tests/support/`, declared with `mod support;` by whichever test file
+needs it — never behind `#[cfg(test)]` in `src/`, which would hide it from
+every other test file that wants it too.

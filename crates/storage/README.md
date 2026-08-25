@@ -129,17 +129,21 @@ ordinary path, `engine::Database::open`).
 
 ## Testing
 
-`buffer.rs` and `recovery.rs` (plus `block_device.rs`) carry inline
-`#[cfg(test)]` unit tests. Everything else is covered under `tests/`:
-`disk_manager.rs` (page round-trips across a reopen, header validation),
-`buffer_pool.rs` (eviction under pressure, dirty-data durability, pinning
-exhaustion), `double_write_buffer.rs` (batch round-trip, corrupted-slot
-detection), `wal.rs` (record round-trip, `prev_lsn` chaining, truncation at
-a torn record), `recovery.rs` (Analysis/Redo/Undo against hand-built logs),
-`slotted_page.rs` (over-capacity insertion), and `table_heap.rs`
-(multi-page insert/read-back, oversized-tuple rejection). `tests/smoke.rs`
-is the minimum-viable compile-and-construct check. Run just this crate
-with:
+Everything is covered under `tests/`, exercised entirely through this
+crate's public API: `disk_manager.rs` (page round-trips across a reopen,
+header validation), `buffer_pool.rs` (eviction under pressure, dirty-data
+durability, pinning exhaustion), `double_write_buffer.rs` (batch
+round-trip, corrupted-slot detection), `wal.rs` (record round-trip,
+`prev_lsn` chaining, truncation at a torn record), `recovery.rs`
+(Analysis/Redo/Undo against hand-built logs), `undo_performance.rs`
+(undo's bounded I/O cost per record, via the `CountingDevice` helper in
+`tests/support/mod.rs`), `slotted_page.rs` (over-capacity insertion), and
+`table_heap.rs` (multi-page insert/read-back, oversized-tuple rejection).
+`tests/smoke.rs` is the minimum-viable compile-and-construct check. A
+`#[cfg(test)]` unit test in `src/` is reserved for the rare case that
+needs access to something that should stay private (see CLAUDE.md's
+testing section); none of this crate's own `src/` currently does. Run
+just this crate with:
 
 ```sh
 cargo test -p storage

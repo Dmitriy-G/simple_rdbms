@@ -5,30 +5,36 @@ stdin, and prints each one's result or error.
 
 ## Architecture
 
-`cli` is the workspace's only binary crate, and sits at the very top of
-the layered workspace: it may depend only on `engine` and `common` (see
-`docs/adr/0002-crate-splitting.md`), never on any lower-layer crate
-directly, since `engine` already re-exports everything a caller needs to
-name (`DataType`, `Tuple`, `Value`). It opens exactly one `Database` for
-the process's lifetime and is the workspace's only consumer of `engine`
-as a long-lived, interactively driven object, rather than one opened and
-closed per call. `crates/cli/tests/crash_recovery.rs` drives this binary
-as a real subprocess to prove a statement the REPL has acknowledged really
-does survive a hard kill.
+`cli` is the workspace's only crate with both a library and a binary
+target, and sits at the very top of the layered workspace: it may depend
+only on `engine` and `common` (see `docs/adr/0002-crate-splitting.md`),
+never on any lower-layer crate directly, since `engine` already
+re-exports everything a caller needs to name (`DataType`, `Tuple`,
+`Value`). The `[[bin]]` target (`src/main.rs`) opens exactly one
+`Database` for the process's lifetime and is the workspace's only
+consumer of `engine` as a long-lived, interactively driven object, rather
+than one opened and closed per call. `crates/cli/tests/crash_recovery.rs`
+drives this binary as a real subprocess to prove a statement the REPL has
+acknowledged really does survive a hard kill.
 
-The REPL loop buffers stdin lines until a `;` terminates a statement (so a
-multi-line `CREATE TABLE` works the same as a one-liner), executes that
-buffered text against the open `Database`, and prints the result — a
-query error prints and returns to the prompt rather than ending the
-session. Meta commands (`.tables`, `.schema <name>`, `.exit`) are handled
-immediately on a leading `.`, without needing a `;`.
+The REPL loop (`cli::run_repl`, in the `[lib]` target) buffers stdin lines
+until a `;` terminates a statement (so a multi-line `CREATE TABLE` works
+the same as a one-liner), executes that buffered text against the open
+`Database`, and prints the result — a query error prints and returns to
+the prompt rather than ending the session. Meta commands (`.tables`,
+`.schema <name>`, `.exit`) are handled immediately on a leading `.`,
+without needing a `;`. The REPL's logic lives in the library rather than
+the binary specifically so `crates/cli/tests/` can reach it: a binary-only
+crate has no library target for an integration test to link against.
 
 ## Key Components
 
-- `main` - `Cli` (parsed `clap` arguments), `main`, `run_repl`, and the REPL's
-  supporting functions (`statement_from_buffer`, `prompt`, `print_tables`,
-  `print_schema`, `format_data_type`, `print_result`, `print_table`,
-  `format_value`). This crate has only one module. See
+- `lib` - `run_repl` and the REPL's supporting logic: statement buffering
+  (`statement_from_buffer`), meta-command parsing (`MetaCommand`,
+  `parse_meta_command`), and result-table formatting (`format_result`,
+  `format_table`). See [lib.MD](src/lib.MD).
+- `main` - `Cli` (parsed `clap` arguments), `main`, and `init_logging` -
+  argument parsing, logging setup, and a call into `cli::run_repl`. See
   [main.MD](src/main.MD).
 
 ## Features
@@ -58,6 +64,9 @@ this binary does not currently expose flags for them.
 
 ## Testing
 
+`tests/repl.rs` unit-tests the library's pure logic directly - statement
+buffering, meta-command parsing, and result-table formatting (including
+`NULL` rendering) - now that it is reachable through the `[lib]` target.
 `tests/crash_recovery.rs` reproduces the M5 data-loss bug directly: a
 statement the REPL has already acknowledged must survive a hard kill of
 the process, driving `simple_rdbms` as a real subprocess rather than

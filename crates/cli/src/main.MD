@@ -1,9 +1,14 @@
 # main
 
-`simple_rdbms`: the REPL front end. Opens a database file and reads SQL
-statements from stdin, buffering lines until a `;` terminates a
-statement, executing each against the open `Database` and printing its
-result or error.
+`simple_rdbms`'s binary entry point: parses command-line arguments,
+initializes logging, opens a `Database`, and hands off to the `cli`
+library's `run_repl` for the whole REPL session. Everything the REPL
+actually does - statement buffering, meta-command parsing, result
+formatting - lives in `src/lib.rs` (see [lib.MD](lib.MD)) rather than
+here, specifically so it is reachable from `crates/cli/tests/`: a
+binary-only crate has no library target for an integration test to link
+against, so this crate now ships both (`crates/cli/Cargo.toml`'s
+`[lib]`/`[[bin]]` split).
 
 ## Key Components
 
@@ -12,7 +17,7 @@ result or error.
   created if it does not already exist (defaults to
   `"simple_rdbms.db"`).
 - `main() -> anyhow::Result<()>` - calls `init_logging`, parses `Cli`,
-  opens the `Database`, runs the REPL, and closes the database.
+  opens the `Database`, calls `cli::run_repl`, and closes the database.
 - `init_logging()` - the one place in the workspace that constructs a
   `tracing` subscriber (libraries emit, only a binary subscribes - see
   CLAUDE.md's logging section): JSON output, level from `RUST_LOG`
@@ -28,40 +33,6 @@ result or error.
   as stdout, so nothing about "captured by the container runtime" is lost
   by this choice; only "and never stdout instead" is not honored here,
   specifically because this binary is a REPL and not the future server.
-- `run_repl(db) -> anyhow::Result<()>` - reads statements from stdin,
-  buffering lines until a `;` terminates one, printing that statement's
-  result or error before prompting for the next. A leading `.`-command
-  (`.tables`, `.schema <name>`, `.exit`) is handled immediately instead,
-  without needing a `;`. A query error prints and returns to the prompt;
-  it never ends the REPL.
-- `statement_from_buffer(buffer) -> &str` - strips the single `;` that
-  terminates a buffered statement, along with surrounding whitespace.
-  Uses `strip_suffix` rather than `trim_end_matches(';')` so a statement
-  whose last token is itself a string literal ending in `;` (e.g. `WHERE
-  s = ';'`) only loses the terminator, not the semicolon inside the
-  literal.
-- `prompt(stdout, buffer) -> anyhow::Result<()>` - writes the REPL's
-  prompt and flushes it, since it is not followed by a newline.
-  Mid-statement (a `;` not yet seen), a continuation prompt marks that
-  more input is expected.
-- `print_tables(db)` - `.tables`: lists every table in the database, one
-  per line.
-- `print_schema(db, name)` - `.schema <name>`: prints one line per column
-  as `name TYPE [NOT NULL]`.
-- `format_data_type(data_type) -> String` - renders a `DataType` the way
-  it was spelled in `CREATE TABLE`, e.g. `TEXT` rather than the parser's
-  internal `Varchar(4294967295)` for it.
-- `print_result(result_set)` - prints a result set: an aligned text table
-  for a query's rows, `NULL` for SQL `NULL`, a rows-affected line for a
-  statement with no output rows, or `ROLLBACK` for
-  `engine::ResultSet::RolledBack` - a `COMMIT` that actually rolled back
-  because its transaction had already failed, matching the command tag a
-  real Postgres client would see in the same situation.
-- `print_table(columns, rows)` - prints `columns` and `rows` as a text
-  table whose columns are padded to the widest cell (header included) in
-  that column.
-- `format_value(value) -> String` - renders one cell's value, `NULL` as
-  the literal text `NULL` per spec.
 
 ## Usage Example
 
@@ -80,6 +51,6 @@ simple_rdbms> .exit
 
 This binary is the workspace's only consumer of `engine::Database` as a
 long-lived, interactively driven object: it opens one `Database` for the
-process's lifetime, feeds it one statement per `;`-terminated buffer, and
+process's lifetime, hands it to `cli::run_repl` for the whole session, and
 is what `crates/cli/tests/crash_recovery.rs` drives as a real subprocess
 to prove acknowledged statements survive a hard kill.

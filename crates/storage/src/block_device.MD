@@ -121,15 +121,6 @@ workload without actually killing a process.
   1`, e.g. a small WAL record) has no subset between "nothing landed" and
   "it all landed" - there is no such thing as a partial write of less than
   one physical sector - so for it, tearing can only ever mean total loss.
-- `CountingDevice` - test-only (`#[cfg(test)]`). A `BlockDevice` that
-  wraps a real one and counts `read_at` calls and the cumulative bytes
-  requested across them, via counters shared with the test that
-  constructed it (the same shared-`Rc<Cell<_>>` shape `FaultyDevice` uses
-  `counter` for). Lets a test assert that `LogManager::read_at` costs a
-  small, bounded amount of I/O per lookup rather than re-reading the whole
-  log, without resorting to a flaky wall-clock timing assertion.
-  `CountingDevice::new(inner, calls, bytes)` wraps `inner`, recording every
-  `read_at` call's count and byte size into `calls`/`bytes`.
 
 ## Usage Example
 

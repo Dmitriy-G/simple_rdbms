@@ -47,10 +47,13 @@ every other layer's configuration is expressed through. See
 
 ## Testing
 
-Unit tests live inline in `src/crc.rs` (`#[cfg(test)] mod tests`), checking
-the CRC-32 implementation against known values. `tests/smoke.rs` is the
-minimum-viable check for a foundational crate: it compiles and its main
-types construct. Run just this crate with:
+`tests/crc.rs` checks the CRC-32 implementation against known values,
+using only the public `crc32` function - a `#[cfg(test)]` unit test in
+`src/` is reserved for the rare case that needs access to something that
+should stay private (see CLAUDE.md's testing section), which `crc32`
+doesn't. `tests/smoke.rs` is the minimum-viable check for a foundational
+crate: it compiles and its main types construct. Run just this crate
+with:
 
 ```sh
 cargo test -p common

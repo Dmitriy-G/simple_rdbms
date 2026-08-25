@@ -134,16 +134,6 @@ calls it directly rather than reimplementing undo.
   reapplies any `Clr` whose own page write didn't survive the second
   crash, which is why Redo must replay losers' actions - including their
   `Clr`s - and must be idempotent.
-- `undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times`
-  (test, in `#[cfg(test)] mod tests`) - rolling back thousands of updates
-  must cost a small, constant amount of device I/O *per undone record*,
-  not a whole extra log-sized read for every single one of them - the
-  quadratic behavior `LogManager::read_at` replaced `iter_from(lsn).next()`
-  to fix. Wraps the WAL's device in a `CountingDevice`, undoes 5,000
-  updates to one page, and asserts both the call count and cumulative
-  bytes read stay within a small constant factor of the update count - a
-  read counter is the deterministic way to check this; a wall-clock
-  timing assertion would be flaky.
 
 ## Usage Example
 
