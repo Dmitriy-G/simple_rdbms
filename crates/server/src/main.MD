@@ -25,12 +25,22 @@ loop fighting over what "the main loop" even means.
   are answerable through the entire recovery window; open the `Database`
   (this is where crash recovery runs); call `Readiness::set_ready`; then
   `signals::wait_for_shutdown_signal`, which blocks until `SIGTERM`/`Ctrl-C`.
-  On return from that block, checkpoints and closes the database via
-  `Database::close` before the process exits - the graceful-shutdown
-  sequence the whole binary exists to provide. The HTTP listener thread is
-  never explicitly joined: it holds no state that needs flushing, so
-  letting the OS reclaim it when the process exits is correct, not
-  sloppy.
+  On return from that block, the *first* thing that happens is
+  `Readiness::set_not_ready` - before the "shutdown signal received" log
+  line, before `Database::close` - so `/health/ready` starts returning
+  `503 shutting_down` for the entire checkpoint-and-close window instead
+  of claiming ready right up until the process disappears. Then
+  checkpoints and closes the database via `Database::close` before the
+  process exits - the graceful-shutdown sequence the whole binary exists
+  to provide. The HTTP listener thread's `JoinHandle` is kept (as
+  `_http_handle`, to keep it alive without joining it - joining would
+  block forever, since `http::serve` only returns by exiting its
+  accept loop) but never joined: `http::serve` is wrapped in
+  `std::panic::catch_unwind`, and whether the inner call panics or simply
+  returns, the wrapping closure logs `tracing::error!` before the thread
+  ends. Without that, a panic in the listener would take metrics and
+  health down with no log line at all, and the container would be killed
+  by its own `HEALTHCHECK` with no evidence of why.
 - `init_logging()` - the same shape as `cli::init_logging`, except this
   one writes JSON to **stdout**, not stderr: this binary has no
   interactive output competing for that stream (unlike `cli`'s REPL - see

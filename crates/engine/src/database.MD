@@ -114,10 +114,19 @@ those lower layers needing to know a connection or a transaction exists.
   `execute_impl`. On success, logs `info!` with `sql::fingerprint(sql)` as
   the `fingerprint` field (never the raw SQL - see CLAUDE.md's logging
   section) and, separately, a `warn!` naming `duration_ms` if the call ran
-  past `slow_query_warn_threshold_ms`. On failure, logs at `warn` for an
-  ordinary (`Severity::Error`) failure or `error` for a `Fatal`/`Panic`
-  one - this is the one place a statement's outcome is reported, per
-  CLAUDE.md's "log at the boundary" rule; every layer below stays silent.
+  past `slow_query_warn_threshold_ms`. On failure, logs the same
+  `fingerprint` field again - the one place it matters more than on the
+  success path, since it's the only clue an operator gets about *what*
+  failed - alongside `error = %err.redacted()` (`common::Error::redacted`;
+  see `common/src/error.MD`) at `warn` for an ordinary (`Severity::Error`)
+  failure or `error` for a `Fatal`/`Panic` one, plus a `debug!`-level event
+  on the same line carrying the full, unredacted `%err` so the detail a
+  human deliberately turned the level up for is still there. This is the
+  one place a statement's outcome is reported, per CLAUDE.md's "log at the
+  boundary" rule; every layer below stays silent. `redacted()` rather than
+  `Display` is deliberate: several `Error` variants embed a user-supplied
+  literal (a syntax error's offending token, an out-of-range value), and
+  WARN is a level every deployment runs permanently, unlike `debug`.
 - `Database::execute_impl(&mut self, sql, stmt_id) -> Result<ResultSet>` -
   private. `#[tracing::instrument(skip_all, fields(stmt_id, statement_kind
   = Empty))]` - `statement_kind` isn't known until after parsing, so it

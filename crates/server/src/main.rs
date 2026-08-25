@@ -37,7 +37,21 @@ fn main() -> anyhow::Result<()> {
     tracing::info!(addr = %args.metrics_addr, "metrics/health endpoint listening");
 
     let server_readiness = readiness.clone();
-    std::thread::spawn(move || http::serve(listener, handle, server_readiness));
+    let _http_handle = std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            http::serve(listener, handle, server_readiness);
+        }));
+        match result {
+            Ok(()) => tracing::error!(
+                "metrics/health HTTP listener exited; metrics and health endpoints are no \
+                 longer being served"
+            ),
+            Err(_) => tracing::error!(
+                "metrics/health HTTP listener panicked; metrics and health endpoints are no \
+                 longer being served"
+            ),
+        }
+    });
 
     let config = DbConfig::new(&args.db_path);
     let db = Database::open(config)?;
@@ -46,6 +60,7 @@ fn main() -> anyhow::Result<()> {
 
     signals::wait_for_shutdown_signal()?;
 
+    readiness.set_not_ready();
     tracing::info!("shutdown signal received, checkpointing and closing");
     db.close()?;
     Ok(())

@@ -71,6 +71,45 @@ fn a_successful_statement_is_logged_at_info_with_no_literal_values() {
 }
 
 #[test]
+fn a_failed_statement_is_logged_with_fingerprint_and_no_literal_values() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let capture = CaptureBuf::default();
+    let _guard = set_capturing_subscriber(&capture);
+
+    let mut db = Database::open(DbConfig::new(dir.path().join("test.db"))).expect("open");
+    db.execute("CREATE TABLE t (amount INTEGER)").expect("create table");
+    let result = db.execute("INSERT INTO t VALUES (99999999999)");
+    assert!(result.is_err(), "expected the out-of-range literal to be rejected");
+
+    let events = captured_events(&capture);
+    let warn_line = events
+        .iter()
+        .find(|event| event["level"] == "WARN" && event["fields"]["message"] == "statement failed")
+        .expect("a warn-level statement-failed event was logged");
+
+    let error = warn_line["fields"]["error"].as_str().expect("error is a string");
+    assert!(!error.contains("99999999999"), "literal value leaked into warn log: {error}");
+    assert!(error.contains('?'), "expected a redacted placeholder, got: {error}");
+    assert!(error.contains("amount"), "expected the column name preserved, got: {error}");
+
+    let fingerprint = warn_line["fields"]["fingerprint"].as_str().expect("fingerprint is a string");
+    assert!(
+        !fingerprint.contains("99999999999"),
+        "literal value leaked into warn log via fingerprint: {fingerprint}"
+    );
+
+    let debug_line = events
+        .iter()
+        .find(|event| event["level"] == "DEBUG" && event["fields"]["message"] == "statement failed")
+        .expect("a debug-level statement-failed event with the full error was logged");
+    let full_error = debug_line["fields"]["err"].as_str().expect("err is a string");
+    assert!(
+        full_error.contains("99999999999"),
+        "expected the full literal at debug level, got: {full_error}"
+    );
+}
+
+#[test]
 fn the_transaction_spans_txn_id_reaches_an_event_logged_deep_in_storage() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let capture = CaptureBuf::default();

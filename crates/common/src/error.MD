@@ -102,6 +102,25 @@ had to change, from stringifying to matching.
   `SqlState::SERIALIZATION_FAILURE` or `SqlState::STATEMENT_COMPLETION_UNKNOWN` -
   the two class-40 codes the standard defines specifically so a client
   knows to retry the whole transaction rather than surface the failure.
+- `Error::redacted(&self) -> String` - the same message `Display` would
+  produce, except every field that can hold a user-supplied value is
+  replaced with `?`; schema identifiers (table names, column names, data
+  types) are left in place, since those are structure an operator needs,
+  not data a user typed. Three variants change: `Syntax` drops `message`
+  entirely (the offending token can be anywhere in that free-text string)
+  and keeps only `offset`; `DatatypeMismatch` drops `detail` entirely for
+  the same reason - `executor::ExecutorError::Evaluation` builds it from a
+  `{value:?}` Debug format, so a literal can be quoted anywhere inside it;
+  `NumericValueOutOfRange` keeps `column` and `data_type` but replaces
+  `value`. Every other variant returns `self.to_string()` unchanged. The
+  match has no wildcard arm - every variant is named individually, in the
+  same style as `sql_state`/`severity` above - so a new variant fails to
+  compile here until someone decides which bucket it belongs in; see
+  `tests/redaction.MD` for the test that pins this down with a sentinel
+  value. This exists because `engine::Database::execute` logs at WARN on
+  every statement failure, and WARN is a level operators run permanently,
+  unlike the `debug`-only full `%err` - see CLAUDE.md's logging section
+  and `engine/src/database.MD`.
 - `Severity` - `Error` (the statement failed, the connection survives) |
   `Fatal` (the connection must close) | `Panic` (unused today; reserved
   for a failure that would take down every connection, which nothing in

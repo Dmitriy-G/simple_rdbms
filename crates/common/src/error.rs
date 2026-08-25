@@ -161,6 +161,41 @@ impl Error {
             SqlState::SERIALIZATION_FAILURE | SqlState::STATEMENT_COMPLETION_UNKNOWN
         )
     }
+
+    pub fn redacted(&self) -> String {
+        match self {
+            Error::Io(_)
+            | Error::ChecksumMismatch { .. }
+            | Error::CorruptPage { .. }
+            | Error::CorruptLog { .. }
+            | Error::TruncatedFile { .. }
+            | Error::PageNotFound { .. }
+            | Error::DoubleWriteRestoreFailed { .. }
+            | Error::BufferPoolExhausted
+            | Error::TupleTooLarge { .. }
+            | Error::InvalidConfiguration { .. }
+            | Error::ColumnCountMismatch { .. }
+            | Error::UndefinedTable { .. }
+            | Error::UndefinedColumn { .. }
+            | Error::AmbiguousColumn { .. }
+            | Error::DuplicateTable { .. }
+            | Error::DataCorrupted { .. }
+            | Error::SerializationFailure { .. }
+            | Error::Internal { .. }
+            | Error::NestedTransaction
+            | Error::NoActiveTransaction { .. }
+            | Error::TransactionAborted
+            | Error::NotSupported(_) => self.to_string(),
+
+            Error::Syntax { offset, .. } => format!("syntax error at offset {offset}: ?"),
+
+            Error::DatatypeMismatch { .. } => "datatype mismatch: ?".to_string(),
+
+            Error::NumericValueOutOfRange { column, data_type, .. } => {
+                format!("value ? out of range for column {column} ({data_type})")
+            }
+        }
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

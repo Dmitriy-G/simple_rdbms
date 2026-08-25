@@ -164,14 +164,29 @@ impl Database {
                     tracing::warn!(duration_ms = elapsed_ms, "slow query");
                 }
             }
-            Err(err) => match err.severity() {
-                Severity::Error => {
-                    tracing::warn!(sql_state = %err.sql_state(), %err, "statement failed");
+            Err(err) => {
+                let sql_state = err.sql_state();
+                let fingerprint = sql::fingerprint(sql);
+                tracing::debug!(sql_state = %sql_state, %err, "statement failed");
+                match err.severity() {
+                    Severity::Error => {
+                        tracing::warn!(
+                            sql_state = %sql_state,
+                            error = %err.redacted(),
+                            fingerprint = %fingerprint,
+                            "statement failed"
+                        );
+                    }
+                    Severity::Fatal | Severity::Panic => {
+                        tracing::error!(
+                            sql_state = %sql_state,
+                            error = %err.redacted(),
+                            fingerprint = %fingerprint,
+                            "statement failed"
+                        );
+                    }
                 }
-                Severity::Fatal | Severity::Panic => {
-                    tracing::error!(sql_state = %err.sql_state(), %err, "statement failed");
-                }
-            },
+            }
         }
         result
     }

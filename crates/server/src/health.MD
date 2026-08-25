@@ -13,31 +13,53 @@ this crate needs to tell those two questions apart; liveness itself needs
 no state at all - `http::serve` answers `/health/live` as soon as it's
 running, regardless of `Readiness`.
 
+Readiness is not a one-way flag: a container that is checkpointing and
+closing its database on the way down is exactly as unable to serve a
+statement as one that hasn't finished recovering yet, so `/health/ready`
+must be able to go false a second time. It is deliberately not the *same*
+false as startup, though - "still recovering" and "shutting down" call for
+different operator reactions to a restart loop (wait longer, vs. this
+container is draining on purpose), so `Readiness` tracks a three-state
+`ReadinessState` rather than a boolean, and `/health/ready` echoes the
+state's name in its response body.
+
 ## Key Components
 
-- `Readiness` - a cheap, `Clone`able handle (an `Arc<AtomicBool>`
-  underneath) shared between `main`'s startup sequence and the HTTP
-  listener thread. Starts `false` - reporting the `Starting` state from
-  the moment the process comes up - and is flipped exactly once, by
-  `main` right after `Database::open` returns successfully.
-- `Readiness::new() -> Self` - starts not-ready.
-- `Readiness::set_ready(&self)` - marks the database open and recovered.
-  Never called again after that, and never un-set - there is no code path
-  in this binary that keeps running after the database it opened stops
-  being usable.
-- `Readiness::is_ready(&self) -> bool` - read by `http::serve` on every
-  `/health/ready` request.
+- `ReadinessState` - `Starting` | `Ready` | `ShuttingDown`. `Display`
+  gives each a lowercase, `snake_case` name (`"starting"`, `"ready"`,
+  `"shutting_down"`) suitable for a response body or a log field.
+- `Readiness` - a cheap, `Clone`able handle (an `Arc<AtomicU8>`
+  underneath, storing a `ReadinessState`) shared between `main`'s startup
+  sequence and the HTTP listener thread.
+- `Readiness::new() -> Self` - starts in `ReadinessState::Starting`.
+- `Readiness::set_ready(&self)` - transitions to `ReadinessState::Ready`;
+  called by `main` right after `Database::open` returns successfully.
+- `Readiness::set_not_ready(&self)` - transitions to
+  `ReadinessState::ShuttingDown`; called by `main` as the first action
+  once the shutdown signal arrives, before `Database::close` runs, so
+  `/health/ready` stops claiming the container can serve a statement for
+  the entire duration of the checkpoint-and-close sequence, not just
+  after it completes.
+- `Readiness::state(&self) -> ReadinessState` - read by `http::serve` on
+  every `/health/ready` request; the response is `200` with body
+  `"ready\n"` only in `ReadinessState::Ready`, and `503` with the state's
+  own `Display` name as the body otherwise - see `http.MD`.
 
 ## Usage Example
 
 ```rust
 let readiness = Readiness::new();
-assert!(!readiness.is_ready());
+assert_eq!(readiness.state(), ReadinessState::Starting);
+
 readiness.set_ready();
-assert!(readiness.is_ready());
+assert_eq!(readiness.state(), ReadinessState::Ready);
+
+readiness.set_not_ready();
+assert_eq!(readiness.state(), ReadinessState::ShuttingDown);
 ```
 
 `main` constructs one `Readiness`, clones it into the HTTP listener thread
-before that thread starts accepting connections, and calls `set_ready`
-once `Database::open` (which includes crash recovery) has returned - see
-`main.MD` for the exact ordering that makes this safe.
+before that thread starts accepting connections, calls `set_ready` once
+`Database::open` (which includes crash recovery) has returned, and calls
+`set_not_ready` the instant the shutdown signal arrives - see `main.MD`
+for the exact ordering that makes both transitions safe.

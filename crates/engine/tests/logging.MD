@@ -27,6 +27,15 @@ hierarchy and the literal-redaction rule.
   CLAUDE.md's "never log user data above `DEBUG`" rule, checked against
   real output rather than only against `sql::fingerprint` in isolation
   (`sql/tests/fingerprint_tests.rs` already covers that function alone).
+- `a_failed_statement_is_logged_with_fingerprint_and_no_literal_values` -
+  runs an `INSERT` whose literal is out of range for its column, finds the
+  `warn`-level "statement failed" event, and asserts its `error` field
+  (`common::Error::redacted`'s output) still names the column but replaces
+  the literal with `?`, and that its `fingerprint` field is equally clean;
+  then finds the paired `debug`-level "statement failed" event and asserts
+  *its* `err` field does contain the literal - the detail CLAUDE.md's
+  logging section promises is still available one level down for an
+  operator who turns `RUST_LOG` up deliberately.
 - `the_transaction_spans_txn_id_reaches_an_event_logged_deep_in_storage` -
   runs `BEGIN`/`INSERT`/`COMMIT`, then finds the `storage::buffer::fetch_page`
   `trace!` events the `INSERT` triggered several crates below `engine`,

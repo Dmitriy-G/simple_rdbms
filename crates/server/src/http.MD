@@ -27,11 +27,15 @@ output itself with `std::net::TcpListener`.
 - `handle_connection(stream, handle, readiness)` - private. Reads the
   request's path via `read_request_path`, then answers: `/metrics` with
   `handle.render()` (the current Prometheus text exposition), `/health/live`
-  with a bare `200`, `/health/ready` with `200` or `503` depending on
-  `readiness.is_ready()`, anything else with `404`. Writes a minimal
-  `HTTP/1.1` response by hand (status line, `Content-Type`,
-  `Content-Length`, `Connection: close`, body) - simple enough not to need
-  a crate for it, once the request side is this simple too.
+  with a bare `200`, `/health/ready` with `200` and body `"ready\n"` when
+  `readiness.state()` is `ReadinessState::Ready`, or `503` with the
+  state's own `Display` name as the body (`"starting\n"` or
+  `"shutting_down\n"`) otherwise - see `health.MD` for why those two
+  non-ready states are kept distinct rather than collapsed into one
+  `503`, anything else with `404`. Writes a minimal `HTTP/1.1` response
+  by hand (status line, `Content-Type`, `Content-Length`,
+  `Connection: close`, body) - simple enough not to need a crate for it,
+  once the request side is this simple too.
 - `read_request_path(stream) -> Option<String>` - private. Reads exactly
   one line (the request line, e.g. `GET /metrics HTTP/1.1`) and returns
   its second whitespace-separated field. Returns `None` on any I/O error
