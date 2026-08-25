@@ -56,7 +56,7 @@ this is a stopgap ahead of. This is a stopgap that makes the current engine
 honest, not the final design — see ADR 0003 for why the real fix (the WAL)
 comes before the B+tree index rather than after it.
 
-## M6 — Making every write atomic and durable
+## M6 — Making every write atomic and durable ✅ Done
 **Problem:** M5 makes a *single* statement's pages durable by the time it's
 acknowledged, but says nothing about a statement (or group of statements)
 that touches multiple pages: a crash partway through can still leave some
@@ -68,7 +68,7 @@ record of *what* a write changed, which any undo (M8) or redo-after-crash
 record appended (and synced) before the page itself is allowed to reach
 disk, plus periodic checkpointing so the log doesn't grow without bound.
 
-## M7 — Recovering from a crash
+## M7 — Recovering from a crash ✅ Done
 **Problem:** the WAL (M6) only helps if something replays it. On restart
 after a crash, the buffer pool is empty and the disk holds whatever mix of
 old and new page images the crash left behind; the engine needs to bring
@@ -78,7 +78,7 @@ finds where to start, redo replays every logged change (including ones
 whose effects already reached disk — redo is idempotent), and undo rolls
 back anything logged by a transaction that never committed.
 
-## M8 — Transactions with real atomicity
+## M8 — Transactions with real atomicity ✅ Done
 **Problem:** a group of statements needs all-or-nothing semantics — a
 mid-transaction crash or an explicit `ROLLBACK` must undo exactly what that
 transaction did, not leave its partial effects in place. Without a WAL to
@@ -86,23 +86,6 @@ undo against (M6), there was nothing to roll back to.
 **Solution:** `BEGIN`/`COMMIT`/`ROLLBACK` wired to the WAL's undo records
 from M7, giving single-transaction atomicity independent of how many other
 transactions are (or aren't) running concurrently.
-
-## M12 — Surviving a torn page write
-**Problem:** even a single page write is not atomic at the hardware level —
-a page-sized write can be interrupted mid-sector, leaving a page with some
-old bytes and some new ones. That's a different failure mode than anything
-above: M5 handles the file being short a whole page, and the WAL (M6–M7)
-handles multi-page operations being interrupted between pages, but neither
-notices a single page that is itself internally torn, and redo would
-otherwise trust such a page as intact.
-**Solution:** a CRC-32 checksum per page to detect tearing, and a
-double-write buffer — every dirty page's image is written to a separate
-file and synced *before* the real write, so a torn real write can be
-repaired from that intact copy on the next open instead of merely being
-detected. Sequenced ahead of M9 here, before the B+tree exists: the flush
-path (`BufferPool::flush_all` and per-page eviction) is cheaper to change
-now than once M9's tree splits start writing several related pages per
-operation.
 
 ## M9 — Answering point/range lookups without a full scan
 **Problem:** a sequential scan is the only access path so far; queries that
@@ -127,7 +110,25 @@ expensive fast.
 chooses among them (and among access paths) using table and index
 statistics.
 
-## M13 — Answering "is this database healthy" from outside the process
+## M12 — Surviving a torn page write ✅ Done
+**Problem:** even a single page write is not atomic at the hardware level —
+a page-sized write can be interrupted mid-sector, leaving a page with some
+old bytes and some new ones. That's a different failure mode than anything
+above: M5 handles the file being short a whole page, and the WAL (M6–M7)
+handles multi-page operations being interrupted between pages, but neither
+notices a single page that is itself internally torn, and redo would
+otherwise trust such a page as intact.
+**Solution:** a CRC-32 checksum per page to detect tearing, and a
+double-write buffer — every dirty page's image is written to a separate
+file and synced *before* the real write, so a torn real write can be
+repaired from that intact copy on the next open instead of merely being
+detected. Sequenced ahead of M9 in implementation, before the B+tree
+existed: the flush path (`BufferPool::flush_all` and per-page eviction)
+was cheaper to change then than once M9's tree splits start writing
+several related pages per operation — see M9's entry above, which this
+milestone's number-order placement now follows instead of build order.
+
+## M13 — Answering "is this database healthy" from outside the process ✅ Done
 **Problem:** everything through M12 makes the engine correct and durable,
 but correctness isn't observable from outside the process — an operator
 running this in a container has no way to ask "is the buffer pool
@@ -157,14 +158,75 @@ both open the database directly in the same process that uses it. Nothing
 external can submit a statement over a network connection, which is what
 "database server" ordinarily means and what M13's `server` binary is a
 skeleton for.
-**Solution:** a PostgreSQL wire protocol frontend via `pgwire`, so
-existing Postgres clients and drivers work against this engine without a
-bespoke client library. Placed explicitly after M10 (concurrent
-transactions): a wire protocol means multiple network connections
-submitting statements at the same time, and M8's single-threaded,
-serially-executed atomicity is not the same guarantee as real isolation
-under concurrent access - M10's lock manager and MVCC are what make
-"transaction" mean the same thing to a wire-protocol client that it means
-to a Postgres server. See `docs/adr/0007-postgres-wire-protocol.md` for
-why Postgres's protocol was chosen over Arrow Flight SQL or a bespoke
-driver.
+**Solution:** a PostgreSQL wire protocol frontend via `pgwire`
+([sunng87/pgwire](https://github.com/sunng87/pgwire)), so existing
+Postgres clients and drivers work against this engine without a bespoke
+client library. See `docs/adr/0007-postgres-wire-protocol.md` for why
+Postgres's protocol was chosen over Arrow Flight SQL or a bespoke driver.
+[datafusion-postgres](https://github.com/datafusion-contrib/datafusion-postgres)
+is the reference to study for M14.4's `pg_catalog` support - another
+`pgwire`-based engine that had to answer the same catalog-introspection
+queries.
+
+**Dependency correction:** the ADR that introduced M14 placed it after
+M10 (concurrent transactions), reasoning that a wire protocol implies
+multiple connections submitting statements at once, and that M8's
+single-threaded, serially-executed atomicity is not the same guarantee as
+isolation under real concurrent access. That reasoning assumed the engine
+itself would be shared across connection threads - but the storage layer
+is built on `RefCell`/`Cell`/`UnsafeCell` with no `Send` bounds, so a
+`Database` cannot cross threads at all, shared-locking or not. The
+assumption that a server needs shared-state concurrency was wrong. M14.1
+below instead runs the engine on a single dedicated thread reached from
+every connection by message passing, so statements from all connections
+execute serially in arrival order regardless of how many connections are
+open. Isolation is genuinely serializable by construction, not by
+locking. **M14 does not require M10.** M10's lock manager and MVCC remain
+worth building for the concurrency they add on their own merits, but are
+no longer a prerequisite for shipping a network frontend.
+
+### M14.1 — Many connections against a single-threaded engine
+**Problem:** the storage layer is built on `RefCell`/`Cell`/`UnsafeCell`
+with no `Send` bounds, so `Database` cannot cross threads, yet a wire
+listener needs to serve many concurrent connections, each of which may
+submit a statement at any time.
+**Solution:** split per-connection session state out of `Database`, run
+the engine on one dedicated thread, and reach it from connection tasks by
+message passing. Statements execute serially in arrival order, so
+isolation stays genuinely serializable rather than merely untested. At
+most one explicit transaction is open at a time; a second `BEGIN` waits,
+then fails with `55P03`.
+
+### M14.2 — PostgreSQL wire protocol, simple query
+**Problem:** M14.1 gives the engine a single-threaded entry point reached
+by message passing, but nothing yet speaks the bytes a Postgres client
+actually sends - startup negotiation, parameter/status exchange, and the
+simple query flow all have to work before any real client can connect.
+**Solution:** a listener on 5432 using the `pgwire` crate: startup,
+`ParameterStatus`, `BackendKeyData`, simple query, type OIDs, and
+`SET`/`SHOW`/`RESET` accepted as no-ops (pgjdbc sends `SET
+extra_float_digits` during handshake and the connection dies without it).
+Target: `psql` works end to end.
+
+### M14.3 — Extended query protocol
+**Problem:** simple query (M14.2) inlines literals into full SQL text on
+every execution, which is what `psql` does but not what real drivers do -
+JDBC and most connection-pooled clients prepare a statement once and
+execute it repeatedly with bound parameters, a flow simple query cannot
+express.
+**Solution:** `Parse`/`Bind`/`Describe`/`Execute`/`Sync`, `$1` placeholders
+as a new grammar element, parameter type inference, binary format for
+numerics, and `PortalSuspended` for fetch limits. Target: pgjdbc
+`PreparedStatement` works. Simple query alone gets a demo, not a driver.
+
+### M14.4 — `pg_catalog` for real SQL clients
+**Problem:** ODBC needs no separate driver work - psqlODBC speaks the
+same protocol as M14.2/M14.3 - but every real SQL client, ODBC or
+otherwise, runs introspection queries against `pg_class`, `pg_namespace`,
+`pg_attribute` and `pg_type` before doing anything else, and those queries
+need joins this engine does not yet have.
+**Solution:** intercept known introspection queries and answer from the
+real catalog where the data exists, return empty where it does not, and
+never fabricate a result. Track what works in
+`docs/CLIENT-COMPATIBILITY.md`. See datafusion-postgres (linked above) as
+a reference `pg_catalog` implementation.

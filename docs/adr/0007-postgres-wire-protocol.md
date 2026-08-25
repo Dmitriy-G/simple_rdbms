@@ -6,9 +6,7 @@ Status: Accepted
 
 ## Context
 
-`docs/ROADMAP.md`'s M14 gives this engine a network-facing SQL frontend,
-after M10 (concurrent transactions) makes "isolation" a real guarantee
-under concurrent connections rather than an accident of serial execution.
+`docs/ROADMAP.md`'s M14 gives this engine a network-facing SQL frontend.
 A network protocol is a much larger, harder-to-reverse commitment than
 anything chosen so far in this project: clients, drivers, connection
 poolers, and BI tools all have to speak it, and changing it later means
@@ -76,9 +74,18 @@ be silently wrong against this engine. `common::SqlState` (see
 `crates/common/src/sql_state.MD`) was built ahead of this exact need -
 every error this engine can raise already carries a real SQLSTATE code,
 so `pgwire`'s error responses have real data to report instead of a
-generic failure. M10's concurrency work becomes a hard prerequisite, not
-just a nice-to-have, the moment this ADR's frontend exists: multiple wire
-connections mean multiple concurrent transactions for real, and
-`txn::LockManager`/`txn::mvcc` (currently unwired scaffolding, per
-`docs/adr/0004-acid-scope.md`) must be wired into every read and write
-path before M14 can safely ship.
+generic failure. M10 was originally assumed to be a hard prerequisite
+here, on the reasoning that multiple wire connections mean multiple
+concurrent transactions for real, and `txn::LockManager`/`txn::mvcc`
+(currently unwired scaffolding, per `docs/adr/0004-acid-scope.md`) would
+need wiring into every read and write path before M14 could safely ship.
+That assumption is corrected in `docs/ROADMAP.md`'s M14 entry: the
+storage layer's `RefCell`/`Cell`/`UnsafeCell` types have no `Send` bounds,
+so `Database` cannot be shared across connection threads at all, which
+means the "multiple connections, shared engine state" scenario M10 would
+have protected against does not arise in the first place. M14.1 runs the
+engine on one dedicated thread reached by message passing instead, so
+every connection's statements execute serially in arrival order - real
+isolation without needing M10's lock manager or MVCC. M10 stays valuable
+for the concurrency it adds on its own merits, but M14 no longer depends
+on it.
