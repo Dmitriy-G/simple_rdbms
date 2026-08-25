@@ -2,7 +2,14 @@
 
 Each milestone is named after the database problem it solves, not the
 feature it adds — the feature is just how the problem gets solved this
-time. Milestones build on each other in order.
+time. Milestones are numbered by the problem they solve and mostly build
+on each other in that order, but implementation order has deliberately
+diverged from it twice: M12 shipped ahead of M9 (cheaper to change the
+flush path before B+tree splits start writing several related pages per
+operation — see M12's entry), and M14 no longer depends on M10 (the
+single-threaded engine thread removes the dependency — see M14's entry).
+Read each entry's Problem/Solution for what it actually depends on rather
+than assuming strict numeric order.
 
 ## M1 — Durable, fixed-size storage ✅ Done
 **Problem:** a database needs a way to persist bytes to disk in units the
@@ -48,13 +55,18 @@ everything written since open was lost, not just the page in flight.
 (`file_len / page_size`), erroring with a clear message if that length
 isn't a whole multiple of the page size. `set_len` becomes the single
 durable act of allocation — `allocate_page` no longer rewrites the header,
-which also removes a 4KB write from every page allocation. `Database::sync`
-(`flush_all` then `sync`) runs at the end of every mutating statement
-(`CREATE TABLE`, `INSERT`), so a statement the caller has already seen
-acknowledged is durable before the next one starts, without needing the WAL
-this is a stopgap ahead of. This is a stopgap that makes the current engine
-honest, not the final design — see ADR 0003 for why the real fix (the WAL)
-comes before the B+tree index rather than after it.
+which also removes a 4KB write from every page allocation. At the time,
+`Database::sync` (`flush_all` then `sync`) ran at the end of every
+mutating statement (`CREATE TABLE`, `INSERT`), so a statement the caller
+had already seen acknowledged was durable before the next one started —
+a stopgap that made the pre-WAL engine honest, not the final design (see
+ADR 0003 for why the real fix, the WAL, comes before the B+tree index
+rather than after it). **Superseded by M6:** per-statement `flush_all`
+then `sync` of every dirty page is gone; `TransactionManager::commit` now
+fsyncs only the WAL's own commit record (`BufferPool::flush_log`), not the
+data pages, and `Database::sync` no longer exists as a method —
+`flush_all`/`sync` today run only in `Database::close`, its `Drop` impl,
+and checkpointing.
 
 ## M6 — Making every write atomic and durable ✅ Done
 **Problem:** M5 makes a *single* statement's pages durable by the time it's
@@ -103,12 +115,20 @@ individually.
 for snapshot isolation so readers stop blocking writers.
 
 ## M11 — Answering multi-table queries efficiently
-**Problem:** nested-loop join is the only join strategy, and the planner
-always picks it regardless of table sizes or available indexes, which gets
-expensive fast.
-**Solution:** additional join algorithms and a cost-based optimizer that
-chooses among them (and among access paths) using table and index
-statistics.
+**Problem:** multi-table queries cannot be expressed at all today —
+`FROM` accepts exactly one table (`crates/sql/src/parser.rs` has no
+`JOIN` production and no comma-separated `FROM` list), so any question
+spanning two tables has to be answered by the application issuing two
+queries and joining the results in memory itself.
+**Solution:** in order: `JOIN` syntax and a multi-table `FROM` in the
+grammar; a real path into the `LogicalPlan::Join`/
+`PhysicalPlan::NestedLoopJoin` node kinds that already exist as
+scaffolding but that nothing in `sql`'s grammar can reach today; finishing
+`NestedLoopJoinExecutor`, whose `init` and `next` are both still
+`todo!()`; and only then additional join algorithms plus a cost-based
+optimizer choosing among them and among access paths using table and
+index statistics. The optimizer half depends on M9's indexes existing,
+since access-path choice is meaningless with only one access path.
 
 ## M12 — Surviving a torn page write ✅ Done
 **Problem:** even a single page write is not atomic at the hardware level —
