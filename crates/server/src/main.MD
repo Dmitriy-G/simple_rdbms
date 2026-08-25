@@ -1,14 +1,18 @@
 # main
 
-`simple_rdbms_server`: the headless counterpart to `cli`. Opens a
-database, serves Prometheus metrics and liveness/readiness over HTTP,
-and shuts down cleanly on `SIGTERM`/`Ctrl-C` - built for a container
-(`docs/ROADMAP.md`'s M13), not a human at a terminal. Distinct from `cli`
-on purpose: `cli` reads statements from stdin for an interactive session,
-which a container's `HEALTHCHECK`/`docker stop` lifecycle has no
-equivalent of, and mixing the two responsibilities into one binary would
-mean the REPL's prompt-and-buffer loop and this binary's listen-and-wait
-loop fighting over what "the main loop" even means.
+`simple_rdbms_server`'s binary entry point: parses command-line
+arguments, initializes logging, and runs the startup/shutdown sequence.
+Distinct from `cli` on purpose: `cli` reads statements from stdin for an
+interactive session, which a container's `HEALTHCHECK`/`docker stop`
+lifecycle has no equivalent of, and mixing the two responsibilities into
+one binary would mean the REPL's prompt-and-buffer loop and this binary's
+listen-and-wait loop fighting over what "the main loop" even means.
+Everything this binary drives - `Readiness`, the HTTP responder, the
+signal wait - lives in the `server` library (`src/lib.rs`, see
+[lib.MD](lib.MD)) rather than here, specifically so it is reachable from
+`crates/server/tests/`: a binary-only crate has no library target for an
+integration test to link against, so this crate now ships both
+(`crates/server/Cargo.toml`'s `[lib]`/`[[bin]]` split).
 
 ## Key Components
 
@@ -17,8 +21,12 @@ loop fighting over what "the main loop" even means.
   `--metrics-addr` (defaults to `"0.0.0.0:9090"` - the port
   `docker-compose.yml` publishes, deliberately separate from any future
   SQL port so an operator can scrape metrics without going through the
-  database protocol at all), and `--health-check` (a bare flag; see
-  `check_ready` below).
+  database protocol at all; also readable from the `SIMPLE_RDBMS_METRICS_ADDR`
+  environment variable via clap's `env`, so a `docker-compose.yml` override
+  of the listener address and the `HEALTHCHECK`'s own `--health-check`
+  probe of it move together instead of the healthcheck silently querying
+  the default port forever - see `docker-compose.yml`), and
+  `--health-check` (a bare flag; see `check_ready` below).
 - `main() -> anyhow::Result<()>` - parses `Args` first, before
   `init_logging`, because `--health-check` short-circuits everything else:
   if set, `main` calls `check_ready` against this process's own

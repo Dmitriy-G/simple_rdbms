@@ -11,6 +11,10 @@ per CLAUDE.md's error-handling section.
 ## Key Components
 
 - `open(dir) -> Database` - opens a `Database` at `dir.join("test.db")`.
+  Marked `#[cfg(test)]` so `clippy.toml`'s `allow-expect-in-tests` applies
+  to its `.expect(...)` call - see `storage/tests/recovery_logging.MD` for
+  why a free function in a `tests/` file needs the attribute spelled out
+  explicitly.
 - `rows_of(result) -> Vec<Vec<Value>>` - unwraps a `ResultSet::Rows` into
   each row's values, panicking on `RowsAffected`/`RolledBack`.
 - `rollback_of_inserts_leaves_the_table_empty` - two inserts inside a

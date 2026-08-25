@@ -1,9 +1,8 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use common::{DbConfig, SqlState};
 use engine::{Database, ResultSet};
 use types::Value;
 
+#[cfg(test)]
 fn open(dir: &tempfile::TempDir) -> Database {
     let config = DbConfig::new(dir.path().join("test.db"));
     Database::open(config).expect("open database")

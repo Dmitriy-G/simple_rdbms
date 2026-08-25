@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use catalog::{Catalog, Column, Schema};
 use common::{TableId, TxnId};
 use executor::{Executor, ExecutorContext, SeqScanExecutor};
@@ -15,6 +13,7 @@ use types::{DataType, Encode, Tuple, Value};
 
 const TXN: TxnId = TxnId(0);
 
+#[cfg(test)]
 fn open_pool(pool_size: usize) -> (BufferPool, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("create temp dir");
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE).expect("open disk");
@@ -28,6 +27,7 @@ fn open_pool(pool_size: usize) -> (BufferPool, tempfile::TempDir) {
     (BufferPool::new(disk, dwb, log, pool_size, replacer), dir)
 }
 
+#[cfg(test)]
 fn seed_table(pool: &BufferPool, catalog: &mut Catalog, count: i64) -> (TableId, Vec<i64>) {
     let schema = Schema::new(vec![Column::new("n", DataType::BigInt, false)]);
     let info = catalog.create_table(pool, TXN, "t", schema).expect("create table");

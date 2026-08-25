@@ -10,7 +10,16 @@ out with `serde_json`.
 
 - `CaptureBuf` - a `Clone`able `Write` implementation backed by a shared
   `Arc<Mutex<Vec<u8>>>`, so a `tracing_subscriber::fmt` layer's writer
-  closure can hand out clones that all append to the same buffer.
+  closure can hand out clones that all append to the same buffer. Its
+  `Write` impl carries `#[cfg(test)]`, and `captured_events` below is
+  itself marked `#[cfg(test)]`, even though this whole file only ever
+  compiles as a test binary: `clippy.toml`'s `allow-unwrap-in-tests`/
+  `allow-expect-in-tests` only recognize an `#[unwrap()]`/`.expect()` call
+  as "in a test" when it sits inside a `#[test]` function or a
+  `#[cfg(test)]`-attributed item, not merely inside a file under
+  `tests/` - a free helper function or trait impl needs the attribute
+  spelled out explicitly, redundant as that is here, or the lint still
+  fires.
 - `captured_events(buf) -> Vec<serde_json::Value>` - splits the captured
   bytes into lines and parses each non-empty one as a JSON event.
 - `recovery_summary_event_reports_winners_losers_and_record_count` -

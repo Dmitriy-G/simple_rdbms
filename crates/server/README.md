@@ -34,6 +34,12 @@ dependency) and serves the result itself with a small, synchronous
 
 ## Key Components
 
+`server` ships both a `[lib]` and a `[[bin]]` target (same shape as
+`cli` - see `crates/cli/README.md`), so its logic is reachable from
+`tests/` rather than only from an inline `#[cfg(test)]` module.
+
+- `lib` - re-exports `health`, `http`, and `signals` as public modules.
+  See `src/lib.MD`.
 - `main` - argument parsing and startup/shutdown wiring: install the
   Prometheus recorder, spawn the HTTP listener, open the `Database`, mark
   ready, block for a shutdown signal, then checkpoint and close. See
@@ -70,13 +76,19 @@ Dev-only: `tempfile`.
 
 ## Configuration
 
-`--metrics-addr` (default `0.0.0.0:9090`) and `--health-check` (a bare
-flag; queries this process's own `/health/ready` and exits `0`/`1` - see
-`src/main.MD`) are the two flags beyond `cli`'s own `db_path` positional
-argument. Every database sizing knob comes from `common::DbConfig`'s
-defaults, the same as `cli` - this binary does not yet expose flags for
-them. Logging is controlled by `RUST_LOG`, same as `cli` - see
-CLAUDE.md's logging section.
+`--metrics-addr` (default `0.0.0.0:9090`, also readable from the
+`SIMPLE_RDBMS_METRICS_ADDR` environment variable as a fallback via clap's
+`env`) and `--health-check` (a bare flag; queries this process's own
+`/health/ready` and exits `0`/`1` - see `src/main.MD`) are the two flags
+beyond `cli`'s own `db_path` positional argument. The environment-variable
+fallback exists so `docker-compose.yml` can override the listener address
+and have the `HEALTHCHECK`'s own `--health-check` invocation (which reads
+the same variable) follow automatically - see "Container image" below;
+without it, overriding the address only via `command:` would leave the
+healthcheck silently probing the wrong port forever. Every database sizing
+knob comes from `common::DbConfig`'s defaults, the same as `cli` - this
+binary does not yet expose flags for them. Logging is controlled by
+`RUST_LOG`, same as `cli` - see CLAUDE.md's logging section.
 
 ### Container image
 
@@ -96,18 +108,21 @@ purpose - not because either image floated out from under the build.
 
 ## Testing
 
-`health.rs` and `http.rs` each carry an inline `#[cfg(test)] mod tests`
-(see `src/health.MD` and `src/http.MD`) rather than an integration test
-under `tests/`: this crate has only a `[[bin]]` target, no `[lib]`, so a
-file under `tests/` cannot `use server::...` at all - there's no library
-crate for it to link against. The only external-test option would be
-spawning the compiled binary as a subprocess, the way
-`crates/cli/tests/crash_recovery.rs` does; that's the right shape for a
-black-box, real-process check (see "Verify, don't assume" below), but the
-wrong shape for `Readiness`'s state transitions and `/health/ready`'s
-per-state response body, which are deterministic in-process behavior an
-inline unit test checks directly, without racing a real subprocess's
-startup window. Run this crate's tests with:
+`tests/readiness.rs` checks `Readiness`'s state transitions in isolation,
+and `tests/endpoints.rs` binds a real listener and drives `/health/ready`
+over real HTTP requests, both through the `server` library's public API
+now that the `[lib]` target makes them reachable from `tests/` - formerly
+these lived as inline `#[cfg(test)]` modules in `health.rs`/`http.rs`,
+back when this crate had only a `[[bin]]` target and nothing under
+`tests/` could `use server::...` at all. A `#[cfg(test)]` unit test in
+`src/` is reserved for the rare case that needs access to something that
+should stay private (see CLAUDE.md's testing section); nothing in `health`
+or `http` does. Neither of these deterministic, in-process checks proves
+the container works end to end - that's what spawning the compiled binary
+as a subprocess would be for, the way `crates/cli/tests/crash_recovery.rs`
+does it, but this crate has no equivalent test today (see "Verify, don't
+assume" below for the manual real-container check that fills that gap in
+the meantime). Run this crate's tests with:
 
 ```sh
 cargo test -p server

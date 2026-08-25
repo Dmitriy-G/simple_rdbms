@@ -8,12 +8,8 @@ use clap::Parser;
 use common::DbConfig;
 use engine::Database;
 use metrics_exporter_prometheus::PrometheusBuilder;
-
-mod health;
-mod http;
-mod signals;
-
-use health::Readiness;
+use server::health::Readiness;
+use server::{http, signals};
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -26,7 +22,7 @@ struct Args {
     #[arg(default_value = "simple_rdbms.db")]
     db_path: String,
 
-    #[arg(long, default_value = "0.0.0.0:9090")]
+    #[arg(long, default_value = "0.0.0.0:9090", env = "SIMPLE_RDBMS_METRICS_ADDR")]
     metrics_addr: String,
 
     #[arg(

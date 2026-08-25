@@ -8,6 +8,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "simple_rdbms_server"
 path = "src/main.rs"

@@ -12,7 +12,12 @@ hierarchy and the literal-redaction rule.
 
 - `CaptureBuf` - a `Clone`able `Write` implementation backed by a shared
   `Arc<Mutex<Vec<u8>>>`, so a `tracing_subscriber::fmt` layer's writer
-  closure can hand out clones that all append to the same buffer.
+  closure can hand out clones that all append to the same buffer. Its
+  `Write` impl and `captured_events` below both carry `#[cfg(test)]` so
+  `clippy.toml`'s `allow-unwrap-in-tests`/`allow-expect-in-tests` apply to
+  them - see `storage/tests/recovery_logging.MD` for why a free function
+  in a `tests/` file needs the attribute spelled out explicitly rather
+  than inheriting it from the file only ever compiling as a test binary.
 - `captured_events(buf) -> Vec<serde_json::Value>` - splits the captured
   bytes into lines and parses each non-empty one as a JSON event.
 - `set_capturing_subscriber(capture) -> tracing::subscriber::DefaultGuard`

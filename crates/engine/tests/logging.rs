@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 
@@ -9,6 +7,7 @@ use engine::Database;
 #[derive(Clone, Default)]
 struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
 
+#[cfg(test)]
 impl Write for CaptureBuf {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0.lock().unwrap().extend_from_slice(buf);
@@ -20,6 +19,7 @@ impl Write for CaptureBuf {
     }
 }
 
+#[cfg(test)]
 fn captured_events(buf: &CaptureBuf) -> Vec<serde_json::Value> {
     let bytes = buf.0.lock().unwrap();
     String::from_utf8_lossy(&bytes)

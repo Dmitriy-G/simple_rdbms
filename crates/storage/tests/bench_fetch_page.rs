@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use storage::block_device::FileDevice;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;

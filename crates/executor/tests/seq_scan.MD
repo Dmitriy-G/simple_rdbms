@@ -11,7 +11,11 @@ alongside the cursor.
 
 - `open_pool(pool_size) -> (BufferPool, TempDir)` - builds a
   `BufferPool` backed by a temp-dir disk, double-write buffer, WAL, and
-  `LruKReplacer` of the given size.
+  `LruKReplacer` of the given size. Marked `#[cfg(test)]`, as is
+  `seed_table` below, so `clippy.toml`'s `allow-expect-in-tests` applies
+  to their `.expect(...)` calls - see `storage/tests/recovery_logging.MD`
+  for why a free function in a `tests/` file needs the attribute spelled
+  out explicitly.
 - `seed_table(pool, catalog, count) -> (TableId, Vec<i64>)` - creates a
   single-column (`n BIGINT`) table and inserts `n` for `n` in `0..count`,
   enough rows to span several pages against a small pool. Returns the

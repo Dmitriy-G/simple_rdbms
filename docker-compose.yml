@@ -13,6 +13,12 @@ services:
       - simple_rdbms_data:/data
     environment:
       RUST_LOG: ${RUST_LOG:-info}
+      # Read as a fallback by both the listener (via --metrics-addr's clap
+      # `env`) and the HEALTHCHECK's own `--health-check` invocation - see
+      # crates/server/src/main.MD - so overriding the address here moves
+      # both together instead of the healthcheck silently probing the
+      # default port forever.
+      SIMPLE_RDBMS_METRICS_ADDR: ${SIMPLE_RDBMS_METRICS_ADDR:-0.0.0.0:9090}
     stop_grace_period: 10s
     # The image's own filesystem is never written to at runtime - the
     # only state is /data, already a separate writable volume mount - so
