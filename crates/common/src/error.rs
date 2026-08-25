@@ -44,6 +44,9 @@ pub enum Error {
     #[error("tuple of {size} bytes exceeds the {max}-byte maximum for a single page")]
     TupleTooLarge { size: usize, max: usize },
 
+    #[error("index key of {size} bytes exceeds the {max}-byte maximum a single node can hold")]
+    KeyTooLarge { size: usize, max: usize },
+
     #[error("invalid configuration: {detail}")]
     InvalidConfiguration { detail: String },
 
@@ -105,6 +108,7 @@ impl Error {
             Error::DoubleWriteRestoreFailed { .. } => SqlState::IO_ERROR,
             Error::BufferPoolExhausted => SqlState::OUT_OF_MEMORY,
             Error::TupleTooLarge { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
+            Error::KeyTooLarge { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
             Error::InvalidConfiguration { .. } => SqlState::CONNECTION_FAILURE,
             Error::Syntax { .. } => SqlState::SYNTAX_ERROR,
             Error::ColumnCountMismatch { .. } => SqlState::SYNTAX_ERROR,
@@ -139,6 +143,7 @@ impl Error {
 
             Error::BufferPoolExhausted
             | Error::TupleTooLarge { .. }
+            | Error::KeyTooLarge { .. }
             | Error::Syntax { .. }
             | Error::ColumnCountMismatch { .. }
             | Error::UndefinedTable { .. }
@@ -173,6 +178,7 @@ impl Error {
             | Error::DoubleWriteRestoreFailed { .. }
             | Error::BufferPoolExhausted
             | Error::TupleTooLarge { .. }
+            | Error::KeyTooLarge { .. }
             | Error::InvalidConfiguration { .. }
             | Error::ColumnCountMismatch { .. }
             | Error::UndefinedTable { .. }

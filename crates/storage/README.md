@@ -60,8 +60,10 @@ resting on the pin-count protocol described there.
   write through: `BlockDevice`, `FileDevice`, and the crash-injection
   fault-wrapping devices used by tests. See
   [block_device.MD](src/block_device.MD).
-- `btree` - disk-resident B+tree index structures (currently a stub whose
-  methods are `todo!()`). See [btree.MD](src/btree.MD).
+- `btree` - `BTreeIndex`, a disk-resident B+tree index: node layout,
+  `create`/`open`/`get`/`range_scan` (read path), and `insert` with leaf
+  and internal splits. `delete` is still `todo!()`. See
+  [btree.MD](src/btree.MD).
 - `buffer` - `BufferPool`, mediating every page access between the disk
   manager and the layers above. See [buffer.MD](src/buffer.MD).
 - `disk` - `DiskManager`, raw page-granular I/O against the database file.
@@ -89,18 +91,26 @@ heap files, write-ahead logging, ARIES crash recovery, and double-write
 protection against torn pages all work today and are exercised end to end
 by `crates/engine/tests/crash_injection.rs`.
 
-The B+tree (`btree.rs`) does not: every method (`init`, `insert`, `delete`,
-`search`, and the range-iterator's `next`) is `todo!()`. That's roadmap
-milestone M9 — see `docs/ROADMAP.md` — sequenced after the WAL and recovery
-(M6–M8) specifically so the tree is built against durable, recoverable
-storage rather than the pre-WAL engine. Until then, sequential scan is the
-only access path.
+The B+tree (`btree.rs`) now supports `create`/`open`, `get`, `range_scan`,
+and `insert` with leaf and internal splits (roadmap milestones M9.1–M9.2 —
+see `docs/ROADMAP.md`), exercised by `tests/btree.rs` (ascending/
+descending/random-permutation insertion, variable-length keys, duplicate
+keys spanning a split) and `tests/btree_crash_injection.rs` (a root split
+swept across every write point under every `block_device::DurabilityModel`,
+driving `BTreeIndex` directly since there is no `CREATE INDEX` yet to
+drive it through SQL). `delete` is still `todo!()`, and no caller in this
+workspace constructs a `BTreeIndex` yet — `catalog` and `executor` both
+still route every table through `heap::TableHeap` only, and turning a real
+column `Value` into an index key via `types::MemcomparableEncode` is
+roadmap milestone M9.3. Until then, sequential scan is the only access
+path a real query can take.
 
 ## Dependencies
 
 Workspace: `common`, `types`. External: `thiserror`, for `StorageError`;
 `rand`, used by the crash-injection test devices in `block_device.rs` to
-seed which sectors of a simulated torn write actually land. Dev-only:
+seed which sectors of a simulated torn write actually land, and by
+`tests/btree.rs` to shuffle a seeded random key permutation. Dev-only:
 `tempfile`, `proptest`.
 
 This crate also depends on itself with the `test-util` feature enabled
@@ -137,9 +147,15 @@ round-trip, corrupted-slot detection), `wal.rs` (record round-trip,
 `prev_lsn` chaining, truncation at a torn record), `recovery.rs`
 (Analysis/Redo/Undo against hand-built logs), `undo_performance.rs`
 (undo's bounded I/O cost per record, via the `CountingDevice` helper in
-`tests/support/mod.rs`), `slotted_page.rs` (over-capacity insertion), and
-`table_heap.rs` (multi-page insert/read-back, oversized-tuple rejection).
-`tests/smoke.rs` is the minimum-viable compile-and-construct check. A
+`tests/support/mod.rs`), `slotted_page.rs` (over-capacity insertion),
+`table_heap.rs` (multi-page insert/read-back, oversized-tuple rejection),
+`btree.rs` (insert/split correctness: ascending/descending/random-
+permutation insertion, variable-length keys, oversized-key rejection,
+root-height growth, duplicate keys spanning a split, ordered range scans),
+and `btree_crash_injection.rs` (a root split swept across every write
+point under every `DurabilityModel`, driving `BTreeIndex` directly against
+fault-injecting devices). `tests/smoke.rs` is the minimum-viable
+compile-and-construct check. A
 `#[cfg(test)]` unit test in `src/` is reserved for the rare case that
 needs access to something that should stay private (see CLAUDE.md's
 testing section); none of this crate's own `src/` currently does. Run

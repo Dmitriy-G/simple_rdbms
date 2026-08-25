@@ -7,9 +7,9 @@ and `catalog`/`txn`/`executor` each convert it into their own local error
 type at their boundary (see `common::Error`, which every variant here maps
 onto by hand - `ChecksumMismatch`/`CorruptPage`/`CorruptLogHeader`/
 `TruncatedFile`/`PageNotFound` all become a data-corruption `common::Error`
-variant, `BufferPoolExhausted`/`TupleTooLarge`/`DoubleWriteRestoreFailed`/
-`InvalidDwbCapacity` each become their own - see `common`'s `error.MD` for
-which).
+variant, `BufferPoolExhausted`/`TupleTooLarge`/`KeyTooLarge`/
+`DoubleWriteRestoreFailed`/`InvalidDwbCapacity` each become their own - see
+`common`'s `error.MD` for which).
 
 ## Key Components
 
@@ -28,7 +28,11 @@ which).
   `TupleTooLarge { size, max }` means a tuple's encoded bytes are larger
   than a single page can ever hold, even empty - no amount of retrying
   onto a fresh page would help, so this is raised immediately rather than
-  looping. `CorruptLogHeader { reason }` means the WAL's own fixed magic
+  looping. `KeyTooLarge { size, max }` is `btree::BTreeIndex::insert`'s
+  equivalent check for an index key: raised before any page is touched if
+  the key's encoded bytes could never fit an empty leaf node, for the same
+  reason `TupleTooLarge` is checked up front rather than discovered
+  partway through a split. `CorruptLogHeader { reason }` means the WAL's own fixed magic
   bytes failed validation, or the file is shorter than the header.
   `ChecksumMismatch { page_id, expected, actual }` means a page's stored
   CRC-32 doesn't match the one recomputed over its bytes at read time -

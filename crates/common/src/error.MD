@@ -45,6 +45,10 @@ had to change, from stringifying to matching.
   - `BufferPoolExhausted` -> `OUT_OF_MEMORY` (53200), Error. Every frame
     is pinned; the statement fails, the session doesn't.
   - `TupleTooLarge` -> `PROGRAM_LIMIT_EXCEEDED` (54000), Error.
+  - `KeyTooLarge` -> `PROGRAM_LIMIT_EXCEEDED` (54000), Error. An index key's
+    encoded bytes are larger than a single B+tree node
+    (`storage::btree::BTreeIndex::insert`) could ever hold, checked before
+    any page I/O happens rather than discovered partway through a split.
   - `InvalidConfiguration` -> `CONNECTION_FAILURE` (08006), Fatal. A
     `DbConfig` value the storage layer rejected while opening (e.g.
     `storage::StorageError::InvalidDwbCapacity`) - from a future client's

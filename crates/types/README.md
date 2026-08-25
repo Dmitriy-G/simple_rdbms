@@ -23,6 +23,10 @@ against.
 - `tuple` - `Tuple`, `Encode`, `Decode`, `TupleError`: an ordered row of
   values, the traits used to convert one to and from on-disk bytes, and the
   error that conversion can raise. See [tuple.MD](src/tuple.MD).
+- `memcomparable` - `MemcomparableEncode`, an order-preserving byte
+  encoding for a single `Value`, so a B+tree index can compare two encoded
+  keys with plain `[u8]` `Ord` and get the same ordering `Value::compare`
+  would report. See [memcomparable.MD](src/memcomparable.MD).
 
 ## Features
 
@@ -49,8 +53,10 @@ None — `types` has no configuration of its own.
 There are no inline `#[cfg(test)]` unit tests; everything lives under
 `tests/`. `tests/tuple_roundtrip.rs` is a `proptest`-driven property test asserting
 `Tuple::decode` reconstructs exactly what `Encode::encode` produced, for any
-schema and matching set of values. `tests/smoke.rs` is the minimum-viable
-compile-and-construct check. Run just this crate with:
+schema and matching set of values. `tests/memcomparable_ordering.rs` is a
+`proptest`-driven property test asserting `MemcomparableEncode`'s encoded
+bytes sort in the same order `Value::compare` reports. `tests/smoke.rs` is
+the minimum-viable compile-and-construct check. Run just this crate with:
 
 ```sh
 cargo test -p types

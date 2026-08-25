@@ -23,6 +23,9 @@ pub enum StorageError {
     #[error("tuple of {size} bytes exceeds the {max}-byte maximum for a single page")]
     TupleTooLarge { size: usize, max: usize },
 
+    #[error("index key of {size} bytes exceeds the {max}-byte maximum a single node can hold")]
+    KeyTooLarge { size: usize, max: usize },
+
     #[error("corrupt write-ahead log header: {reason}")]
     CorruptLogHeader { reason: String },
 
@@ -53,6 +56,7 @@ impl From<StorageError> for common::Error {
                 common::Error::TruncatedFile { actual, expected, page_size }
             }
             StorageError::TupleTooLarge { size, max } => common::Error::TupleTooLarge { size, max },
+            StorageError::KeyTooLarge { size, max } => common::Error::KeyTooLarge { size, max },
             StorageError::CorruptLogHeader { reason } => common::Error::CorruptLog { reason },
             StorageError::ChecksumMismatch { page_id, expected, actual } => {
                 common::Error::ChecksumMismatch { page_id, expected, actual }
