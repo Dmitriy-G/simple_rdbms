@@ -70,20 +70,63 @@ Dev-only: `tempfile`.
 
 ## Configuration
 
-`--metrics-addr` (default `0.0.0.0:9090`) is the one flag beyond `cli`'s
-own `db_path` positional argument. Every database sizing knob comes from
-`common::DbConfig`'s defaults, the same as `cli` - this binary does not
-yet expose flags for them. Logging is controlled by `RUST_LOG`, same as
-`cli` - see CLAUDE.md's logging section.
+`--metrics-addr` (default `0.0.0.0:9090`) and `--health-check` (a bare
+flag; queries this process's own `/health/ready` and exits `0`/`1` - see
+`src/main.MD`) are the two flags beyond `cli`'s own `db_path` positional
+argument. Every database sizing knob comes from `common::DbConfig`'s
+defaults, the same as `cli` - this binary does not yet expose flags for
+them. Logging is controlled by `RUST_LOG`, same as `cli` - see
+CLAUDE.md's logging section.
+
+### Container image
+
+`Dockerfile` builds this crate's binary with
+[`cargo-chef`](https://github.com/LukeMathWalker/cargo-chef) rather than
+a hand-rolled stub-crate dependency-caching stage: an eleven-crate
+workspace makes per-crate stubs fiddly to keep in sync, where cargo-chef
+computes the dependency-only build plan from `Cargo.lock` alone. The
+builder (`rust:1.85.0-slim-bookworm`) and runtime (`debian:bookworm-slim`)
+images are both pinned to explicit tags rather than the floating `rust:1`/
+`debian:stable-slim` aliases the Dockerfile used before, and deliberately
+share the `bookworm` Debian release so the runtime's glibc is never older
+than what the binary was linked against. `1.85.0` matches this
+workspace's `rust-version` (`Cargo.toml`, driven by `edition = "2024"`'s
+minimum supported compiler). Bump both together, deliberately, on
+purpose - not because either image floated out from under the build.
 
 ## Testing
 
-No crate-local tests yet: this crate is thin wiring around `engine`,
-`metrics-exporter-prometheus`, and `std::net`, exercised in practice by
-building and curling it directly (see the root `README.md`'s "Running in
-a container" section). Run just this crate's (currently absent) test
-suite with:
+`health.rs` and `http.rs` each carry an inline `#[cfg(test)] mod tests`
+(see `src/health.MD` and `src/http.MD`) rather than an integration test
+under `tests/`: this crate has only a `[[bin]]` target, no `[lib]`, so a
+file under `tests/` cannot `use server::...` at all - there's no library
+crate for it to link against. The only external-test option would be
+spawning the compiled binary as a subprocess, the way
+`crates/cli/tests/crash_recovery.rs` does; that's the right shape for a
+black-box, real-process check (see "Verify, don't assume" below), but the
+wrong shape for `Readiness`'s state transitions and `/health/ready`'s
+per-state response body, which are deterministic in-process behavior an
+inline unit test checks directly, without racing a real subprocess's
+startup window. Run this crate's tests with:
 
 ```sh
 cargo test -p server
 ```
+
+### Verify, don't assume
+
+Unit tests cover `Readiness` and `http::serve` in isolation; they don't
+prove the container actually works end to end. After changing
+`Dockerfile`/`docker-compose.yml`, build the image and run it for real:
+
+```sh
+docker compose build
+docker compose up -d
+curl -i http://localhost:9090/health/ready   # 503 while recovering, then 200
+docker compose stop simple_rdbms             # look for the shutdown log line
+docker compose start simple_rdbms            # recovery summary should show 0 losers
+docker compose down && docker compose up --build -d   # data must survive
+curl http://localhost:9090/health/ready
+```
+
+<!-- Transcript of the above, from the pinned bookworm-based images, goes here. -->

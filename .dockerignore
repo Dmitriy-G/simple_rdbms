@@ -1,0 +1,9 @@
+target
+.git
+.github
+docs
+*.db
+*.db.dwb
+*.db.wal
+Dockerfile
+docker-compose.yml

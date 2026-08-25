@@ -4,13 +4,28 @@ services:
     image: simple_rdbms_server:latest
     ports:
       # Metrics/health, deliberately separate from any future SQL port -
-      # see crates/server/src/main.MD.
-      - "9090:9090"
+      # see crates/server/src/main.MD. Bound to loopback only: /metrics
+      # and /health/* have no authentication and expose internal state,
+      # so only the host itself (or something it explicitly proxies for)
+      # can reach them, not every interface the host has.
+      - "127.0.0.1:9090:9090"
     volumes:
       - simple_rdbms_data:/data
     environment:
       RUST_LOG: ${RUST_LOG:-info}
     stop_grace_period: 10s
+    # The image's own filesystem is never written to at runtime - the
+    # only state is /data, already a separate writable volume mount - so
+    # the root filesystem can be read-only. /tmp is still writable via
+    # tmpfs in case anything (libc, a future dependency) needs scratch
+    # space; it never needs to survive a restart.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   simple_rdbms_data:

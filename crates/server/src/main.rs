@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::net::TcpListener;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::time::Duration;
 
 use clap::Parser;
 use common::DbConfig;
@@ -13,6 +15,8 @@ mod signals;
 
 use health::Readiness;
 
+const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Parser, Debug)]
 #[command(
     name = "simple_rdbms_server",
@@ -24,12 +28,24 @@ struct Args {
 
     #[arg(long, default_value = "0.0.0.0:9090")]
     metrics_addr: String,
+
+    #[arg(
+        long,
+        help = "Query this process's own /health/ready over HTTP, exit 0 if ready or 1 \
+                otherwise, and do nothing else - for HEALTHCHECK, in place of curl"
+    )]
+    health_check: bool,
 }
 
 fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+
+    if args.health_check {
+        std::process::exit(if check_ready(&args.metrics_addr) { 0 } else { 1 });
+    }
+
     init_logging();
 
-    let args = Args::parse();
     let readiness = Readiness::new();
 
     let handle = PrometheusBuilder::new().install_recorder()?;
@@ -70,4 +86,38 @@ fn init_logging() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
     tracing_subscriber::fmt().json().with_env_filter(filter).init();
+}
+
+fn check_ready(metrics_addr: &str) -> bool {
+    let port = metrics_addr.rsplit(':').next().unwrap_or("9090");
+    let target = format!("127.0.0.1:{port}");
+
+    let mut stream = match TcpStream::connect(&target) {
+        Ok(stream) => stream,
+        Err(err) => {
+            eprintln!("health check: could not connect to {target}: {err}");
+            return false;
+        }
+    };
+    let _ = stream.set_read_timeout(Some(HEALTH_CHECK_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(HEALTH_CHECK_TIMEOUT));
+
+    let request = "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    if let Err(err) = stream.write_all(request.as_bytes()) {
+        eprintln!("health check: failed to send request to {target}: {err}");
+        return false;
+    }
+
+    let mut response = String::new();
+    if let Err(err) = stream.read_to_string(&mut response) {
+        eprintln!("health check: failed to read response from {target}: {err}");
+        return false;
+    }
+
+    let status_line = response.lines().next().unwrap_or("<empty response>");
+    let ready = status_line.contains("200");
+    if !ready {
+        eprintln!("health check: {target} reported not ready: {status_line}");
+    }
+    ready
 }
