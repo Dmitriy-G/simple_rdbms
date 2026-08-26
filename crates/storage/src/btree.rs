@@ -302,7 +302,8 @@ impl<'a, 'pool> Node<'a, 'pool> {
         entries: &[Vec<u8>],
     ) -> Result<(), StorageError> {
         let body_start = NODE_TYPE_RANGE.start;
-        let mut body = vec![0u8; crate::page::PAGE_SIZE - body_start];
+        let current = self.data()[body_start..].to_vec();
+        let mut body = current.clone();
         body[0] = if kind == NodeType::Internal { INTERNAL_TAG } else { LEAF_TAG };
         body[1..3].copy_from_slice(&(entries.len() as u16).to_le_bytes());
         let total_len: usize = entries.iter().map(Vec::len).sum();
@@ -320,8 +321,33 @@ impl<'a, 'pool> Node<'a, 'pool> {
             body[slot_at + 2..slot_at + 4].copy_from_slice(&(entry.len() as u16).to_le_bytes());
         }
 
-        self.guard.write(self.txn_id, body_start, &body)
+        for range in changed_byte_runs(&current, &body) {
+            self.guard.write(self.txn_id, body_start + range.start, &body[range])?;
+        }
+        Ok(())
     }
+}
+
+const REBUILD_MERGE_GAP: usize = 16;
+
+fn changed_byte_runs(old: &[u8], new: &[u8]) -> Vec<std::ops::Range<usize>> {
+    let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut i = 0;
+    while i < old.len() {
+        if old[i] == new[i] {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < old.len() && old[i] != new[i] {
+            i += 1;
+        }
+        match runs.last_mut() {
+            Some(last) if start - last.end < REBUILD_MERGE_GAP => last.end = i,
+            _ => runs.push(start..i),
+        }
+    }
+    runs
 }
 
 pub struct BTreeIndex<'pool> {
@@ -555,10 +581,10 @@ impl<'pool> BTreeIndex<'pool> {
         todo!("descend to the target leaf, remove the entry, rebalance on underflow")
     }
 
-    pub fn check_invariants(&self) -> Result<(), String> {
+    pub fn check_invariants(&self, key_type: Option<types::DataType>) -> Result<(), String> {
         let mut state =
             InvariantState { visited: HashSet::new(), leaf_depth: None, leaves: Vec::new() };
-        self.check_node(self.root_page_id, (None, None), 0, &mut state)?;
+        self.check_node(self.root_page_id, (None, None), 0, key_type, &mut state)?;
 
         let mut via_tail = Vec::new();
         let mut current = self.leftmost_leaf().map_err(|e| e.to_string())?;
@@ -586,6 +612,7 @@ impl<'pool> BTreeIndex<'pool> {
         page_id: PageId,
         bounds: (Option<&[u8]>, Option<&[u8]>),
         depth: usize,
+        key_type: Option<types::DataType>,
         state: &mut InvariantState,
     ) -> Result<(), String> {
         if !state.visited.insert(page_id) {
@@ -634,22 +661,26 @@ impl<'pool> BTreeIndex<'pool> {
             };
             if !ordered {
                 return Err(format!(
-                    "page {}: keys are not strictly increasing bytewise ({:?} then {:?})",
-                    page_id.0, w[0], w[1]
+                    "page {}: keys are not strictly increasing bytewise ({} then {})",
+                    page_id.0,
+                    render_key(&w[0], key_type),
+                    render_key(&w[1], key_type)
                 ));
             }
         }
         for key in &keys {
             if low.is_some_and(|low| key.as_slice() < low) {
                 return Err(format!(
-                    "page {}: key {key:?} is below its inherited lower bound",
-                    page_id.0
+                    "page {}: key {} is below its inherited lower bound",
+                    page_id.0,
+                    render_key(key, key_type)
                 ));
             }
             if high.is_some_and(|high| key.as_slice() >= high) {
                 return Err(format!(
-                    "page {}: key {key:?} is not below its inherited upper bound",
-                    page_id.0
+                    "page {}: key {} is not below its inherited upper bound",
+                    page_id.0,
+                    render_key(key, key_type)
                 ));
             }
         }
@@ -683,10 +714,21 @@ impl<'pool> BTreeIndex<'pool> {
         for (i, &child) in children.iter().enumerate() {
             let child_low = if i == 0 { low } else { Some(keys[i - 1].as_slice()) };
             let child_high = if i == count as usize { high } else { Some(keys[i].as_slice()) };
-            self.check_node(child, (child_low, child_high), depth + 1, state)?;
+            self.check_node(child, (child_low, child_high), depth + 1, key_type, state)?;
         }
         Ok(())
     }
+}
+
+fn render_key(key: &[u8], key_type: Option<types::DataType>) -> String {
+    if let Some(data_type) = key_type {
+        if let Ok((value, consumed)) = types::decode_memcomparable(key, data_type) {
+            if consumed == key.len() {
+                return format!("{value:?}");
+            }
+        }
+    }
+    format!("{key:?}")
 }
 
 struct InvariantState {

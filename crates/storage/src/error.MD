@@ -8,8 +8,10 @@ type at their boundary (see `common::Error`, which every variant here maps
 onto by hand - `ChecksumMismatch`/`CorruptPage`/`CorruptLogHeader`/
 `TruncatedFile`/`PageNotFound` all become a data-corruption `common::Error`
 variant, `BufferPoolExhausted`/`TupleTooLarge`/`KeyTooLarge`/
-`DoubleWriteRestoreFailed`/`InvalidDwbCapacity` each become their own - see
-`common`'s `error.MD` for which).
+`DoubleWriteRestoreFailed`/`InvalidDwbCapacity` each become their own,
+`UnorderableKey` becomes `common::Error::DatatypeMismatch` (the closest
+existing condition - this crate has no index-specific `common::Error`
+variant of its own to map onto) - see `common`'s `error.MD` for which).
 
 ## Key Components
 
@@ -51,7 +53,18 @@ variant, `BufferPoolExhausted`/`TupleTooLarge`/`KeyTooLarge`/
   buffer with no page-image slots cannot protect any page, and
   `BufferPool::flush_pages`'s `pages.len() <= capacity` assertion would
   debug-panic on the very first non-empty flush rather than failing
-  cleanly at construction time.
+  cleanly at construction time. `UnorderableKey` wraps a `types::ValueError`
+  (`types::memcomparable.MD`), converting automatically via `#[from]`: a
+  caller that builds an index key with
+  `types::MemcomparableEncode::encode_memcomparable` and propagates its
+  `Result` with `?` gets a `StorageError` for free, so a value with no
+  defined ordering (today, only a NaN `Double`) fails the statement before
+  `btree::BTreeIndex::insert` ever sees it, instead of being encoded into a
+  key that would corrupt the index's ordering silently. `btree` itself
+  never calls `encode_memcomparable` - it stays ignorant of `Value`
+  entirely (see `btree.MD`) - so this variant exists for the caller that
+  will build keys ahead of `insert`, once M9.3 wires an index into the
+  query path.
 - `impl From<StorageError> for common::Error` - matches each `StorageError`
   variant to the `common::Error` variant naming the same condition,
   preserving its structured fields rather than collapsing them into a

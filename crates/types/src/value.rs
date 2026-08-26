@@ -58,4 +58,10 @@ impl Value {
 pub enum ValueError {
     #[error("type mismatch: cannot compare {lhs:?} with {rhs:?}")]
     TypeMismatch { lhs: String, rhs: String },
+
+    #[error("{reason}")]
+    UnorderableValue { reason: String },
+
+    #[error("malformed memcomparable encoding: {reason}")]
+    InvalidEncoding { reason: String },
 }

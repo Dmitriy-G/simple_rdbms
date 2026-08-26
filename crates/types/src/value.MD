@@ -21,10 +21,16 @@ of SQL `NULL` and is valid regardless of the column's declared `DataType`.
   error.
 - `Value::type_name(&self) -> String` - private. A short name for this
   value's variant, used in error messages.
-- `ValueError` - errors raised while operating on `Value`s, such as
-  comparing across incompatible types. `TypeMismatch { lhs, rhs }` names
-  the two operands' type names when they cannot be compared or coerced to
-  a common type.
+- `ValueError` - errors raised while operating on `Value`s. `TypeMismatch
+  { lhs, rhs }` names the two operands' type names when they cannot be
+  compared or coerced to a common type. `UnorderableValue { reason }` is
+  raised by `MemcomparableEncode::encode_memcomparable` (`memcomparable.MD`)
+  for a `Value` with no defined ordering - today, only a NaN `Double`,
+  since SQL itself does not order NaN. `InvalidEncoding { reason }` is
+  raised by `decode_memcomparable` (`memcomparable.MD`) when the bytes
+  handed to it are not a well-formed memcomparable encoding: too short for
+  the tag or value it claims to hold, an unrecognized tag byte, or (for
+  `Varchar`) bytes that are not valid UTF-8.
 
 ## Usage Example
 

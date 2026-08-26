@@ -40,6 +40,9 @@ pub enum StorageError {
 
     #[error("double-write buffer capacity must be at least 1, got 0")]
     InvalidDwbCapacity,
+
+    #[error("index key cannot be encoded: {0}")]
+    UnorderableKey(#[from] types::ValueError),
 }
 
 impl From<StorageError> for common::Error {
@@ -67,6 +70,7 @@ impl From<StorageError> for common::Error {
             StorageError::InvalidDwbCapacity => {
                 common::Error::InvalidConfiguration { detail: message }
             }
+            StorageError::UnorderableKey(_) => common::Error::DatatypeMismatch { detail: message },
         }
     }
 }

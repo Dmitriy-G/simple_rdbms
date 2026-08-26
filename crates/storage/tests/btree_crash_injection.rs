@@ -175,7 +175,7 @@ fn assert_workload_is_crash_safe(model: DurabilityModel) -> Result<(), Box<dyn E
             continue;
         };
         let index = BTreeIndex::open(&recovered, root_page_id);
-        index.check_invariants().map_err(|reason| -> Box<dyn Error> {
+        index.check_invariants(None).map_err(|reason| -> Box<dyn Error> {
             format!(
                 "model={model:?}, fail_at={fail_at}, safe_prefix={safe_prefix}/{}: {reason}",
                 keys.len()
@@ -225,7 +225,7 @@ fn workload_keys_actually_force_a_root_split() -> Result<(), Box<dyn Error>> {
         original_root,
         "the crash-injection workload must be large enough to force at least one root split"
     );
-    index.check_invariants().map_err(|e| e.into())
+    index.check_invariants(None).map_err(|e| e.into())
 }
 
 #[test]

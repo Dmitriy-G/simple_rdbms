@@ -38,7 +38,7 @@ fn a_single_insert_is_found_by_get() -> Result<(), Box<dyn Error>> {
 
     assert_eq!(index.get(b"hello")?, vec![rid]);
     assert_eq!(index.get(b"missing")?, Vec::new());
-    index.check_invariants().map_err(|e| e.into())
+    index.check_invariants(None).map_err(|e| e.into())
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn ascending_insert_of_ten_thousand_keys_keeps_invariants_and_every_key_findable
     for i in 0..10_000i32 {
         index.insert(TXN, &key_of(i), Rid::new(PageId(1), (i % u16::MAX as i32) as u16))?;
     }
-    index.check_invariants().map_err(|e| -> Box<dyn Error> { e.into() })?;
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     for i in 0..10_000i32 {
         let rids = index.get(&key_of(i))?;
@@ -70,7 +70,7 @@ fn descending_insert_of_ten_thousand_keys_keeps_invariants_and_every_key_findabl
     for i in (0..10_000i32).rev() {
         index.insert(TXN, &key_of(i), Rid::new(PageId(1), (i % u16::MAX as i32) as u16))?;
     }
-    index.check_invariants().map_err(|e| -> Box<dyn Error> { e.into() })?;
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     for i in 0..10_000i32 {
         let rids = index.get(&key_of(i))?;
@@ -94,7 +94,7 @@ fn variable_length_varchar_keys_still_split_correctly() -> Result<(), Box<dyn Er
     for (i, key) in keys.iter().enumerate() {
         index.insert(TXN, key, Rid::new(PageId(1), i as u16))?;
     }
-    index.check_invariants().map_err(|e| -> Box<dyn Error> { e.into() })?;
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     for (i, key) in keys.iter().enumerate() {
         let rids = index.get(key)?;
@@ -119,6 +119,42 @@ fn a_key_too_large_for_an_empty_node_errors_cleanly() -> Result<(), Box<dyn Erro
 }
 
 #[test]
+fn a_leaf_split_logs_well_under_the_naive_two_full_page_cost() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path(), 64)?;
+    let mut index = BTreeIndex::create(&pool, TXN)?;
+
+    let mut last_root = index.root_page_id();
+    let mut found = false;
+    for i in 0..3_000i32 {
+        let before = pool.log_bytes_appended();
+        index.insert(TXN, &key_of(i), Rid::new(PageId(1), 0))?;
+        let after = pool.log_bytes_appended();
+        let root_changed = index.root_page_id() != last_root;
+        last_root = index.root_page_id();
+
+        if root_changed {
+            continue;
+        }
+        let delta = after - before;
+        if delta > 500 {
+            let naive_two_full_pages = 2 * (2 * PAGE_SIZE as u64);
+            assert!(
+                delta < naive_two_full_pages / 2,
+                "a leaf split rewrites two nodes (the original leaf, mostly unchanged, plus a \
+                 freshly allocated sibling); logging only the differing byte runs instead of \
+                 both nodes' full before/after images every time should log well under the \
+                 {naive_two_full_pages}-byte naive cost, got {delta} bytes"
+            );
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "the insert loop must trigger at least one plain (non-root) leaf split");
+    Ok(())
+}
+
+#[test]
 fn root_height_grows_and_root_page_id_changes_on_a_root_split() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let pool = open_pool(dir.path(), 64)?;
@@ -133,7 +169,7 @@ fn root_height_grows_and_root_page_id_changes_on_a_root_split() -> Result<(), Bo
         }
     }
     assert!(root_changed, "enough inserts must eventually split the root");
-    index.check_invariants().map_err(|e| e.into())
+    index.check_invariants(None).map_err(|e| e.into())
 }
 
 #[test]
@@ -152,7 +188,7 @@ fn duplicate_keys_spanning_a_split_are_all_returned_by_get() -> Result<(), Box<d
         index.insert(TXN, &dup_key, rid)?;
         expected.push(rid);
     }
-    index.check_invariants().map_err(|e| -> Box<dyn Error> { e.into() })?;
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     let mut found = index.get(&dup_key)?;
     found.sort_by_key(|rid| (rid.page_id, rid.slot));
@@ -175,10 +211,10 @@ fn seeded_random_permutation_of_two_thousand_keys_keeps_invariants_and_finds_eve
     for (i, &k) in keys.iter().enumerate() {
         index.insert(TXN, &key_of(k), Rid::new(PageId(1), (k % i32::from(u16::MAX)) as u16))?;
         if (i + 1) % 100 == 0 {
-            index.check_invariants().map_err(|e| -> Box<dyn Error> { e.into() })?;
+            index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
         }
     }
-    index.check_invariants().map_err(|e| -> Box<dyn Error> { e.into() })?;
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
 
     for &k in &keys {
         let rids = index.get(&key_of(k))?;
