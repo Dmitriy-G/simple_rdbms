@@ -66,6 +66,13 @@ had to change, from stringifying to matching.
     all Error. From `planner::PlannerError`/`catalog::CatalogError`'s name
     and type-resolution failures, and `executor::ExecutorError::Evaluation`
     for a type error caught at execution rather than bind time.
+  - `UndefinedIndex`, `DuplicateIndex` -> `UNDEFINED_OBJECT` (42704),
+    `DUPLICATE_OBJECT` (42710), both Error. From
+    `catalog::CatalogError::IndexNotFound`/`IndexAlreadyExists`
+    (`catalog::catalog.MD`). Unlike `UndefinedTable`/`DuplicateTable`, the
+    standard has no class-42 code specific to an index, so these use the
+    standard's own generic "object" codes rather than a Postgres-style
+    `42P`-prefixed extension code (see `sql_state.MD`).
   - `NumericValueOutOfRange` -> `NUMERIC_VALUE_OUT_OF_RANGE` (22003),
     Error. A literal that doesn't fit its column's type -
     `planner::PlannerError::LiteralOutOfRange` - kept distinct from

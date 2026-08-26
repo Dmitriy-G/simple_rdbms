@@ -4,18 +4,20 @@ Builds an operator tree from a `PhysicalPlan`, one `Executor` per node.
 The small factory `execute` needs to turn a plan into something it can
 actually pull tuples from.
 
-`PhysicalPlan::CreateTable` never reaches here: `Database::execute`
-handles `CREATE TABLE` directly against the catalog before physical
-planning, since it has no tuple stream to pull.
+`PhysicalPlan::CreateTable`/`CreateIndex` never reach here:
+`Database::execute_bound` handles `CREATE TABLE`/`CREATE INDEX` directly
+against the catalog before physical planning, since neither has a tuple
+stream to pull.
 
 ## Key Components
 
 - `build_executor(plan) -> Box<dyn Executor>` - recursively lowers a
   `PhysicalPlan` into an `executor` operator tree: `SeqScan` to
-  `SeqScanExecutor`, `Filter` to `FilterExecutor` wrapping its lowered
-  input, `Projection` to `ProjectionExecutor` wrapping its lowered input,
-  `NestedLoopJoin` to `NestedLoopJoinExecutor` wrapping both lowered
-  sides, `Insert` to `InsertExecutor`. `CreateTable` is unreachable here.
+  `SeqScanExecutor`, `IndexScan` to `IndexScanExecutor`, `Filter` to
+  `FilterExecutor` wrapping its lowered input, `Projection` to
+  `ProjectionExecutor` wrapping its lowered input, `NestedLoopJoin` to
+  `NestedLoopJoinExecutor` wrapping both lowered sides, `Insert` to
+  `InsertExecutor`. `CreateTable`/`CreateIndex` are unreachable here.
 
 ## Usage Example
 

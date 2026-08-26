@@ -21,6 +21,16 @@ parse error (not a panic).
   `BOOLEAN` columns parses to the expected AST.
 - `create_table_type_names_are_case_insensitive` - lowercase `create
   table` and `int` still parse correctly.
+- `parses_create_index` - `CREATE INDEX idx_users_id ON users (id)` parses
+  to the expected `CreateIndexStatement`.
+- `create_index_and_create_table_are_disambiguated_by_one_token_of_lookahead` -
+  `create index idx on t (a)` and `create table t (a int)` each parse to
+  their own statement kind, proving `Parser::peek_kind`'s one-token
+  lookahead after `CREATE` picks correctly.
+- `create_index_missing_on_is_a_parse_error`,
+  `create_index_missing_parens_around_column_is_a_parse_error` - malformed
+  `CREATE INDEX` grammar (missing `ON`, missing the column's parentheses)
+  each report `SqlError::UnexpectedToken` rather than panicking.
 - `parses_insert_with_explicit_columns_and_multiple_rows` - an `INSERT`
   naming its columns with two value rows parses to the expected AST.
 - `parses_insert_without_column_list` - an `INSERT` with no column list

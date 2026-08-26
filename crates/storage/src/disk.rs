@@ -9,7 +9,7 @@ use crate::page::{self, CHECKSUM_RANGE, Page};
 
 const MAGIC: &[u8; 8] = b"FERRODB\0";
 
-const HEADER_VERSION: u32 = 8;
+const HEADER_VERSION: u32 = 9;
 
 pub(crate) mod header {
     pub const MAGIC_RANGE: std::ops::Range<usize> = 12..20;
@@ -17,6 +17,7 @@ pub(crate) mod header {
     pub const CATALOG_FIRST_PAGE_RANGE: std::ops::Range<usize> = 24..28;
     pub const PAGE_SIZE_RANGE: std::ops::Range<usize> = 28..32;
     pub const LAST_CHECKPOINT_LSN_RANGE: std::ops::Range<usize> = 32..40;
+    pub const INDEX_CATALOG_FIRST_PAGE_RANGE: std::ops::Range<usize> = 40..44;
 }
 
 pub struct DiskManager {
@@ -160,6 +161,7 @@ impl DiskManager {
         buf[header::MAGIC_RANGE].copy_from_slice(MAGIC);
         buf[header::VERSION_RANGE].copy_from_slice(&HEADER_VERSION.to_le_bytes());
         buf[header::CATALOG_FIRST_PAGE_RANGE].copy_from_slice(&u32::MAX.to_le_bytes());
+        buf[header::INDEX_CATALOG_FIRST_PAGE_RANGE].copy_from_slice(&u32::MAX.to_le_bytes());
         buf[header::PAGE_SIZE_RANGE].copy_from_slice(&(self.page_size as u32).to_le_bytes());
 
         page::stamp_checksum(&mut buf);

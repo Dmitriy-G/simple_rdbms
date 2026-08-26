@@ -202,11 +202,35 @@ those lower layers needing to know a connection or a transaction exists.
 - `Database::execute_bound(&mut self, bound, txn_id) -> Result<ResultSet>`
   - private. Runs a bound, non-transaction-control statement under
   `txn_id`: `CreateTable` builds a `Schema` and calls
-  `catalog.create_table`; `Insert` and `Select` both plan to a
-  `PhysicalPlan`, log it at `debug!` (full plan, including any literal
-  values it carries - allowed at this level per CLAUDE.md, the same as the
-  raw SQL text they came from), and call `run`, differing in how the
-  resulting rows are wrapped into a `ResultSet`.
+  `catalog.create_table`; `Insert` plans straight to a `PhysicalPlan`
+  (no `Optimizer` step - there is nothing in an `Insert` plan for
+  `planner::optimizer::IndexScanRule` to act on) and calls `run`; `Select`
+  plans, then runs `planner::Optimizer::new(vec![Box::new(IndexScanRule)])
+  .optimize` against the logical plan before lowering to physical - the
+  only statement kind that goes through `Optimizer` at all - then calls
+  `run`; both log the physical plan at `debug!` (full plan, including any
+  literal values it carries - allowed at this level per CLAUDE.md, the
+  same as the raw SQL text they came from) and differ only in how the
+  resulting rows are wrapped into a `ResultSet`. `CreateIndex` calls
+  `catalog.create_index` then `populate_index` - like `CreateTable`, it
+  never reaches `planner::plan`/`Optimizer`/`to_physical` at all, since it
+  has no tuple stream to pull and nothing to plan.
+- `Database::populate_index(&self, txn_id, table_id, column_index,
+  index_id) -> Result<()>` - private. Scans `table_id`'s heap directly
+  (`storage::heap::TableHeap::open`/`iter`, not through a `SeqScanExecutor`
+  - this runs before the statement's own transaction has an
+  `ExecutorContext` to hand one) and, for each row, does exactly what
+  `executor::InsertExecutor` does per row when maintaining an index:
+  encode the value at `column_index` via
+  `types::MemcomparableEncode::encode_memcomparable`, insert it into
+  `index_id`'s `storage::btree::BTreeIndex` at its current root
+  (`catalog.index_root_page`), and persist a changed root via
+  `catalog.update_index_root_page` if the insert split it. On an empty
+  table this loop simply never executes - no special-casing needed. Runs
+  under the same `txn_id` as the rest of the `CREATE INDEX` statement, so
+  a later failure (or an explicit `ROLLBACK`) undoes the whole thing via
+  the ordinary abort path, the same guarantee `executor::InsertExecutor`
+  relies on for its own index-maintenance failures (`executor::operators::insert.MD`).
 - `Database::table_names(&self) -> Vec<String>` - every registered
   table's name, sorted for a deterministic order.
 - `Database::table_schema(&self, name) -> Result<Schema>` - the column
@@ -229,8 +253,9 @@ those lower layers needing to know a connection or a transaction exists.
   never per statement or transaction - it is the outermost span in the
   connection/transaction/statement hierarchy.
 - `statement_kind(&Statement) -> &'static str` - private free function.
-  `"SELECT"`/`"INSERT"`/`"CREATE TABLE"`/`"BEGIN"`/`"COMMIT"`/`"ROLLBACK"`,
-  used to fill `execute_impl`'s `statement_kind` span field.
+  `"SELECT"`/`"INSERT"`/`"CREATE TABLE"`/`"CREATE INDEX"`/`"BEGIN"`/
+  `"COMMIT"`/`"ROLLBACK"`, used to fill `execute_impl`'s `statement_kind`
+  span field.
 - `syntax_error(err, sql) -> Error` - private free function. Builds
   `common::Error::Syntax { message, offset }` from a `sql::SqlError`:
   `message` is `err.render(sql)` (the error plus the offending line and a

@@ -5,6 +5,7 @@ pub enum Statement {
     Select(SelectStatement),
     Insert(InsertStatement),
     CreateTable(CreateTableStatement),
+    CreateIndex(CreateIndexStatement),
     Begin,
     Commit,
     Rollback,
@@ -34,6 +35,13 @@ pub struct InsertStatement {
 pub struct CreateTableStatement {
     pub table: String,
     pub columns: Vec<ColumnDef>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateIndexStatement {
+    pub index_name: String,
+    pub table: String,
+    pub column: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

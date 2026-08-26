@@ -19,6 +19,8 @@ fn sample_errors() -> Vec<Error> {
         Error::UndefinedColumn { name: "ghost".to_string() },
         Error::AmbiguousColumn { name: "id".to_string() },
         Error::DuplicateTable { name: "users".to_string() },
+        Error::UndefinedIndex { name: "idx_missing".to_string() },
+        Error::DuplicateIndex { name: "idx_users_id".to_string() },
         Error::DatatypeMismatch { detail: "expected INTEGER".to_string() },
         Error::NumericValueOutOfRange {
             column: "a".to_string(),
@@ -54,6 +56,8 @@ fn expected_sql_state(err: &Error) -> SqlState {
         Error::UndefinedColumn { .. } => SqlState::UNDEFINED_COLUMN,
         Error::AmbiguousColumn { .. } => SqlState::AMBIGUOUS_COLUMN,
         Error::DuplicateTable { .. } => SqlState::DUPLICATE_TABLE,
+        Error::UndefinedIndex { .. } => SqlState::UNDEFINED_OBJECT,
+        Error::DuplicateIndex { .. } => SqlState::DUPLICATE_OBJECT,
         Error::DatatypeMismatch { .. } => SqlState::DATATYPE_MISMATCH,
         Error::NumericValueOutOfRange { .. } => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
         Error::DataCorrupted { .. } => SqlState::DATA_CORRUPTED,

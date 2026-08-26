@@ -1,13 +1,22 @@
-use common::{PageId, TableId};
+use common::{IndexId, PageId, TableId};
 use types::{DataType, Encode, Tuple, Value};
 
 use crate::column::Column;
 use crate::error::CatalogError;
+use crate::index_info::IndexInfo;
 use crate::schema::Schema;
 use crate::table_info::TableInfo;
 
 const CATALOG_ROW_SCHEMA: [DataType; 4] =
     [DataType::Integer, DataType::Varchar(0), DataType::Integer, DataType::Varchar(0)];
+
+const INDEX_CATALOG_ROW_SCHEMA: [DataType; 5] = [
+    DataType::Integer,
+    DataType::Varchar(0),
+    DataType::Integer,
+    DataType::Integer,
+    DataType::Integer,
+];
 
 fn type_tag(data_type: DataType) -> u8 {
     match data_type {
@@ -121,6 +130,44 @@ pub(crate) fn decode_table_info(bytes: &[u8]) -> Result<TableInfo, CatalogError>
 
     let schema = decode_schema_blob(blob)?;
     Ok(TableInfo::new(TableId(*table_id as u32), name.clone(), schema, PageId(*first_page as u32)))
+}
+
+pub(crate) fn encode_index_row(info: &IndexInfo, root_page_id: PageId) -> Vec<u8> {
+    let tuple = Tuple::new(vec![
+        Value::Integer(info.index_id.0 as i32),
+        Value::Varchar(info.name.clone()),
+        Value::Integer(info.table_id.0 as i32),
+        Value::Integer(info.column_index as i32),
+        Value::Integer(root_page_id.0 as i32),
+    ]);
+    let mut buf = Vec::new();
+    tuple.encode(&mut buf);
+    buf
+}
+
+pub(crate) fn decode_index_row(bytes: &[u8]) -> Result<(IndexInfo, PageId), CatalogError> {
+    let tuple = Tuple::decode(bytes, &INDEX_CATALOG_ROW_SCHEMA)
+        .map_err(|err| CatalogError::Corrupt(err.to_string()))?;
+    let values = tuple.values();
+
+    let (
+        Value::Integer(index_id),
+        Value::Varchar(name),
+        Value::Integer(table_id),
+        Value::Integer(column_index),
+        Value::Integer(root_page_id),
+    ) = (&values[0], &values[1], &values[2], &values[3], &values[4])
+    else {
+        return Err(CatalogError::Corrupt("malformed index catalog row".to_string()));
+    };
+
+    let info = IndexInfo::new(
+        IndexId(*index_id as u32),
+        name.clone(),
+        TableId(*table_id as u32),
+        *column_index as usize,
+    );
+    Ok((info, PageId(*root_page_id as u32)))
 }
 
 fn take(bytes: &[u8], offset: usize, len: usize) -> Result<&[u8], CatalogError> {

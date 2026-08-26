@@ -31,18 +31,21 @@ operator tree shape could in principle be reused across transactions.
   See [executor.MD](src/executor.MD).
 - `expression` - `evaluate`, evaluates a bound expression against a
   tuple. See [expression.MD](src/expression.MD).
-- `operators` - `FilterExecutor`, `InsertExecutor`, `NestedLoopJoinExecutor`,
-  `ProjectionExecutor`, `SeqScanExecutor`: the concrete operators, one per
-  physical plan node kind. See
+- `operators` - `FilterExecutor`, `IndexScanExecutor`, `InsertExecutor`,
+  `NestedLoopJoinExecutor`, `ProjectionExecutor`, `SeqScanExecutor`: the
+  concrete operators, one per physical plan node kind. See
   [operators/mod.MD](src/operators/mod.MD).
 
 ## Features
 
-`SeqScanExecutor`, `FilterExecutor`, `ProjectionExecutor`, and
-`InsertExecutor` all work today and are what every `CREATE TABLE`/`INSERT`/
-`SELECT` in the REPL actually runs through. `SeqScanExecutor` is lazy and
-page-at-a-time — it does not materialize the whole table before yielding
-its first row (`tests/seq_scan.rs`).
+`SeqScanExecutor`, `IndexScanExecutor`, `FilterExecutor`,
+`ProjectionExecutor`, and `InsertExecutor` all work today and are what
+every `CREATE TABLE`/`CREATE INDEX`/`INSERT`/`SELECT` in the REPL actually
+runs through. `SeqScanExecutor`/`IndexScanExecutor` are both lazy and
+page-at-a-time — neither materializes its table/index before yielding its
+first row (`tests/seq_scan.rs`, `tests/index_scan.rs`). `InsertExecutor`
+maintains every index on its target table as it inserts
+(`tests/index_maintenance.rs`).
 
 `NestedLoopJoinExecutor::init`/`next` are both `todo!()`. Nothing
 constructs one outside of tests, since `sql` has no `JOIN` syntax for a
@@ -66,6 +69,15 @@ already-built `ExecutorContext` by its caller.
 
 `tests/seq_scan.rs` checks `SeqScanExecutor`'s lazy, page-at-a-time cursor:
 tuples come back in storage order without materializing the whole table.
+`tests/index_maintenance.rs` checks `InsertExecutor` maintains a single
+index and every index on a multi-indexed table, and that an unorderable
+indexed value (NaN) fails the statement without silently completing that
+row's index entry. `tests/index_scan.rs` checks `IndexScanExecutor`
+against bounded and unbounded ranges, duplicate keys, and that every row
+is still reachable through the index after enough inserts to force a
+B+tree root split, proving `InsertExecutor` actually persists a changed
+root page rather than leaving the catalog pointing at a stale one. Both files
+declare `mod support;` for shared setup helpers (`tests/support/mod.MD`).
 `tests/smoke.rs` is the minimum-viable compile-and-construct check. Run
 just this crate with:
 

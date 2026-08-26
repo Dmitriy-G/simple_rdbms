@@ -2,7 +2,7 @@ use crate::binder::BoundStatement;
 use crate::error::PlannerError;
 use crate::logical_plan::LogicalPlan;
 
-// TODO(M8): cost-based optimization
+// TODO(M11): cost-based optimization
 
 pub fn plan(statement: BoundStatement) -> Result<LogicalPlan, PlannerError> {
     let plan = match statement {
@@ -20,6 +20,11 @@ pub fn plan(statement: BoundStatement) -> Result<LogicalPlan, PlannerError> {
         BoundStatement::CreateTable(create) => {
             LogicalPlan::CreateTable { table_name: create.table_name, columns: create.columns }
         }
+        BoundStatement::CreateIndex(create) => LogicalPlan::CreateIndex {
+            index_name: create.index_name,
+            table_id: create.table_id,
+            column_index: create.column_index,
+        },
     };
     Ok(plan)
 }

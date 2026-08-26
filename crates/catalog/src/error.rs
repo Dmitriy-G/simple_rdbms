@@ -8,6 +8,12 @@ pub enum CatalogError {
     #[error("table not found: {0}")]
     TableNotFound(String),
 
+    #[error("index already exists: {0}")]
+    IndexAlreadyExists(String),
+
+    #[error("index not found: {0}")]
+    IndexNotFound(String),
+
     #[error("column not found: {table}.{column}")]
     ColumnNotFound { table: String, column: String },
 
@@ -23,6 +29,8 @@ impl From<CatalogError> for common::Error {
         match err {
             CatalogError::TableAlreadyExists(name) => common::Error::DuplicateTable { name },
             CatalogError::TableNotFound(name) => common::Error::UndefinedTable { name },
+            CatalogError::IndexAlreadyExists(name) => common::Error::DuplicateIndex { name },
+            CatalogError::IndexNotFound(name) => common::Error::UndefinedIndex { name },
             CatalogError::ColumnNotFound { table, column } => {
                 common::Error::UndefinedColumn { name: format!("{table}.{column}") }
             }

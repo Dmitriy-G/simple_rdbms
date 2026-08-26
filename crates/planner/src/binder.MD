@@ -10,7 +10,8 @@ becomes "semantically valid against this database's schema".
 - `BoundStatement` - a statement after binding: names resolved against
   the catalog and expressions type-checked, but still shaped like the SQL
   it came from rather than lowered to relational algebra. `Select`,
-  `Insert`, and `CreateTable` each wrap the corresponding bound struct.
+  `Insert`, `CreateTable`, and `CreateIndex` each wrap the corresponding
+  bound struct.
 - `BoundSelect` - a `SELECT` after binding. `table_id` is the resolved
   source table. `projections` are the projected expressions, resolved to
   column ordinals. `column_names` are display names for `projections`, in
@@ -27,6 +28,13 @@ becomes "semantically valid against this database's schema".
   name-collision check; there is no schema to resolve against yet since
   the table doesn't exist). `table_name` and `columns` mirror the parsed
   statement.
+- `BoundCreateIndex` - a `CREATE INDEX` after binding: `index_name` mirrors
+  the parsed statement, `table_id` and `column_index` are the resolved
+  target table and column ordinal - the same resolution `Schema::column_index`
+  does for any other column reference, catching an unknown table or column
+  before `catalog::Catalog::create_index` ever runs. Unlike
+  `BoundCreateTable`, there *is* a schema to resolve against, since the
+  table must already exist for `CREATE INDEX ... ON` to name it.
 - `BoundColumnDef` - a column definition after binding, e.g. after
   validating that its type is supported and its name does not repeat
   within the same statement. `name`, `data_type`, and `nullable` mirror
@@ -63,6 +71,11 @@ becomes "semantically valid against this database's schema".
 - `Binder::bind_create_table(&self, create) -> BoundCreateTable` - private.
   Converts each parsed `ColumnDef` into a `BoundColumnDef` directly, with
   no catalog lookup (the table doesn't exist yet).
+- `Binder::bind_create_index(&self, create) -> Result<BoundCreateIndex, PlannerError>` -
+  private. Resolves `create.table` via `catalog.get_table` and
+  `create.column` via `Schema::column_index`, the same patterns
+  `bind_select`/`bind_insert` already use, raising `UnknownTable`/
+  `UnknownColumn` for either miss.
 - `Binder::bind_expr(&self, expr, schema) -> Result<(BoundExpr, Option<DataType>), PlannerError>` -
   private. Binds an expression against `schema`, resolving column
   references to ordinals and type-checking every operator application.

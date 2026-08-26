@@ -9,6 +9,7 @@ pub enum BoundStatement {
     Select(BoundSelect),
     Insert(BoundInsert),
     CreateTable(BoundCreateTable),
+    CreateIndex(BoundCreateIndex),
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,13 @@ pub struct BoundInsert {
 pub struct BoundCreateTable {
     pub table_name: String,
     pub columns: Vec<BoundColumnDef>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BoundCreateIndex {
+    pub index_name: String,
+    pub table_id: TableId,
+    pub column_index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -73,6 +81,9 @@ impl<'a> Binder<'a> {
             sql::Statement::Insert(insert) => Ok(BoundStatement::Insert(self.bind_insert(insert)?)),
             sql::Statement::CreateTable(create) => {
                 Ok(BoundStatement::CreateTable(self.bind_create_table(create)))
+            }
+            sql::Statement::CreateIndex(create) => {
+                Ok(BoundStatement::CreateIndex(self.bind_create_index(create)?))
             }
             sql::Statement::Begin | sql::Statement::Commit | sql::Statement::Rollback => {
                 unreachable!(
@@ -205,6 +216,25 @@ impl<'a> Binder<'a> {
             })
             .collect();
         BoundCreateTable { table_name: create.table, columns }
+    }
+
+    fn bind_create_index(
+        &self,
+        create: sql::CreateIndexStatement,
+    ) -> Result<BoundCreateIndex, PlannerError> {
+        let table = self
+            .catalog
+            .get_table(&create.table)
+            .map_err(|_| PlannerError::UnknownTable(create.table.clone()))?;
+        let column_index = table
+            .schema
+            .column_index(&create.column)
+            .ok_or_else(|| PlannerError::UnknownColumn(create.column.clone()))?;
+        Ok(BoundCreateIndex {
+            index_name: create.index_name,
+            table_id: table.table_id,
+            column_index,
+        })
     }
 
     fn bind_expr(

@@ -5,6 +5,7 @@ Concrete `Executor` implementations, one per physical plan node kind.
 ## Key Components
 
 - `FilterExecutor` - re-exported from `filter`. See `filter.MD`.
+- `IndexScanExecutor` - re-exported from `index_scan`. See `index_scan.MD`.
 - `InsertExecutor` - re-exported from `insert`. See `insert.MD`.
 - `NestedLoopJoinExecutor` - re-exported from `nested_loop_join`. See
   `nested_loop_join.MD`.

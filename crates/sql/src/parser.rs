@@ -1,8 +1,8 @@
 use types::{DataType, Value};
 
 use crate::ast::{
-    BinaryOperator, ColumnDef, CreateTableStatement, Expr, InsertStatement, SelectItem,
-    SelectStatement, Statement, UnaryOperator,
+    BinaryOperator, ColumnDef, CreateIndexStatement, CreateTableStatement, Expr, InsertStatement,
+    SelectItem, SelectStatement, Statement, UnaryOperator,
 };
 use crate::error::SqlError;
 use crate::token::{Token, TokenKind};
@@ -21,7 +21,10 @@ impl Parser {
         let statement = match &self.current().kind {
             TokenKind::Select => Statement::Select(self.parse_select()?),
             TokenKind::Insert => Statement::Insert(self.parse_insert()?),
-            TokenKind::Create => Statement::CreateTable(self.parse_create_table()?),
+            TokenKind::Create => match self.peek_kind(1) {
+                TokenKind::Index => Statement::CreateIndex(self.parse_create_index()?),
+                _ => Statement::CreateTable(self.parse_create_table()?),
+            },
             TokenKind::Begin => {
                 self.advance();
                 Statement::Begin
@@ -133,6 +136,20 @@ impl Parser {
         self.expect_kind(TokenKind::RParen, ")")?;
 
         Ok(CreateTableStatement { table, columns })
+    }
+
+    fn parse_create_index(&mut self) -> Result<CreateIndexStatement, SqlError> {
+        self.expect_kind(TokenKind::Create, "CREATE")?;
+        self.expect_kind(TokenKind::Index, "INDEX")?;
+        let index_name = self.expect_identifier()?;
+        self.expect_kind(TokenKind::On, "ON")?;
+        let table = self.expect_identifier()?;
+
+        self.expect_kind(TokenKind::LParen, "(")?;
+        let column = self.expect_identifier()?;
+        self.expect_kind(TokenKind::RParen, ")")?;
+
+        Ok(CreateIndexStatement { index_name, table, column })
     }
 
     fn parse_col_def(&mut self) -> Result<ColumnDef, SqlError> {
@@ -270,6 +287,11 @@ impl Parser {
 
     fn current(&self) -> &Token {
         &self.tokens[self.pos]
+    }
+
+    fn peek_kind(&self, ahead: usize) -> &TokenKind {
+        let idx = (self.pos + ahead).min(self.tokens.len() - 1);
+        &self.tokens[idx].kind
     }
 
     fn advance(&mut self) -> Token {

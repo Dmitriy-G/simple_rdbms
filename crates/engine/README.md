@@ -42,13 +42,17 @@ order is forced rather than incidental:
 
 `Database::execute` then runs one pipeline per statement: lex
 (`sql::Lexer`) -> parse (`sql::Parser`) -> bind (`planner::Binder`) -> plan
-(`planner::plan`/`to_physical`) -> build an operator tree
+(`planner::plan`) -> optimize (`planner::Optimizer::optimize`, `SELECT`
+only) -> lower (`to_physical`) -> build an operator tree
 (`executor_factory::build_executor`) -> run it (`executor::Executor::init`/
 `next`), wrapped in an implicit per-statement transaction unless an
-explicit `BEGIN` is already open. `CREATE TABLE` is the one exception: it
-binds and lowers the same way but is handled directly by `execute` rather
-than reaching the executor, since it mutates the catalog itself rather than
-producing rows.
+explicit `BEGIN` is already open. `CREATE TABLE`/`CREATE INDEX` are the
+exception: both bind the same way but are handled directly by `execute`
+rather than reaching the optimizer or the executor, since each mutates the
+catalog itself rather than producing rows - `CREATE INDEX` additionally
+populates the new index from every existing row
+(`Database::populate_index`) before returning, under the same transaction
+as the `CREATE INDEX` statement itself.
 
 ## Key Components
 
@@ -69,17 +73,24 @@ depending on `types` directly.
 
 ## Features
 
-`CREATE TABLE`, `INSERT`, `SELECT`, and `BEGIN`/`COMMIT`/`ROLLBACK` all
-work end to end today, durable across a restart and atomic per transaction
-(`docs/adr/0004-acid-scope.md`). Crash recovery and torn-page repair run on
-every open and are swept exhaustively by
-`tests/crash_injection.rs` across every fail point and every
-`storage::block_device::DurabilityModel`. What's missing is entirely
-inherited from the layers `engine` assembles, not added here: no index
-(`storage`'s B+tree, M9), no `DROP`/`UPDATE`/`DELETE`/`JOIN` (no crate
-above `sql` supports them yet), no concurrent transactions (`txn`'s lock
-manager and MVCC are unwired, M10), and no cost-based optimization
-(`planner`'s optimizer is `todo!()`, M11). See `docs/ROADMAP.md`.
+`CREATE TABLE`, `CREATE INDEX`, `INSERT`, `SELECT` (choosing an index scan
+over a sequential scan where `planner::optimizer::IndexScanRule` applies),
+and `BEGIN`/`COMMIT`/`ROLLBACK` all work end to end today, durable across a
+restart and atomic per transaction (`docs/adr/0004-acid-scope.md`). Crash
+recovery and torn-page repair run on every open and are swept exhaustively
+by `tests/crash_injection.rs` across every fail point and every
+`storage::block_device::DurabilityModel`; `tests/index_equivalence.rs`
+separately sweeps randomized tables/predicates comparing indexed and
+sequential-scan results for equality, and `tests/index_scan.rs` checks an
+index's durability across a root split and a restart, `NULL` handling, and
+populating an index created on a non-empty table. What's missing is
+entirely inherited from the layers `engine` assembles, not added here: no
+`DROP`/`UPDATE`/`DELETE`/`JOIN` (no crate above `sql` supports them yet),
+no concurrent transactions (`txn`'s lock manager and MVCC are unwired,
+M10), no composite/multi-column indexes, and no cost-based optimization
+choosing *among* multiple viable access paths (M11 - `IndexScanRule` picks
+an index whenever one applies, but has no cost model for picking among
+several). See `docs/ROADMAP.md`.
 
 ## Dependencies
 
@@ -93,7 +104,8 @@ that once at the boundary is itself boundary-assembly, not domain logic.
 Dev-only: this crate again with its `test-util` feature enabled (for
 `Database::open_with_devices`, used by the crash-injection harness to open
 against fault-injecting `BlockDevice`s instead of real files), plus
-`tempfile`.
+`tempfile` and `proptest` (for `tests/index_equivalence.rs`'s randomized
+index-vs-sequential-scan comparison).
 
 ## Configuration
 
@@ -111,6 +123,13 @@ the subscriber; see CLAUDE.md's logging section), not by `DbConfig`.
 
 `tests/integration.rs` runs the full lex -> parse -> bind -> plan ->
 execute pipeline against a real (tempfile-backed) database file.
+`tests/index_scan.rs` and `tests/index_equivalence.rs` are `CREATE
+INDEX`/index-scan-specific: the former deterministic (root split survives
+a restart, `NULL` handling, populating a non-empty table, a rolled-back
+`CREATE INDEX`), the latter a seeded proptest comparing indexed and
+sequential-scan query results for equality across randomized data and
+predicates - the test that matters most for catching a wrong-rows bug in
+`executor::IndexScanExecutor` or `planner::optimizer::IndexScanRule`.
 `tests/transactions.rs` checks `BEGIN`/`COMMIT`/`ROLLBACK` group statements
 atomically. `tests/rollback_matches_recovery_undo.rs` proves
 `TransactionManager::abort` and `storage::recovery::recover`'s Undo pass

@@ -99,7 +99,7 @@ undo against (M6), there was nothing to roll back to.
 from M7, giving single-transaction atomicity independent of how many other
 transactions are (or aren't) running concurrently.
 
-## M9 — Answering point/range lookups without a full scan
+## M9 — Answering point/range lookups without a full scan ✅ Done
 **Problem:** a sequential scan is the only access path so far; queries that
 touch a small fraction of a table still pay for reading all of it.
 **Solution:** a B+tree index and an index-scan operator the planner can

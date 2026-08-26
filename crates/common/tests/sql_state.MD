@@ -22,7 +22,7 @@ gap nobody notices.
   `SERIALIZATION_FAILURE` or `STATEMENT_COMPLETION_UNKNOWN`" for every
   sample - since only one sample (`SerializationFailure`) is currently a
   class-40 code, this also pins down that `is_retryable` is `false` for
-  the other twenty-four.
+  the other twenty-six.
 
 ## Usage Example
 

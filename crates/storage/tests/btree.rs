@@ -5,7 +5,7 @@ use common::{PageId, Rid, TxnId};
 use proptest::test_runner::{RngAlgorithm, TestRng};
 use rand::seq::SliceRandom;
 use storage::StorageError;
-use storage::btree::{BTreeIndex, MAX_KEY_SIZE};
+use storage::btree::{BTreeIndex, LeafScan, MAX_KEY_SIZE};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::dwb::DoubleWriteBuffer;
@@ -245,5 +245,49 @@ fn range_scan_yields_keys_in_order_across_leaf_boundaries() -> Result<(), Box<dy
         index.range_scan(Some(&key_of(100)), Some(&key_of(110))).collect();
     let bounded = bounded?;
     assert_eq!(bounded.len(), 10, "range [100, 110) should yield exactly 10 keys");
+    Ok(())
+}
+
+#[test]
+fn scan_leaf_and_leaf_for_start_cross_a_leaf_boundary_like_range_scan_does()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path(), 64)?;
+    let mut index = BTreeIndex::create(&pool, TXN)?;
+
+    for i in 0..3_000i32 {
+        index.insert(TXN, &key_of(i), Rid::new(PageId(1), 0))?;
+    }
+
+    let (mut page_id, mut slot) = index.leaf_for_start(None)?;
+    let mut collected = Vec::new();
+    let mut crossed_a_leaf_boundary = false;
+    loop {
+        match BTreeIndex::scan_leaf(&pool, page_id, slot)? {
+            LeafScan::Entry { slot: found_slot, key, rid } => {
+                assert_eq!(found_slot, slot, "scan_leaf must report back the slot it read");
+                collected.push((key, rid));
+                slot += 1;
+            }
+            LeafScan::EndOfLeaf { next_leaf_page_id: Some(next) } => {
+                crossed_a_leaf_boundary = true;
+                page_id = next;
+                slot = 0;
+            }
+            LeafScan::EndOfLeaf { next_leaf_page_id: None } => break,
+        }
+    }
+
+    assert!(crossed_a_leaf_boundary, "3,000 keys in a 64-frame pool must span more than one leaf");
+    assert_eq!(collected.len(), 3_000);
+    for w in collected.windows(2) {
+        assert!(w[0].0 < w[1].0, "scan_leaf must yield keys in ascending order");
+    }
+
+    let (start_page, start_slot) = index.leaf_for_start(Some(&key_of(100)))?;
+    let LeafScan::Entry { key, .. } = BTreeIndex::scan_leaf(&pool, start_page, start_slot)? else {
+        panic!("leaf_for_start(Some(key_of(100))) must land on a present entry");
+    };
+    assert_eq!(key, key_of(100), "leaf_for_start must land exactly on the requested key");
     Ok(())
 }

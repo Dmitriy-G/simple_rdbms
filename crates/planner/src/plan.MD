@@ -6,9 +6,17 @@ Lowers a bound statement into a `LogicalPlan`.
 
 - `plan(statement) -> Result<LogicalPlan, PlannerError>` - lowers a bound
   statement into a `LogicalPlan`. A `SELECT` always builds the fixed shape
-  `Projection(Filter(Scan))` (dropping the `Filter` node when there is no
-  `WHERE` clause); there is no optimizer yet to choose a different shape
-  or access path (`// TODO(M8): cost-based optimization`).
+  `Projection(Filter(SeqScan))` (dropping the `Filter` node when there is
+  no `WHERE` clause) - always a `SeqScan` at this stage, never an
+  `IndexScan`; choosing an access path is `optimizer::IndexScanRule`'s job,
+  run afterward, not this function's (`// TODO(M11): cost-based
+  optimization` marks the larger, still-missing piece: choosing *among*
+  multiple viable access paths by estimated cost, once more than one
+  exists). `CreateTable`/`CreateIndex` each lower to their own
+  identically-shaped `LogicalPlan` variant, present only so this match
+  stays exhaustive - neither is ever fed through `Optimizer`/`to_physical`;
+  `engine::Database::execute_bound` handles both directly against the
+  catalog (see `logical_plan.MD`).
 
 ## Usage Example
 
@@ -18,5 +26,6 @@ use planner::plan;
 let logical = plan(bound_statement)?;
 ```
 
-`engine::Database::execute` calls `plan` right after binding, on the way
-to `physical_plan::to_physical` and then the executor.
+`engine::Database::execute_bound`'s `Select` arm calls `plan` right after
+binding, then `optimizer::Optimizer::optimize`, then
+`physical_plan::to_physical`, on the way to the executor.

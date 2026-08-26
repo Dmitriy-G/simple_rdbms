@@ -3,16 +3,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use catalog::{Catalog, Column, Schema};
 use common::{DbConfig, Error, Result, Severity, TxnId};
 use executor::ExecutorContext;
-use planner::{Binder, BoundStatement, PhysicalPlan, to_physical};
+use planner::{Binder, BoundStatement, IndexScanRule, Optimizer, PhysicalPlan, to_physical};
 use sql::{Lexer, Parser, SqlError, Statement};
+use storage::StorageError;
+use storage::btree::BTreeIndex;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::dwb::DoubleWriteBuffer;
+use storage::heap::TableHeap;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
 use txn::{IsolationLevel, TransactionManager, write_checkpoint};
-use types::{Tuple, Value};
+use types::{MemcomparableEncode, Tuple, Value};
 
 use crate::executor_factory::build_executor;
 use crate::result_set::ResultSet;
@@ -324,12 +327,67 @@ impl Database {
             }
             BoundStatement::Select(select) => {
                 let column_names = select.column_names.clone();
-                let physical = to_physical(planner::plan(BoundStatement::Select(select))?);
+                let logical = planner::plan(BoundStatement::Select(select))?;
+                let optimized =
+                    Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &self.catalog);
+                let physical = to_physical(optimized);
                 tracing::debug!(plan = ?physical, "executing plan");
                 let rows = self.run(physical, txn_id)?;
                 Ok(ResultSet::rows(column_names, rows))
             }
+            BoundStatement::CreateIndex(create) => {
+                let index_id = self
+                    .catalog
+                    .create_index(
+                        &self.buffer_pool,
+                        txn_id,
+                        &create.index_name,
+                        create.table_id,
+                        create.column_index,
+                    )?
+                    .index_id;
+                self.populate_index(txn_id, create.table_id, create.column_index, index_id)?;
+                Ok(ResultSet::rows_affected(0))
+            }
         }
+    }
+
+    fn populate_index(
+        &self,
+        txn_id: TxnId,
+        table_id: common::TableId,
+        column_index: usize,
+        index_id: common::IndexId,
+    ) -> Result<()> {
+        let table = self.catalog.get_table_by_id(table_id)?;
+        let first_page_id = table.first_page_id;
+        let column_types: Vec<_> =
+            table.schema.columns().iter().map(|column| column.data_type).collect();
+
+        let heap = TableHeap::open(&self.buffer_pool, first_page_id);
+        for entry in heap.iter() {
+            let (rid, bytes) = entry?;
+            let tuple = Tuple::decode(&bytes, &column_types)
+                .map_err(|err| Error::DataCorrupted { detail: err.to_string() })?;
+            let value = &tuple.values()[column_index];
+            let mut key = Vec::new();
+            value.encode_memcomparable(&mut key).map_err(StorageError::from)?;
+
+            let root_page_id = self.catalog.index_root_page(&self.buffer_pool, index_id)?;
+            let mut btree_index = BTreeIndex::open(&self.buffer_pool, root_page_id);
+            let root_before = btree_index.root_page_id();
+            btree_index.insert(txn_id, &key, rid)?;
+            let root_after = btree_index.root_page_id();
+            if root_after != root_before {
+                self.catalog.update_index_root_page(
+                    &self.buffer_pool,
+                    txn_id,
+                    index_id,
+                    root_after,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     pub fn table_names(&self) -> Vec<String> {
@@ -373,6 +431,7 @@ fn statement_kind(statement: &Statement) -> &'static str {
         Statement::Select(_) => "SELECT",
         Statement::Insert(_) => "INSERT",
         Statement::CreateTable(_) => "CREATE TABLE",
+        Statement::CreateIndex(_) => "CREATE INDEX",
         Statement::Begin => "BEGIN",
         Statement::Commit => "COMMIT",
         Statement::Rollback => "ROLLBACK",

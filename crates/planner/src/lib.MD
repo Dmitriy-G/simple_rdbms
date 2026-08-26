@@ -1,9 +1,10 @@
 # lib
 
 Query planning: binds a parsed `sql::Statement` against the `catalog` into
-a type-checked, name-resolved tree, lowers that into a `LogicalPlan`, and
-(eventually) rewrites and chooses physical operators to produce a
-`PhysicalPlan` the `executor` can run.
+a type-checked, name-resolved tree, lowers that into a `LogicalPlan`,
+rewrites it (choosing an index scan over a sequential scan where one
+applies), and lowers the result into a `PhysicalPlan` the `executor` can
+run.
 
 The three representations stay separate on purpose: `BoundStatement`
 still mirrors the shape of the SQL statement it came from (one bound node
@@ -13,13 +14,14 @@ operation will be executed (e.g. which join algorithm).
 
 ## Key Components
 
-- `Binder`, `BoundColumnDef`, `BoundCreateTable`, `BoundExpr`,
-  `BoundInsert`, `BoundSelect`, `BoundStatement` - binds parsed `sql` AST
-  nodes against a `Catalog`. See `binder.MD`.
+- `Binder`, `BoundColumnDef`, `BoundCreateIndex`, `BoundCreateTable`,
+  `BoundExpr`, `BoundInsert`, `BoundSelect`, `BoundStatement` - binds
+  parsed `sql` AST nodes against a `Catalog`. See `binder.MD`.
 - `PlannerError` - errors raised while binding. See `error.MD`.
 - `LogicalPlan` - a relational-algebra plan tree. See `logical_plan.MD`.
-- `Optimizer`, `OptimizerRule` - rewrites a `LogicalPlan`. See
-  `optimizer.MD`.
+- `Optimizer`, `OptimizerRule`, `IndexScanRule` - rewrites a `LogicalPlan`
+  against a `Catalog`; `IndexScanRule` is the first rule, choosing an
+  index scan over a sequential scan where one applies. See `optimizer.MD`.
 - `PhysicalPlan`, `to_physical` - a plan tree committed to concrete
   execution algorithms. See `physical_plan.MD`.
 - `plan` - lowers a `BoundStatement` into a `LogicalPlan`. See `plan.MD`.
@@ -32,16 +34,21 @@ operation will be executed (e.g. which join algorithm).
 ## Usage Example
 
 ```rust
-use planner::{Binder, to_physical};
+use planner::{Binder, IndexScanRule, Optimizer, to_physical};
 
 let bound = Binder::new(&catalog).bind(statement)?;
 let logical = planner::plan(bound)?;
+let logical = Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &catalog);
 let physical = to_physical(logical);
 ```
 
-`engine::Database::execute` runs exactly this pipeline for every `SELECT`
-and `INSERT`: bind against the live catalog, lower to a logical plan, then
-to a physical plan, which `engine::executor_factory::build_executor` turns
-into an operator tree for `executor` to run. `CREATE TABLE` binds and
-lowers the same way but is handled directly by `Database::execute` rather
-than reaching the executor, since it mutates the catalog itself.
+`engine::Database::execute_bound`'s `Select` arm runs exactly this
+pipeline: bind against the live catalog, lower to a logical plan,
+optimize it, then lower to a physical plan, which
+`engine::executor_factory::build_executor` turns into an operator tree
+for `executor` to run. `INSERT` binds and lowers the same way but skips
+the `Optimizer` step - there is nothing in an `Insert` plan for
+`IndexScanRule` to act on. `CREATE TABLE`/`CREATE INDEX` bind the same
+way but are handled directly by `Database::execute_bound` rather than
+reaching `plan`/`Optimizer`/the executor at all, since they mutate the
+catalog itself.

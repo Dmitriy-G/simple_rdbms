@@ -117,6 +117,8 @@ impl<'a> Lexer<'a> {
             "VALUES" => TokenKind::Values,
             "CREATE" => TokenKind::Create,
             "TABLE" => TokenKind::Table,
+            "INDEX" => TokenKind::Index,
+            "ON" => TokenKind::On,
             "AND" => TokenKind::And,
             "OR" => TokenKind::Or,
             "NOT" => TokenKind::Not,

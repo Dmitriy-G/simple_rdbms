@@ -10,8 +10,11 @@ caller's responsibility: `types::MemcomparableEncode` (see
 `memcomparable.MD`) is what turns a `Value` into bytes this module can
 compare with plain `[u8]` `Ord` and get the right answer. Milestone M9.1
 (this file) covers node layout and the read path (`create`/`open`/`get`/
-`range_scan`); M9.2 adds `insert` with leaf and internal splits; delete is
-still `todo!()`, tracked as a later milestone in `docs/ROADMAP.md`.
+`range_scan`); M9.2 adds `insert` with leaf and internal splits; M9.3 adds
+`leaf_for_start`/`scan_leaf` (the primitives `catalog` and `executor` need
+to give this module a place in the query path - see "Key Components"
+below) without changing node layout or the split protocol at all; delete
+is still `todo!()`, tracked as a later milestone in `docs/ROADMAP.md`.
 
 ## Node layout
 
@@ -233,21 +236,42 @@ first needs an index on a low-cardinality column at that scale.
   `heap::MAX_TUPLE_SIZE` is - see `StorageError::KeyTooLarge`.
 - `BTreeIndex<'pool>` - `create(buffer_pool, txn_id)` allocates a root
   page and initializes it as an empty leaf. `open(buffer_pool,
-  root_page_id)` opens an existing index whose root is already known (a
-  future `catalog` entry, once M9.3 wires indexes into table metadata).
-  `root_page_id(&self) -> PageId` returns the current root - which
-  `insert` can change, on a root split. `get(&self, key) -> Vec<Rid>`
-  descends to the matching leaf and collects every entry with that exact
-  key, following the leaf sibling chain if a run of duplicates spans a
-  split. `range_scan(&self, start, end) -> BTreeRangeIterator` returns an
-  iterator over entries with keys in `[start, end)` (`None` on either end
-  means unbounded); construction never touches a page, so a bad `start`
-  key surfaces as the iterator's first `Err` rather than a panic or an
-  early return from `range_scan` itself. `insert(&mut self, txn_id, key,
-  rid)` is M9.2: see "Splitting" above. `delete(&mut self, key)` is not
-  implemented yet - `todo!("descend to the target leaf, remove the entry,
-  rebalance on underflow")`. `check_invariants(&self) -> Result<(), String>`
-  walks the whole tree from the root and checks, in order: every leaf is
+  root_page_id)` opens an existing index whose root is already known - a
+  `catalog` entry (`catalog::catalog.MD`'s `Catalog::index_root_page`),
+  now that M9.3 wires indexes into table metadata; cheap enough (no I/O,
+  just a struct literal) to reconstruct fresh per statement rather than
+  cached across one. `root_page_id(&self) -> PageId` returns the current
+  root - which `insert` can change, on a root split; the caller is
+  responsible for noticing and persisting that change (see
+  `catalog::catalog.MD`'s "root_page_id changes on every split" note).
+  `get(&self, key) -> Vec<Rid>` descends to the matching leaf and collects
+  every entry with that exact key, following the leaf sibling chain if a
+  run of duplicates spans a split. `range_scan(&self, start, end) ->
+  BTreeRangeIterator` returns an iterator over entries with keys in
+  `[start, end)` (`None` on either end means unbounded); construction
+  never touches a page, so a bad `start` key surfaces as the iterator's
+  first `Err` rather than a panic or an early return from `range_scan`
+  itself. `insert(&mut self, txn_id, key, rid)` is M9.2: see "Splitting"
+  above. `delete(&mut self, key)` is not implemented yet -
+  `todo!("descend to the target leaf, remove the entry, rebalance on
+  underflow")`. `leaf_for_start(&self, start) -> Result<(PageId, u16),
+  StorageError>` and the associated function `scan_leaf(buffer_pool,
+  leaf_page_id, from_slot) -> Result<LeafScan, StorageError>` are the
+  primitives `BTreeRangeIterator` is itself built on (below) and exist as
+  their own public API for `executor::IndexScanExecutor`
+  (`executor::operators::index_scan.MD`), which cannot hold a
+  `BTreeRangeIterator` (or any `BTreeIndex`) across its `Executor::next`
+  calls - the `Executor` trait reborrows its `ExecutorContext` fresh every
+  call, so nothing borrowed from it may live in executor struct fields.
+  `leaf_for_start` does the one-time, `&self`-borrowing work of locating a
+  starting leaf and slot (cheap to call once, in `IndexScanExecutor::init`,
+  then drop); `scan_leaf` is deliberately an associated function, not a
+  method, taking `buffer_pool: &BufferPool` directly rather than `&self` -
+  exactly `heap::TableHeap::scan_page`'s shape - so a caller can drive it
+  from owned `(PageId, u16)` cursor state across repeated calls without
+  ever holding a `BTreeIndex` alive between them. `check_invariants(&self,
+  key_type: Option<types::DataType>) -> Result<(), String>` walks the
+  whole tree from the root and checks, in order: every leaf is
   at the same depth; keys within a node are strictly increasing bytewise
   (ties allowed only in leaves); every key is within the `(low, high)`
   bound inherited from its ancestors' separators, checked against that
@@ -258,12 +282,22 @@ first needs an index on a low-cardinality column at that scale.
   exactly the same leaves, in the same order, as a left-to-right tree
   walk does; and each node's `data_used` matches the sum of its own entry
   payload lengths, with no entry overlapping the slot array.
+- `LeafScan` - the result of `scan_leaf`: `Entry { slot, key, rid }` for a
+  present slot, or `EndOfLeaf { next_leaf_page_id }` once `from_slot`
+  reaches the leaf's slot count - mirroring `heap::PageScan` exactly, down
+  to the name of its "keep going" field.
 - `BTreeRangeIterator<'a, 'pool>` - the `range_scan` iterator. Lazily
-  descends to its starting leaf on the first `next()` call rather than in
-  `range_scan` itself (`RangeState::NotStarted`), then walks forward one
-  entry at a time (`RangeState::InLeaf`), crossing into the next leaf via
-  `tail` when the current one is exhausted, until either the `end` bound
-  is reached or the sibling chain runs out (`RangeState::Done`).
+  resolves its starting leaf and slot on the first `next()` call rather
+  than in `range_scan` itself (`RangeState::NotStarted`, via
+  `leaf_for_start`), then drives `scan_leaf` one entry at a time
+  (`RangeState::InLeaf`), crossing into the next leaf on `EndOfLeaf` until
+  either the `end` bound is reached or the sibling chain runs out
+  (`RangeState::Done`). Everything this type does is now a thin wrapper
+  over `leaf_for_start`/`scan_leaf` - kept as its own type rather than
+  folded away because its `Iterator` contract (yielding `(Vec<u8>, Rid)`
+  pairs directly) is the more convenient shape for a caller like `get`'s
+  sibling-chain walk that *can* hold a live `BTreeIndex` borrow for the
+  duration of its use, unlike `executor::IndexScanExecutor`.
 - `Node<'a, 'pool>` - private. Wraps a `&mut PageGuard` plus the `TxnId`
   writes should be logged under, and is where every mutating operation on
   a single node's bytes lives: `init` (used by `create`), `will_fit`,
@@ -318,15 +352,22 @@ assert_eq!(index.get(&encoded_key)?, vec![rid]);
 for entry in index.range_scan(None, None) {
     let (key, rid) = entry?;
 }
-debug_assert!(index.check_invariants().is_ok());
+debug_assert!(index.check_invariants(None).is_ok());
 ```
 
-No caller in this workspace constructs a `BTreeIndex` yet - `catalog` and
-`executor` both currently route every table through `heap::TableHeap`
-only, and `sql`/`planner` have no `CREATE INDEX` syntax. That wiring,
-plus turning a real `types::Value` into an encoded key via
-`types::MemcomparableEncode`, is milestone M9.3 in `docs/ROADMAP.md`.
-Until then, this module's own tests (`tests/btree.rs`,
-`tests/btree_crash_injection.rs`) are what exercise it, driving
-`BTreeIndex` directly against a real `BufferPool` the same way
-`tests/table_heap.rs` drives `heap::TableHeap`.
+`catalog::Catalog::create_index`/`index_root_page` (`catalog::catalog.MD`)
+are what actually construct a `BTreeIndex` in this workspace -
+`Catalog::create_index` calls `create` once, at `CREATE INDEX` time;
+every later access opens a fresh handle from the root page id `catalog`
+looks up, since `open` is free of I/O. `executor::InsertExecutor`
+(`executor::operators::insert.MD`) calls `insert` to maintain every index
+on a table as rows are added, turning each indexed column's
+`types::Value` into an encoded key via `types::MemcomparableEncode` first;
+`executor::IndexScanExecutor` (`executor::operators::index_scan.MD`)
+drives `leaf_for_start`/`scan_leaf` to answer a query through the index
+instead of a full `heap::TableHeap` scan, chosen by
+`planner::optimizer::IndexScanRule`. This module's own tests
+(`tests/btree.rs`, `tests/btree_crash_injection.rs`) continue to exercise
+the tree directly against a real `BufferPool`, the same way
+`tests/table_heap.rs` drives `heap::TableHeap`, independent of that
+higher-layer wiring.

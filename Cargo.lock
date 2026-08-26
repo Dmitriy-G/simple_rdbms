@@ -262,6 +262,7 @@ dependencies = [
  "executor",
  "metrics",
  "planner",
+ "proptest",
  "serde_json",
  "sql",
  "storage",

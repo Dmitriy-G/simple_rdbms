@@ -17,6 +17,10 @@ Wrapping every raw integer in its own type stops, for example, a
   process. Assigned by the `TransactionManager` when a transaction begins.
 - `TableId(pub u32)` - identifies a table in the catalog, stable for the
   lifetime of the table.
+- `IndexId(pub u32)` - identifies a B+tree index in the catalog, stable for
+  the lifetime of the index. Distinct from `TableId` so a caller can't pass
+  a table's id where an index's is expected even though both are `u32`
+  underneath (`catalog::index_info.MD`).
 - `ColumnId(pub u32)` - identifies a column within a table's schema by its
   ordinal position.
 - `Lsn(pub u64)` - a log sequence number: the monotonically increasing

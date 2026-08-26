@@ -27,7 +27,13 @@ worked example list but were added the same way that list added `54000`:
 each is the standard's own code for an `Error` variant this crate already
 has to map (`TupleTooLarge`, `AmbiguousColumn`, `NotSupported`,
 `NestedTransaction`/`NoActiveTransaction`, and the two unreachable-but-real
-`TxnError` arms, respectively).
+`TxnError` arms, respectively). `UNDEFINED_OBJECT`/`DUPLICATE_OBJECT` were
+added the same way for `Error::UndefinedIndex`/`DuplicateIndex`: the
+standard has no class-42 code specific to an index (unlike `_TABLE`), so
+`42704`/`42710` - the generic "undefined object"/"duplicate object" codes
+Postgres itself uses for `DROP INDEX`/`CREATE INDEX` errors - are the
+correct, standard-sanctioned choice rather than inventing a Postgres-style
+`42P`-prefixed extension code for something the standard already covers.
 
 ## Key Components
 
@@ -64,6 +70,8 @@ has to map (`TupleTooLarge`, `AmbiguousColumn`, `NotSupported`,
   | `UNDEFINED_TABLE` | `42P01` | 42 - syntax error or access rule violation |
   | `DUPLICATE_TABLE` | `42P07` | 42 - syntax error or access rule violation |
   | `DATATYPE_MISMATCH` | `42804` | 42 - syntax error or access rule violation |
+  | `UNDEFINED_OBJECT` | `42704` | 42 - syntax error or access rule violation |
+  | `DUPLICATE_OBJECT` | `42710` | 42 - syntax error or access rule violation |
   | `FEATURE_NOT_SUPPORTED` | `0A000` | 0A - feature not supported |
   | `DISK_FULL` | `53100` | 53 - insufficient resources |
   | `OUT_OF_MEMORY` | `53200` | 53 - insufficient resources |

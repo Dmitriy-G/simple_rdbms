@@ -1,12 +1,15 @@
 use executor::{
-    Executor, FilterExecutor, InsertExecutor, NestedLoopJoinExecutor, ProjectionExecutor,
-    SeqScanExecutor,
+    Executor, FilterExecutor, IndexScanExecutor, InsertExecutor, NestedLoopJoinExecutor,
+    ProjectionExecutor, SeqScanExecutor,
 };
 use planner::PhysicalPlan;
 
 pub fn build_executor(plan: PhysicalPlan) -> Box<dyn Executor> {
     match plan {
         PhysicalPlan::SeqScan { table_id } => Box::new(SeqScanExecutor::new(table_id)),
+        PhysicalPlan::IndexScan { index_id, table_id, start, end } => {
+            Box::new(IndexScanExecutor::new(index_id, table_id, start, end))
+        }
         PhysicalPlan::Filter { predicate, input } => {
             Box::new(FilterExecutor::new(predicate, build_executor(*input)))
         }
@@ -19,6 +22,9 @@ pub fn build_executor(plan: PhysicalPlan) -> Box<dyn Executor> {
         PhysicalPlan::Insert { table_id, rows } => Box::new(InsertExecutor::new(table_id, rows)),
         PhysicalPlan::CreateTable { .. } => {
             unreachable!("Database::execute handles CreateTable directly, before physical planning")
+        }
+        PhysicalPlan::CreateIndex { .. } => {
+            unreachable!("Database::execute handles CreateIndex directly, before physical planning")
         }
     }
 }

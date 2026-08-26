@@ -155,6 +155,21 @@ impl BufferPool {
         guard.write(txn_id, header::CATALOG_FIRST_PAGE_RANGE.start, &page_id.0.to_le_bytes())
     }
 
+    pub fn index_catalog_first_page(&self) -> Result<Option<PageId>, StorageError> {
+        let guard = self.fetch_page(PageId(0))?;
+        let raw = read_u32(guard.page().data(), header::INDEX_CATALOG_FIRST_PAGE_RANGE.start);
+        Ok((raw != u32::MAX).then_some(PageId(raw)))
+    }
+
+    pub fn set_index_catalog_first_page(
+        &self,
+        txn_id: TxnId,
+        page_id: PageId,
+    ) -> Result<(), StorageError> {
+        let mut guard = self.fetch_page(PageId(0))?;
+        guard.write(txn_id, header::INDEX_CATALOG_FIRST_PAGE_RANGE.start, &page_id.0.to_le_bytes())
+    }
+
     pub fn append_log(&self, txn_id: TxnId, kind: LogRecordKind) -> Result<Lsn, StorageError> {
         self.log_manager.borrow_mut().append(LogRecord { txn_id, kind })
     }

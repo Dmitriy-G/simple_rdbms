@@ -2,10 +2,14 @@
 
 Integration tests driving `storage::btree::BTreeIndex` directly against a
 real `BufferPool`, in the same style `tests/table_heap.rs` uses for
-`heap::TableHeap`: no `catalog`/`executor` involved, since no caller in
-this workspace builds a `BTreeIndex` yet (see `btree.MD`'s module doc).
-Covers both the read path (M9.1) and `insert` with leaf/internal splits
-(M9.2).
+`heap::TableHeap`: no `catalog`/`executor` involved, even though both now
+build a `BTreeIndex` in the real query path (see `btree.MD`'s module
+doc) - this file stays focused on the tree's own correctness in
+isolation, independent of that higher-layer wiring, which
+`crates/catalog/tests/`, `crates/executor/tests/`, and
+`crates/engine/tests/` cover instead. Covers the read path (M9.1),
+`insert` with leaf/internal splits (M9.2), and the `leaf_for_start`/
+`scan_leaf` primitives M9.3 added for `executor::IndexScanExecutor`.
 
 ## Key Components
 
@@ -62,6 +66,20 @@ Covers both the read path (M9.1) and `insert` with leaf/internal splits
   `range_scan` yields every key in strictly ascending order and a bounded
   `range_scan(Some(low), Some(high))` yields exactly the keys in
   `[low, high)`.
+- `a_leaf_split_logs_well_under_the_naive_two_full_page_cost` - asserts,
+  via `BufferPool::log_bytes_appended`, that a plain (non-root) leaf split
+  logs well under the cost of writing both split nodes' full before/after
+  images - see `btree.MD`'s "Splitting" for the diff-based rebuild logging
+  this pins down.
+- `scan_leaf_and_leaf_for_start_cross_a_leaf_boundary_like_range_scan_does` -
+  drives `leaf_for_start`/`scan_leaf` by hand, the same way
+  `executor::IndexScanExecutor` must (owned `(PageId, u16)` cursor state,
+  no live `BTreeIndex` held across calls), over the same 3,000-key tree
+  `range_scan_yields_keys_in_order_across_leaf_boundaries` uses: asserts
+  the manually-driven walk crosses at least one `LeafScan::EndOfLeaf`
+  boundary, yields the same 3,000 keys in the same ascending order
+  `range_scan` does, and that `leaf_for_start(Some(key))` lands exactly on
+  that key's slot.
 
 ## Usage Example
 
@@ -73,7 +91,7 @@ let mut index = BTreeIndex::create(&pool, TXN)?;
 for i in 0..10_000i32 {
     index.insert(TXN, &key_of(i), Rid::new(PageId(1), 0))?;
 }
-index.check_invariants().map_err(|e| -> Box<dyn Error> { e.into() })?;
+index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
 ```
 
 Run as part of `cargo test --workspace`, or just this file with

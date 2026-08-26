@@ -9,7 +9,8 @@ consumes.
 - `Statement` - a single parsed SQL statement. `Select(SelectStatement)`
   is a `SELECT` query. `Insert(InsertStatement)` is an
   `INSERT INTO ... VALUES ...` statement. `CreateTable(CreateTableStatement)`
-  is a `CREATE TABLE` statement. `Begin` is `BEGIN` or `START TRANSACTION`:
+  is a `CREATE TABLE` statement. `CreateIndex(CreateIndexStatement)` is a
+  `CREATE INDEX` statement. `Begin` is `BEGIN` or `START TRANSACTION`:
   starts an explicit transaction. `Commit` ends the current explicit
   transaction, keeping its writes. `Rollback` ends the current explicit
   transaction, undoing its writes.
@@ -28,6 +29,10 @@ consumes.
 - `CreateTableStatement` - a `CREATE TABLE <table> (<columns>)` statement.
   `table` is the new table's name; `columns` are its column definitions,
   in declared order.
+- `CreateIndexStatement` - a `CREATE INDEX <index_name> ON <table>
+  (<column>)` statement: single-column only, no `UNIQUE` or expression
+  indexes. `index_name` is the new index's name; `table` and `column` name
+  the column it covers.
 - `ColumnDef` - one column definition inside a `CREATE TABLE` statement:
   `name`, declared `data_type`, and `nullable` (whether the column allows
   `NULL`; true unless `NOT NULL` was given — though the current grammar

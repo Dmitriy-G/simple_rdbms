@@ -14,8 +14,8 @@ hand is the point of this crate.
 - `Parser` - turns a token stream into a `Statement` AST. See `parser.MD`.
 - `Token`, `TokenKind` - one lexical token and its kind. See `token.MD`.
 - `Statement`, `SelectStatement`, `SelectItem`, `InsertStatement`,
-  `CreateTableStatement`, `ColumnDef`, `Expr`, `BinaryOperator`,
-  `UnaryOperator` - the parsed AST types. See `ast.MD`.
+  `CreateTableStatement`, `CreateIndexStatement`, `ColumnDef`, `Expr`,
+  `BinaryOperator`, `UnaryOperator` - the parsed AST types. See `ast.MD`.
 - `SqlError` - errors raised while lexing or parsing. See `error.MD`.
 - `fingerprint(sql) -> String` - redacts a statement's literal values for
   safe logging above `debug`. See `fingerprint.MD`.

@@ -8,5 +8,5 @@ mod sql_state;
 
 pub use config::DbConfig;
 pub use error::{Error, Result, Severity};
-pub use ids::{ColumnId, FrameId, Lsn, PageId, Rid, TableId, TxnId};
+pub use ids::{ColumnId, FrameId, IndexId, Lsn, PageId, Rid, TableId, TxnId};
 pub use sql_state::SqlState;

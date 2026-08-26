@@ -6,9 +6,12 @@ The lexical tokens `Lexer` produces and `Parser` consumes.
 
 - `TokenKind` - the kind of a lexical token, carrying any literal value
   the token represents. Keyword variants (`Select`, `From`, `Where`,
-  `Insert`, `Into`, `Values`, `Create`, `Table`, `And`, `Or`, `Not`,
-  `Null`, `True`, `False`, `Begin`, `Start` (of `START TRANSACTION`),
-  `Transaction`, `Commit`, `Rollback`) carry no payload. `Identifier(String)`
+  `Insert`, `Into`, `Values`, `Create`, `Table`, `Index`, `On`, `And`,
+  `Or`, `Not`, `Null`, `True`, `False`, `Begin`, `Start` (of `START
+  TRANSACTION`), `Transaction`, `Commit`, `Rollback`) carry no payload.
+  `Index`/`On` exist solely for `CREATE INDEX ident ON ident (ident)`
+  (`parser.MD`'s `parse_create_index`) - `On` is not reused for `JOIN ...
+  ON`, since no `JOIN` grammar exists yet (M11). `Identifier(String)`
   is a bare identifier: a table, column, or type name. `IntegerLiteral(i64)`
   is an integer literal, before it is narrowed to a `types::DataType`.
   `FloatLiteral(f64)` is a floating-point literal. `StringLiteral(String)`

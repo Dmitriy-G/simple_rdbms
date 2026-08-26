@@ -1,6 +1,6 @@
 use sql::{
-    BinaryOperator, ColumnDef, CreateTableStatement, Expr, InsertStatement, Lexer, Parser,
-    SelectItem, SelectStatement, SqlError, Statement, UnaryOperator,
+    BinaryOperator, ColumnDef, CreateIndexStatement, CreateTableStatement, Expr, InsertStatement,
+    Lexer, Parser, SelectItem, SelectStatement, SqlError, Statement, UnaryOperator,
 };
 use types::{DataType, Value};
 
@@ -68,6 +68,47 @@ fn create_table_type_names_are_case_insensitive() {
             }],
         })
     );
+}
+
+#[test]
+fn parses_create_index() {
+    let stmt = parse("CREATE INDEX idx_users_id ON users (id)");
+    assert_eq!(
+        stmt,
+        Statement::CreateIndex(CreateIndexStatement {
+            index_name: "idx_users_id".to_string(),
+            table: "users".to_string(),
+            column: "id".to_string(),
+        })
+    );
+}
+
+#[test]
+fn create_index_and_create_table_are_disambiguated_by_one_token_of_lookahead() {
+    let index_stmt = parse("create index idx on t (a)");
+    assert_eq!(
+        index_stmt,
+        Statement::CreateIndex(CreateIndexStatement {
+            index_name: "idx".to_string(),
+            table: "t".to_string(),
+            column: "a".to_string(),
+        })
+    );
+
+    let table_stmt = parse("create table t (a int)");
+    assert!(matches!(table_stmt, Statement::CreateTable(_)));
+}
+
+#[test]
+fn create_index_missing_on_is_a_parse_error() {
+    let err = parse_err("CREATE INDEX idx users (id)");
+    assert!(matches!(err, SqlError::UnexpectedToken { .. }));
+}
+
+#[test]
+fn create_index_missing_parens_around_column_is_a_parse_error() {
+    let err = parse_err("CREATE INDEX idx ON users id");
+    assert!(matches!(err, SqlError::UnexpectedToken { .. }));
 }
 
 #[test]

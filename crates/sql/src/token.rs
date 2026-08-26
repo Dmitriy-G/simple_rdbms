@@ -8,6 +8,8 @@ pub enum TokenKind {
     Values,
     Create,
     Table,
+    Index,
+    On,
     And,
     Or,
     Not,

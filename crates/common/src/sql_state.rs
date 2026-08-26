@@ -25,6 +25,8 @@ impl SqlState {
     pub const UNDEFINED_TABLE: SqlState = SqlState(*b"42P01");
     pub const DUPLICATE_TABLE: SqlState = SqlState(*b"42P07");
     pub const DATATYPE_MISMATCH: SqlState = SqlState(*b"42804");
+    pub const UNDEFINED_OBJECT: SqlState = SqlState(*b"42704");
+    pub const DUPLICATE_OBJECT: SqlState = SqlState(*b"42710");
 
     pub const FEATURE_NOT_SUPPORTED: SqlState = SqlState(*b"0A000");
 

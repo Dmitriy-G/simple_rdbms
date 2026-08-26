@@ -19,9 +19,9 @@ edge back up into a higher layer.
   severity. See `error.MD`.
 - `SqlState` - the SQLSTATE code identifying an `Error`'s condition. See
   `sql_state.MD`.
-- `PageId`, `FrameId`, `TxnId`, `TableId`, `ColumnId`, `Lsn`, `Rid` -
-  newtype identifiers for the core entities that flow between subsystems.
-  See `ids.MD`.
+- `PageId`, `FrameId`, `TxnId`, `TableId`, `IndexId`, `ColumnId`, `Lsn`,
+  `Rid` - newtype identifiers for the core entities that flow between
+  subsystems. See `ids.MD`.
 - `crc` - a hand-written CRC-32 implementation, exposed as its own
   submodule rather than re-exported flat, since it is a utility rather
   than a core domain type. See `crc.MD`.

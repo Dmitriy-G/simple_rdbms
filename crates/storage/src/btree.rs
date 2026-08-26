@@ -475,6 +475,37 @@ impl<'pool> BTreeIndex<'pool> {
         }
     }
 
+    pub fn leaf_for_start(&self, start: Option<&[u8]>) -> Result<(PageId, u16), StorageError> {
+        match start {
+            Some(key) => {
+                let (leaf, _path) = self.descend_to_leaf(key)?;
+                let guard = self.buffer_pool.fetch_page(leaf)?;
+                let slot = lower_bound(guard.page().data(), key, leaf)?;
+                Ok((leaf, slot))
+            }
+            None => Ok((self.leftmost_leaf()?, 0)),
+        }
+    }
+
+    pub fn scan_leaf(
+        buffer_pool: &BufferPool,
+        leaf_page_id: PageId,
+        from_slot: u16,
+    ) -> Result<LeafScan, StorageError> {
+        let guard = buffer_pool.fetch_page(leaf_page_id)?;
+        let bytes = guard.page().data();
+        let count = checked_slot_count(bytes, leaf_page_id)?;
+        if from_slot >= count {
+            return Ok(LeafScan::EndOfLeaf { next_leaf_page_id: tail_raw(bytes) });
+        }
+        let payload = entry_payload(bytes, from_slot, leaf_page_id)?;
+        Ok(LeafScan::Entry {
+            slot: from_slot,
+            key: entry_key(payload).to_vec(),
+            rid: leaf_rid(payload),
+        })
+    }
+
     pub fn insert(&mut self, txn_id: TxnId, key: &[u8], rid: Rid) -> Result<(), StorageError> {
         if key.len() > MAX_KEY_SIZE {
             return Err(StorageError::KeyTooLarge { size: key.len(), max: MAX_KEY_SIZE });
@@ -737,6 +768,11 @@ struct InvariantState {
     leaves: Vec<PageId>,
 }
 
+pub enum LeafScan {
+    Entry { slot: u16, key: Vec<u8>, rid: Rid },
+    EndOfLeaf { next_leaf_page_id: Option<PageId> },
+}
+
 enum RangeState {
     NotStarted { start: Option<Vec<u8>> },
     InLeaf { page_id: PageId, slot: u16 },
@@ -757,80 +793,41 @@ impl Iterator for BTreeRangeIterator<'_, '_> {
             match &self.state {
                 RangeState::Done => return None,
                 RangeState::NotStarted { start } => {
-                    let leaf = match start {
-                        Some(key) => self.index.descend_to_leaf(key).map(|(leaf, _)| leaf),
-                        None => self.index.leftmost_leaf(),
-                    };
-                    let leaf = match leaf {
-                        Ok(leaf) => leaf,
+                    let (page_id, slot) = match self.index.leaf_for_start(start.as_deref()) {
+                        Ok(location) => location,
                         Err(err) => {
                             self.state = RangeState::Done;
                             return Some(Err(err));
                         }
                     };
-                    let slot = match start {
-                        Some(key) => {
-                            let guard = match self.index.buffer_pool.fetch_page(leaf) {
-                                Ok(guard) => guard,
-                                Err(err) => {
-                                    self.state = RangeState::Done;
-                                    return Some(Err(err));
-                                }
-                            };
-                            match lower_bound(guard.page().data(), key, leaf) {
-                                Ok(slot) => slot,
-                                Err(err) => {
-                                    self.state = RangeState::Done;
-                                    return Some(Err(err));
-                                }
-                            }
-                        }
-                        None => 0,
-                    };
-                    self.state = RangeState::InLeaf { page_id: leaf, slot };
+                    self.state = RangeState::InLeaf { page_id, slot };
                 }
                 RangeState::InLeaf { page_id, slot } => {
                     let (page_id, slot) = (*page_id, *slot);
-                    let guard = match self.index.buffer_pool.fetch_page(page_id) {
-                        Ok(guard) => guard,
+                    let scan = match BTreeIndex::scan_leaf(self.index.buffer_pool, page_id, slot) {
+                        Ok(scan) => scan,
                         Err(err) => {
                             self.state = RangeState::Done;
                             return Some(Err(err));
                         }
                     };
-                    let bytes = guard.page().data();
-                    let count = match checked_slot_count(bytes, page_id) {
-                        Ok(count) => count,
-                        Err(err) => {
-                            self.state = RangeState::Done;
-                            return Some(Err(err));
+                    match scan {
+                        LeafScan::EndOfLeaf { next_leaf_page_id } => {
+                            self.state = match next_leaf_page_id {
+                                Some(next) => RangeState::InLeaf { page_id: next, slot: 0 },
+                                None => RangeState::Done,
+                            };
                         }
-                    };
-                    if slot >= count {
-                        let next = tail_raw(bytes);
-                        drop(guard);
-                        self.state = match next {
-                            Some(next) => RangeState::InLeaf { page_id: next, slot: 0 },
-                            None => RangeState::Done,
-                        };
-                        continue;
+                        LeafScan::Entry { slot, key, rid } => {
+                            if self.end.as_ref().is_some_and(|end| key.as_slice() >= end.as_slice())
+                            {
+                                self.state = RangeState::Done;
+                                return None;
+                            }
+                            self.state = RangeState::InLeaf { page_id, slot: slot + 1 };
+                            return Some(Ok((key, rid)));
+                        }
                     }
-                    let payload = match entry_payload(bytes, slot, page_id) {
-                        Ok(payload) => payload,
-                        Err(err) => {
-                            self.state = RangeState::Done;
-                            return Some(Err(err));
-                        }
-                    };
-                    let key = entry_key(payload).to_vec();
-                    if self.end.as_ref().is_some_and(|end| key.as_slice() >= end.as_slice()) {
-                        self.state = RangeState::Done;
-                        return None;
-                    }
-                    let rid = leaf_rid(payload);
-                    drop(guard);
-                    self.state = RangeState::InLeaf { page_id, slot: slot + 1 };
-                    return Some(Ok((key, rid)));
                 }
             }
         }

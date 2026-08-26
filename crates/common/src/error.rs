@@ -68,6 +68,12 @@ pub enum Error {
     #[error("table already exists: {name}")]
     DuplicateTable { name: String },
 
+    #[error("undefined index: {name}")]
+    UndefinedIndex { name: String },
+
+    #[error("index already exists: {name}")]
+    DuplicateIndex { name: String },
+
     #[error("datatype mismatch: {detail}")]
     DatatypeMismatch { detail: String },
 
@@ -116,6 +122,8 @@ impl Error {
             Error::UndefinedColumn { .. } => SqlState::UNDEFINED_COLUMN,
             Error::AmbiguousColumn { .. } => SqlState::AMBIGUOUS_COLUMN,
             Error::DuplicateTable { .. } => SqlState::DUPLICATE_TABLE,
+            Error::UndefinedIndex { .. } => SqlState::UNDEFINED_OBJECT,
+            Error::DuplicateIndex { .. } => SqlState::DUPLICATE_OBJECT,
             Error::DatatypeMismatch { .. } => SqlState::DATATYPE_MISMATCH,
             Error::NumericValueOutOfRange { .. } => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
             Error::DataCorrupted { .. } => SqlState::DATA_CORRUPTED,
@@ -150,6 +158,8 @@ impl Error {
             | Error::UndefinedColumn { .. }
             | Error::AmbiguousColumn { .. }
             | Error::DuplicateTable { .. }
+            | Error::UndefinedIndex { .. }
+            | Error::DuplicateIndex { .. }
             | Error::DatatypeMismatch { .. }
             | Error::NumericValueOutOfRange { .. }
             | Error::SerializationFailure { .. }
@@ -185,6 +195,8 @@ impl Error {
             | Error::UndefinedColumn { .. }
             | Error::AmbiguousColumn { .. }
             | Error::DuplicateTable { .. }
+            | Error::UndefinedIndex { .. }
+            | Error::DuplicateIndex { .. }
             | Error::DataCorrupted { .. }
             | Error::SerializationFailure { .. }
             | Error::Internal { .. }

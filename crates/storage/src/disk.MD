@@ -12,7 +12,7 @@ touching the file directly.
   stored at the start of page 0, just after page 0's own checksum and
   `page_lsn` prefixes.
 - `HEADER_VERSION` - the on-disk format version this build reads and
-  writes: `8`. Covers not just the page-0 header's own byte layout but the
+  writes: `9`. Covers not just the page-0 header's own byte layout but the
   heap page layout too (`heap::NO_NEXT_PAGE`, `heap::SlottedPage::init`),
   both baked into every page already on disk, so a change to either must
   bump this, otherwise a file written by an older build gets silently
@@ -27,16 +27,25 @@ touching the file directly.
   `page_lsn` prefix every other page already had, needed so
   `catalog_first_page`/`last_checkpoint_lsn` can be mutated through the
   ordinary `PageGuard::write` path instead of a raw, unlogged disk write;
-  to `8` when every page gained a 4-byte CRC-32 checksum prefix. No
-  migration: a file written under an older version must be deleted and
-  recreated.
+  to `8` when every page gained a 4-byte CRC-32 checksum prefix; to `9`
+  when the header gained `index_catalog_first_page`, the root of the
+  second catalog heap that holds index metadata
+  (`catalog::catalog.MD`'s `Catalog::create_index`). No migration: a file
+  written under an older version must be deleted and recreated.
 - `header` (`pub(crate)`) - the byte layout of the page-0 header, given as
-  five `Range<usize>` constants: `MAGIC_RANGE` (12..20) - the 8-byte magic
+  six `Range<usize>` constants: `MAGIC_RANGE` (12..20) - the 8-byte magic
   string; `VERSION_RANGE` (20..24) - `HEADER_VERSION`; `PAGE_SIZE_RANGE`
   (28..32) - the page size the database was created with;
-  `CATALOG_FIRST_PAGE_RANGE` (24..28) - the catalog's first page id, or
-  `u32::MAX` if none yet; `LAST_CHECKPOINT_LSN_RANGE` (32..40) - the last
-  checkpoint's LSN, zero-padded beyond that to a full page. `page_count` is
+  `CATALOG_FIRST_PAGE_RANGE` (24..28) - the table catalog's first page id,
+  or `u32::MAX` if none yet; `LAST_CHECKPOINT_LSN_RANGE` (32..40) - the
+  last checkpoint's LSN; `INDEX_CATALOG_FIRST_PAGE_RANGE` (40..44) - the
+  index catalog's first page id, or `u32::MAX` if no index has ever been
+  created, laid out identically to and immediately after
+  `CATALOG_FIRST_PAGE_RANGE`'s counterpart but as its own heap rather than
+  a row inside the table catalog, since an index's `root_page_id` changes
+  every time its B+tree's root splits and a second heap keeps that
+  high-churn bookkeeping out of the table catalog's own rows. Zero-padded
+  beyond `INDEX_CATALOG_FIRST_PAGE_RANGE` to a full page. `page_count` is
   deliberately not part of this layout - see `HEADER_VERSION`. The ranges
   start at byte 12 rather than 0 because page 0 is an ordinary page like
   any other: bytes 0..4 are its checksum (`page::CHECKSUM_RANGE`, added
@@ -45,9 +54,10 @@ touching the file directly.
   `7`, precisely so that `catalog_first_page`/`last_checkpoint_lsn` could
   start being mutated through the ordinary `PageGuard::write` path) - so
   this layout carries the same version history `HEADER_VERSION` documents,
-  not a layout frozen since version 1. `catalog_first_page` and
-  `last_checkpoint_lsn` are mutated exclusively through `BufferPool` once
-  the pool exists - fetching page 0 like any other page and writing
+  not a layout frozen since version 1. `catalog_first_page`,
+  `index_catalog_first_page`, and `last_checkpoint_lsn` are mutated
+  exclusively through `BufferPool` once the pool exists - fetching page 0
+  like any other page and writing
   through `PageGuard::write`, so both become redoable and undoable like
   any other page mutation. `DiskManager` itself only ever *reads* this
   layout, and writes it directly, in full, exactly once: stamping a
@@ -112,15 +122,15 @@ touching the file directly.
   u64 * page_size`.
 - `DiskManager::write_header(&mut self)` - private. Stamps a brand-new
   file's very first page-0 header: magic, version, page size, and
-  `catalog_first_page`/`last_checkpoint_lsn` both at their "none"
-  sentinels (`page_lsn`, right after the checksum, stays zero too - the
-  same "never written" sentinel every other fresh page has). The only
-  direct header write left in this module - every later change to
-  `catalog_first_page` or `last_checkpoint_lsn` goes through `BufferPool`
-  instead, so it is logged and can be redone or undone like any other page
-  mutation. Stamps its own checksum before writing, same as `write_page`,
-  since this page is real (non-zero) content that later reads through
-  `read_page` will verify.
+  `catalog_first_page`/`index_catalog_first_page`/`last_checkpoint_lsn` all
+  at their "none" sentinels (`page_lsn`, right after the checksum, stays
+  zero too - the same "never written" sentinel every other fresh page
+  has). The only direct header write left in this module - every later
+  change to `catalog_first_page`, `index_catalog_first_page`, or
+  `last_checkpoint_lsn` goes through `BufferPool` instead, so it is logged
+  and can be redone or undone like any other page mutation. Stamps its own
+  checksum before writing, same as `write_page`, since this page is real
+  (non-zero) content that later reads through `read_page` will verify.
 
 ## Usage Example
 

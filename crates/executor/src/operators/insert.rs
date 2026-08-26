@@ -1,7 +1,8 @@
 use common::{PageId, TableId};
 use planner::BoundExpr;
+use storage::btree::BTreeIndex;
 use storage::heap::TableHeap;
-use types::{Encode, Tuple, Value};
+use types::{Encode, MemcomparableEncode, Tuple, Value};
 
 use crate::context::ExecutorContext;
 use crate::error::ExecutorError;
@@ -44,9 +45,31 @@ impl Executor for InsertExecutor {
         for row in &self.rows {
             let values =
                 row.iter().map(|expr| evaluate(expr, &empty)).collect::<Result<Vec<_>, _>>()?;
+            let tuple = Tuple::new(values);
             let mut bytes = Vec::new();
-            Tuple::new(values).encode(&mut bytes);
-            heap.insert_tuple(ctx.txn.txn_id, &bytes)?;
+            tuple.encode(&mut bytes);
+            let rid = heap.insert_tuple(ctx.txn.txn_id, &bytes)?;
+
+            for index in ctx.catalog.indexes_for_table(self.table_id) {
+                let value = &tuple.values()[index.column_index];
+                let mut key = Vec::new();
+                value.encode_memcomparable(&mut key).map_err(storage::StorageError::from)?;
+
+                let root_page_id = ctx.catalog.index_root_page(ctx.buffer_pool, index.index_id)?;
+                let mut btree_index = BTreeIndex::open(ctx.buffer_pool, root_page_id);
+                let root_before = btree_index.root_page_id();
+                btree_index.insert(ctx.txn.txn_id, &key, rid)?;
+                let root_after = btree_index.root_page_id();
+                if root_after != root_before {
+                    ctx.catalog.update_index_root_page(
+                        ctx.buffer_pool,
+                        ctx.txn.txn_id,
+                        index.index_id,
+                        root_after,
+                    )?;
+                }
+            }
+
             count += 1;
         }
 

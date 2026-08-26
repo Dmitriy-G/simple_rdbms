@@ -84,6 +84,14 @@ comment in this file cites.
   other page mutation, so it is redone or undone exactly like the catalog
   heap allocation it accompanies rather than racing ahead of it as an
   unlogged direct write.
+- `BufferPool::index_catalog_first_page(&self) -> Result<Option<PageId>, StorageError>`/
+  `set_index_catalog_first_page(&self, txn_id, page_id)` - the index
+  catalog's first page, read and written identically to
+  `catalog_first_page`/`set_catalog_first_page` above but at
+  `disk::header::INDEX_CATALOG_FIRST_PAGE_RANGE` instead - a second,
+  independent header slot rather than a field inside the table catalog's
+  own rows, since `catalog::Catalog` bootstraps and grows the two heaps
+  (tables, indexes) on separate schedules (`catalog::catalog.MD`).
 - `BufferPool::append_log(&self, txn_id, kind) -> Result<Lsn, StorageError>` -
   appends `kind` to the write-ahead log on behalf of `txn_id`, returning
   its assigned LSN. Does not by itself make the record durable; call

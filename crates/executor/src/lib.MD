@@ -19,9 +19,10 @@ time without materializing intermediate results.
   `executor.MD`.
 - `evaluate` - evaluates a bound expression against a tuple. See
   `expression.MD`.
-- `FilterExecutor`, `InsertExecutor`, `NestedLoopJoinExecutor`,
-  `ProjectionExecutor`, `SeqScanExecutor` - the concrete operators, one per
-  physical plan node kind. See `operators/mod.MD`.
+- `FilterExecutor`, `IndexScanExecutor`, `InsertExecutor`,
+  `NestedLoopJoinExecutor`, `ProjectionExecutor`, `SeqScanExecutor` - the
+  concrete operators, one per physical plan node kind. See
+  `operators/mod.MD`.
 
 ## Usage Example
 

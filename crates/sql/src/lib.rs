@@ -8,8 +8,8 @@ mod parser;
 mod token;
 
 pub use ast::{
-    BinaryOperator, ColumnDef, CreateTableStatement, Expr, InsertStatement, SelectItem,
-    SelectStatement, Statement, UnaryOperator,
+    BinaryOperator, ColumnDef, CreateIndexStatement, CreateTableStatement, Expr, InsertStatement,
+    SelectItem, SelectStatement, Statement, UnaryOperator,
 };
 pub use error::SqlError;
 pub use fingerprint::fingerprint;

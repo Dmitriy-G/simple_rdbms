@@ -14,8 +14,13 @@ cursor rather than by recursing over the input text.
 - `Parser::parse(&mut self) -> Result<Statement, SqlError>` - parses
   exactly one statement, terminated by `;` or end of input; dispatches on
   the leading keyword to `parse_select`, `parse_insert`,
-  `parse_create_table`, or one of the transaction-control keywords
-  (`BEGIN`, `START TRANSACTION`, `COMMIT`, `ROLLBACK`).
+  `parse_create_table`/`parse_create_index`, or one of the
+  transaction-control keywords (`BEGIN`, `START TRANSACTION`, `COMMIT`,
+  `ROLLBACK`). `CREATE` alone doesn't say which: `parse` peeks one token
+  ahead (`peek_kind(1)`) to see `TABLE` or `INDEX` before committing to
+  either sub-parser, since both `parse_create_table` and
+  `parse_create_index` re-consume the `CREATE` token themselves rather
+  than being handed a stream with it already stripped.
 - `Parser::parse_select(&mut self) -> Result<SelectStatement, SqlError>` -
   private. Parses a `SELECT` statement.
 - `Parser::parse_select_list(&mut self) -> Result<Vec<SelectItem>, SqlError>` -
@@ -27,6 +32,9 @@ cursor rather than by recursing over the input text.
   private. Parses one parenthesized `expr_list` of a `VALUES` clause.
 - `Parser::parse_create_table(&mut self) -> Result<CreateTableStatement, SqlError>` -
   private. Parses a `CREATE TABLE` statement.
+- `Parser::parse_create_index(&mut self) -> Result<CreateIndexStatement, SqlError>` -
+  private. Parses a `CREATE INDEX <index_name> ON <table> (<column>)`
+  statement - single column, no `UNIQUE`.
 - `Parser::parse_col_def(&mut self) -> Result<ColumnDef, SqlError>` -
   private. Parses one `col_def`: an identifier followed by a type name.
   The grammar has no `NOT NULL` modifier, so every column is nullable.
@@ -44,6 +52,11 @@ cursor rather than by recursing over the input text.
   is the base case, matching literals, column references, and
   parenthesized sub-expressions.
 - `Parser::current(&self) -> &Token` - private. The token at the cursor.
+- `Parser::peek_kind(&self, ahead) -> &TokenKind` - private. The kind of
+  the token `ahead` positions past the cursor, clamped to the final token
+  (`Eof`) rather than panicking if `ahead` runs past the stream's end -
+  used by `parse` for its one-token `CREATE TABLE`/`CREATE INDEX`
+  lookahead, without consuming anything.
 - `Parser::advance(&mut self) -> Token` - private. Returns the current
   token and moves the cursor forward, unless it is already on the final
   token (`Eof`), which is never consumed.
