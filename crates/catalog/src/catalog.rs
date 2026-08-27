@@ -67,8 +67,8 @@ impl Catalog {
             catalog.index_catalog_first_page = Some(index_catalog_first_page);
             let index_heap = TableHeap::open(buffer_pool, index_catalog_first_page);
             for entry in index_heap.iter() {
-                let (_, bytes) = entry?;
-                let (info, _root_page_id) = decode_index_row(&bytes)?;
+                let (rid, bytes) = entry?;
+                let info = decode_index_row(&bytes, rid)?;
                 catalog.next_index_id = catalog.next_index_id.max(info.index_id.0 + 1);
                 catalog.indexes_by_id.insert(info.index_id, info.name.clone());
                 catalog.indexes_by_table.entry(info.table_id).or_default().push(info.index_id);
@@ -161,11 +161,22 @@ impl Catalog {
 
         let index_id = IndexId(self.next_index_id);
         let tree = BTreeIndex::create(buffer_pool, txn_id)?;
-        let info = IndexInfo::new(index_id, name, table_id, column_index);
+        let bytes = encode_index_row(index_id, name, table_id, column_index, tree.root_page_id());
+        let root_page_id_offset = bytes.len() - 4;
 
         let index_catalog_first_page = self.ensure_index_catalog_heap(buffer_pool, txn_id)?;
         let mut index_heap = TableHeap::open(buffer_pool, index_catalog_first_page);
-        index_heap.insert_tuple(txn_id, &encode_index_row(&info, tree.root_page_id()))?;
+        let catalog_rid = index_heap.insert_tuple(txn_id, &bytes)?;
+
+        let info = IndexInfo::new(
+            index_id,
+            name,
+            table_id,
+            column_index,
+            tree.root_page_id(),
+            catalog_rid,
+            root_page_id_offset,
+        );
 
         self.next_index_id += 1;
         self.indexes_by_id.insert(index_id, name.to_string());
@@ -191,25 +202,8 @@ impl Catalog {
             .filter_map(|name| self.indexes_by_name.get(name))
     }
 
-    pub fn index_root_page(
-        &self,
-        buffer_pool: &BufferPool,
-        index_id: IndexId,
-    ) -> Result<PageId, CatalogError> {
-        let index_catalog_first_page = self.index_catalog_first_page.ok_or_else(|| {
-            CatalogError::Corrupt(
-                "index_root_page called with no index catalog heap bootstrapped yet".to_string(),
-            )
-        })?;
-        let heap = TableHeap::open(buffer_pool, index_catalog_first_page);
-        for entry in heap.iter() {
-            let (_, bytes) = entry?;
-            let (info, root_page_id) = decode_index_row(&bytes)?;
-            if info.index_id == index_id {
-                return Ok(root_page_id);
-            }
-        }
-        Err(CatalogError::IndexNotFound(format!("index id {}", index_id.0)))
+    pub fn index_root_page(&self, index_id: IndexId) -> Result<PageId, CatalogError> {
+        Ok(self.get_index_by_id(index_id)?.root_page_id())
     }
 
     pub fn update_index_root_page(
@@ -219,6 +213,7 @@ impl Catalog {
         index_id: IndexId,
         new_root: PageId,
     ) -> Result<(), CatalogError> {
+        let info = self.get_index_by_id(index_id)?;
         let index_catalog_first_page = self.index_catalog_first_page.ok_or_else(|| {
             CatalogError::Corrupt(
                 "update_index_root_page called with no index catalog heap bootstrapped yet"
@@ -226,20 +221,24 @@ impl Catalog {
             )
         })?;
         let mut heap = TableHeap::open(buffer_pool, index_catalog_first_page);
-        let mut found = None;
-        for entry in heap.iter() {
-            let (rid, bytes) = entry?;
-            let (info, _root_page_id) = decode_index_row(&bytes)?;
-            if info.index_id == index_id {
-                found = Some((rid, info));
-                break;
-            }
-        }
-        let (rid, info) =
-            found.ok_or_else(|| CatalogError::IndexNotFound(format!("index id {}", index_id.0)))?;
-        heap.delete_tuple(txn_id, rid)?;
-        heap.insert_tuple(txn_id, &encode_index_row(&info, new_root))?;
+        heap.update_tuple_in_place(
+            txn_id,
+            info.catalog_rid(),
+            info.root_page_id_offset(),
+            &new_root.0.to_le_bytes(),
+        )?;
+        info.set_root_page_id(new_root);
         Ok(())
+    }
+
+    fn get_index_by_id(&self, index_id: IndexId) -> Result<&IndexInfo, CatalogError> {
+        let name = self
+            .indexes_by_id
+            .get(&index_id)
+            .ok_or_else(|| CatalogError::IndexNotFound(format!("index id {}", index_id.0)))?;
+        self.indexes_by_name
+            .get(name)
+            .ok_or_else(|| CatalogError::IndexNotFound(format!("index id {}", index_id.0)))
     }
 
     fn ensure_index_catalog_heap(

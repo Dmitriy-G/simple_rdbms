@@ -1,9 +1,9 @@
 # index_maintenance
 
 `InsertExecutor`'s index-upkeep behavior: a single index and every index
-on a multi-indexed table both get maintained as rows are inserted, and an
+on a multi-indexed table both get maintained as rows are inserted, an
 unorderable indexed value (NaN) fails the statement rather than being
-silently indexed.
+silently indexed, and a root split survives being rolled back.
 
 ## Key Components
 
@@ -23,9 +23,21 @@ silently indexed.
   failing row completes before the index insert that fails on it - see
   `insert.MD`) and the index holds only the successful row's entry -
   pinning down the mechanics `insert.MD` describes, not the full
-  transactional rollback guarantee, which is
-  `engine`-level (`crates/engine/tests/`): this crate has no abort
-  machinery of its own to exercise.
+  transactional rollback guarantee, which the next test below and
+  `crates/engine/tests/` both cover.
+- `a_rolled_back_root_split_leaves_the_index_structurally_valid_and_empty` -
+  the one test here that drives a real `txn::TransactionManager` directly
+  (`begin`/`commit`/`abort`) rather than a bare `TxnId` constant, since
+  proving a rollback actually undoes a split needs a real abort to undo:
+  creates a table and index under one committed transaction, inserts
+  3,000 rows (enough to force a root split at the pool size used) under a
+  second transaction via `InsertExecutor`, aborts that second transaction,
+  reloads the catalog via `Catalog::open` (mirroring
+  `engine::Database::reload_catalog`, `engine::database.MD`), and confirms
+  the reloaded `index_root_page` is back to its pre-insert value, the tree
+  still passes `BTreeIndex::check_invariants`, and every inserted row is
+  gone. This is the test that would fail if `catalog::Catalog`'s root-page
+  cache (`catalog.MD`'s "Root-page caching") were invalidated incorrectly.
 
 ## Usage Example
 

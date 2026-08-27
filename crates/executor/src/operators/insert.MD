@@ -7,16 +7,24 @@ for `INSERT ... SELECT` in this grammar, so unlike the other operators
 this is a leaf: `rows` are literal value expressions from the `VALUES`
 clause, not pulled from a child executor.
 
-**Index maintenance.** For each row, once its heap `Rid` is known, `next`
-iterates `ctx.catalog.indexes_for_table(self.table_id)` and, for each
-`IndexInfo`, encodes the row's value at `index.column_index` via
-`types::MemcomparableEncode::encode_memcomparable`, fetches that index's
-*current* root page via `ctx.catalog.index_root_page` (never cached - see
-`catalog::catalog.MD`), and calls `storage::btree::BTreeIndex::insert`.
-If that insert changed `BTreeIndex::root_page_id()` (a root split), `next`
-immediately calls `ctx.catalog.update_index_root_page` to persist the new
-root - the caller-must-notice contract `storage::btree.MD` documents for
-`insert`. A `Value::Null` in an indexed column is inserted like any other
+**Index maintenance.** Before the row loop, `next` resolves
+`ctx.catalog.indexes_for_table(self.table_id)` once into a `Vec<IndexTarget>`
+(private: `index_id`, `column_index`, and a `root_page_id` seeded from
+`IndexInfo::root_page_id()`'s cache, see `catalog::catalog.MD`'s
+"Root-page caching") - not once per row, since a table's index list and
+each index's root page don't change *within* one `INSERT` except when
+this executor's own inserts split one, which it already tracks locally.
+For each row, once its heap `Rid` is known, `next` walks `targets`
+(`&mut`, so a split's new root page can be written back into it) and, for
+each, encodes the row's value at `target.column_index` via
+`types::MemcomparableEncode::encode_memcomparable` and calls
+`storage::btree::BTreeIndex::insert` against `target.root_page_id`. If
+that insert changed `BTreeIndex::root_page_id()` (a root split), `next`
+calls `ctx.catalog.update_index_root_page` to persist the new root - the
+caller-must-notice contract `storage::btree.MD` documents for `insert` -
+and updates `target.root_page_id` to match, so the *next* row's insert
+against this same index starts from the correct root without asking the
+catalog again. A `Value::Null` in an indexed column is inserted like any other
 value (the `NULL_TAG` byte `types::memcomparable.MD` describes); no
 special-casing is needed because NULL-safety for `col = x`/`col > x`
 comes entirely from the `Filter` re-checking every row a later
@@ -32,6 +40,9 @@ unwinds all of it - propagating the error is enough.
 
 ## Key Components
 
+- `IndexTarget` - private. One index this `INSERT` must maintain, resolved
+  once before the row loop: `index_id`, `column_index`, and `root_page_id`
+  - the last kept current locally as splits happen, described above.
 - `InsertExecutor` - holds `table_id`, `rows: Vec<Vec<BoundExpr>>` (one
   `BoundExpr` per column of the target table's schema, in schema order,
   for each row of the `VALUES` clause), `first_page_id: Option<PageId>`

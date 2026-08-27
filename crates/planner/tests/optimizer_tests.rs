@@ -1,5 +1,5 @@
 use catalog::{Catalog, Column, IndexInfo, Schema, TableInfo};
-use common::{IndexId, PageId, TableId};
+use common::{IndexId, PageId, Rid, TableId};
 use planner::{Binder, BoundStatement, IndexScanRule, LogicalPlan, Optimizer};
 use sql::{Lexer, Parser};
 use types::DataType;
@@ -13,7 +13,8 @@ fn catalog_with_indexed_id_column() -> Catalog {
         Column::new("name", DataType::Varchar(64), true),
     ]);
     let table = TableInfo::new(TABLE_ID, "t", schema, PageId(0));
-    let index = IndexInfo::new(INDEX_ID, "idx_t_id", TABLE_ID, 0);
+    let index =
+        IndexInfo::new(INDEX_ID, "idx_t_id", TABLE_ID, 0, PageId(0), Rid::new(PageId(0), 0), 0);
     Catalog::from_tables_and_indexes(vec![table], vec![index])
 }
 

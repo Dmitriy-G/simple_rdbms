@@ -11,7 +11,11 @@ never plans or optimizes.
   one table, `t(id INTEGER, name VARCHAR(64))`, and one index,
   `idx_t_id` on `id` (column 0), built via
   `Catalog::from_tables_and_indexes` (no storage backing - see
-  `catalog::catalog.MD`).
+  `catalog::catalog.MD`). `IndexInfo::new`'s `root_page_id`/`catalog_rid`/
+  `root_page_id_offset` arguments are given placeholder values (`PageId(0)`,
+  `Rid::new(PageId(0), 0)`, `0`) here, since nothing in this file calls
+  `Catalog::index_root_page`/`update_index_root_page` - only
+  `index_for_column`, which never reads them.
 - `optimized_plan(catalog, source) -> LogicalPlan` - private. Runs the
   full `Lexer::tokenize` + `Parser::parse` + `Binder::bind` +
   `planner::plan` + `Optimizer::optimize` (with `IndexScanRule`) pipeline

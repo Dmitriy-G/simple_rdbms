@@ -1,4 +1,4 @@
-use common::{PageId, TableId};
+use common::{IndexId, PageId, TableId};
 use planner::BoundExpr;
 use storage::btree::BTreeIndex;
 use storage::heap::TableHeap;
@@ -8,6 +8,12 @@ use crate::context::ExecutorContext;
 use crate::error::ExecutorError;
 use crate::executor::Executor;
 use crate::expression::evaluate;
+
+struct IndexTarget {
+    index_id: IndexId,
+    column_index: usize,
+    root_page_id: PageId,
+}
 
 pub struct InsertExecutor {
     table_id: TableId,
@@ -40,6 +46,16 @@ impl Executor for InsertExecutor {
         })?;
         let mut heap = TableHeap::open(ctx.buffer_pool, first_page_id);
 
+        let mut targets: Vec<IndexTarget> = ctx
+            .catalog
+            .indexes_for_table(self.table_id)
+            .map(|index| IndexTarget {
+                index_id: index.index_id,
+                column_index: index.column_index,
+                root_page_id: index.root_page_id(),
+            })
+            .collect();
+
         let empty = Tuple::new(Vec::new());
         let mut count: i64 = 0;
         for row in &self.rows {
@@ -50,23 +66,22 @@ impl Executor for InsertExecutor {
             tuple.encode(&mut bytes);
             let rid = heap.insert_tuple(ctx.txn.txn_id, &bytes)?;
 
-            for index in ctx.catalog.indexes_for_table(self.table_id) {
-                let value = &tuple.values()[index.column_index];
+            for target in &mut targets {
+                let value = &tuple.values()[target.column_index];
                 let mut key = Vec::new();
                 value.encode_memcomparable(&mut key).map_err(storage::StorageError::from)?;
 
-                let root_page_id = ctx.catalog.index_root_page(ctx.buffer_pool, index.index_id)?;
-                let mut btree_index = BTreeIndex::open(ctx.buffer_pool, root_page_id);
-                let root_before = btree_index.root_page_id();
+                let mut btree_index = BTreeIndex::open(ctx.buffer_pool, target.root_page_id);
                 btree_index.insert(ctx.txn.txn_id, &key, rid)?;
                 let root_after = btree_index.root_page_id();
-                if root_after != root_before {
+                if root_after != target.root_page_id {
                     ctx.catalog.update_index_root_page(
                         ctx.buffer_pool,
                         ctx.txn.txn_id,
-                        index.index_id,
+                        target.index_id,
                         root_after,
                     )?;
+                    target.root_page_id = root_after;
                 }
             }
 

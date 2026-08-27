@@ -15,4 +15,5 @@ storage = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+storage = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }

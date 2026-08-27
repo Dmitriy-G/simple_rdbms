@@ -5,6 +5,7 @@ use common::{PageId, TxnId};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::dwb::DoubleWriteBuffer;
+use storage::heap::TableHeap;
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
@@ -56,7 +57,7 @@ fn an_index_survives_reopen_with_its_identity_and_root_page_intact() -> Result<(
         assert_eq!(index.name, "idx_users_email");
         assert_eq!(index.table_id, table_id);
 
-        let root_page = catalog.index_root_page(&pool, index.index_id)?;
+        let root_page = catalog.index_root_page(index.index_id)?;
         assert_ne!(root_page, PageId(u32::MAX), "root page must be a real, allocated page");
 
         let indexes: Vec<_> = catalog.indexes_for_table(table_id).collect();
@@ -99,10 +100,10 @@ fn a_root_page_update_survives_reopen() -> Result<(), Box<dyn Error>> {
         let index = catalog.create_index(&pool, TXN, "idx_users_id", table_id, 0)?;
         let index_id = index.index_id;
 
-        let original_root = catalog.index_root_page(&pool, index_id)?;
+        let original_root = catalog.index_root_page(index_id)?;
         let new_root = PageId(original_root.0 + 1);
         catalog.update_index_root_page(&pool, TXN, index_id, new_root)?;
-        assert_eq!(catalog.index_root_page(&pool, index_id)?, new_root);
+        assert_eq!(catalog.index_root_page(index_id)?, new_root);
 
         pool.flush_all()?;
         (table_id, new_root)
@@ -112,8 +113,68 @@ fn a_root_page_update_survives_reopen() -> Result<(), Box<dyn Error>> {
         let pool = open_pool(&path)?;
         let catalog = Catalog::open(&pool, TXN)?;
         let index = catalog.index_for_column(table_id, 0).expect("index must still be found");
-        assert_eq!(catalog.index_root_page(&pool, index.index_id)?, new_root);
+        assert_eq!(catalog.index_root_page(index.index_id)?, new_root);
     }
+
+    Ok(())
+}
+
+#[test]
+fn many_root_page_updates_leave_the_index_catalog_heap_with_one_live_row_per_index()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.db");
+    let pool = open_pool(&path)?;
+    let mut catalog = Catalog::open(&pool, TXN)?;
+
+    let table = catalog.create_table(&pool, TXN, "users", users_schema())?;
+    let table_id = table.table_id;
+    let index_id = catalog.create_index(&pool, TXN, "idx_users_id", table_id, 0)?.index_id;
+
+    for i in 0..2_000u32 {
+        catalog.update_index_root_page(&pool, TXN, index_id, PageId(1_000 + i))?;
+    }
+
+    let index_catalog_first_page =
+        pool.index_catalog_first_page()?.expect("index catalog heap must exist");
+    let heap = TableHeap::open(&pool, index_catalog_first_page);
+    let rows: Result<Vec<_>, _> = heap.iter().collect();
+    assert_eq!(
+        rows?.len(),
+        1,
+        "one index means exactly one live row, however many times its root page was updated - \
+         update_tuple_in_place must never tombstone-and-reinsert"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn update_index_root_page_touches_a_bounded_number_of_pages_regardless_of_prior_updates()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.db");
+    let pool = open_pool(&path)?;
+    let mut catalog = Catalog::open(&pool, TXN)?;
+
+    let table = catalog.create_table(&pool, TXN, "users", users_schema())?;
+    let table_id = table.table_id;
+    let index_id = catalog.create_index(&pool, TXN, "idx_users_id", table_id, 0)?.index_id;
+
+    for i in 0..2_000u32 {
+        catalog.update_index_root_page(&pool, TXN, index_id, PageId(1_000 + i))?;
+    }
+
+    pool.reset_fetch_count();
+    catalog.update_index_root_page(&pool, TXN, index_id, PageId(9_999))?;
+    let fetches = pool.fetch_count();
+    assert!(
+        fetches <= 2,
+        "a single update_index_root_page call must touch a small, constant number of pages \
+         regardless of how many prior updates happened - got {fetches} page fetches, which \
+         would mean it is still scanning the index catalog heap instead of writing through the \
+         cached Rid/offset"
+    );
 
     Ok(())
 }

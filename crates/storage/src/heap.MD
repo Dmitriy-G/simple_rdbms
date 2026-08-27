@@ -108,7 +108,20 @@ pages that stores a table's tuples before (or in place of) any index.
   the page does not have enough free space. `delete(&mut self, slot)`
   tombstones `slot`, freeing its bytes for future compaction without
   shifting other slots' numbers (`// TODO(M5): vacuum - reclaim
-  tombstoned tuple bytes via compaction`).
+  tombstoned tuple bytes via compaction`). `update_in_place(&mut self,
+  slot, offset, bytes) -> Result<(), StorageError>` overwrites `bytes.len()`
+  bytes of `slot`'s existing tuple starting at `offset` (relative to the
+  tuple's own start, not the page's), without touching its slot entry or
+  any other tuple on the page - unlike `delete`+`insert`, the tuple's
+  `Rid` and byte length are unchanged, so nothing else that recorded that
+  `Rid` needs to learn about the update. `Err(CorruptPage)` if `slot`
+  doesn't exist or is tombstoned; `Err(InPlaceUpdateOutOfBounds)` if
+  `offset + bytes.len()` would run past the tuple's current length - this
+  method can only overwrite a sub-range of an already-encoded tuple, never
+  grow, shrink, or move it, so a caller that got the offset arithmetic
+  wrong fails loudly here instead of silently corrupting whatever tuple
+  bytes (or slot-array bytes, since tuples are packed with no padding)
+  happen to sit past the end of this one.
 - `MAX_TUPLE_SIZE` - the largest tuple a single, otherwise-empty page can
   ever hold: header, one slot entry, and the tuple's own bytes must all
   fit in `PAGE_SIZE`. A tuple larger than this can never be inserted, no
@@ -132,6 +145,10 @@ pages that stores a table's tuples before (or in place of) any index.
   `get_tuple(&self, rid) -> Result<Option<Vec<u8>>, StorageError>` reads
   the tuple bytes at `rid`, or `None` if that slot holds no live tuple.
   `delete_tuple(&mut self, txn_id, rid)` deletes the tuple at `rid`.
+  `update_tuple_in_place(&mut self, txn_id, rid, offset, bytes)` overwrites
+  part of the tuple at `rid` - `SlottedPage::update_in_place`, addressed by
+  `Rid` instead of a raw slot number the way every other `TableHeap` method
+  is.
   `iter(&self) -> TableIter<'_, 'pool>` returns an iterator over every
   live tuple in the heap, in physical page/slot order, holding a page
   pinned only while reading that page's tuples out, never across the
@@ -171,4 +188,8 @@ storage (see `catalog::persist`); `executor::SeqScanExecutor` drives
 `TableHeap::scan_page` one step at a time rather than `iter()`, so it
 never holds a page pinned across the executor's own pull-based iteration
 boundary; `executor::InsertExecutor` calls `insert_tuple` for each
-evaluated row.
+evaluated row. `catalog::Catalog::update_index_root_page` calls
+`update_tuple_in_place` to rewrite an index catalog row's root page id
+after a B+tree root split, in place rather than via `delete_tuple` +
+`insert_tuple` - the index-catalog heap would otherwise grow a dead slot
+every split with no vacuum to reclaim it (`catalog.MD`).

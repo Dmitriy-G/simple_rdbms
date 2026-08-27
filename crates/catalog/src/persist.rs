@@ -1,4 +1,4 @@
-use common::{IndexId, PageId, TableId};
+use common::{IndexId, PageId, Rid, TableId};
 use types::{DataType, Encode, Tuple, Value};
 
 use crate::column::Column;
@@ -132,12 +132,18 @@ pub(crate) fn decode_table_info(bytes: &[u8]) -> Result<TableInfo, CatalogError>
     Ok(TableInfo::new(TableId(*table_id as u32), name.clone(), schema, PageId(*first_page as u32)))
 }
 
-pub(crate) fn encode_index_row(info: &IndexInfo, root_page_id: PageId) -> Vec<u8> {
+pub(crate) fn encode_index_row(
+    index_id: IndexId,
+    name: &str,
+    table_id: TableId,
+    column_index: usize,
+    root_page_id: PageId,
+) -> Vec<u8> {
     let tuple = Tuple::new(vec![
-        Value::Integer(info.index_id.0 as i32),
-        Value::Varchar(info.name.clone()),
-        Value::Integer(info.table_id.0 as i32),
-        Value::Integer(info.column_index as i32),
+        Value::Integer(index_id.0 as i32),
+        Value::Varchar(name.to_string()),
+        Value::Integer(table_id.0 as i32),
+        Value::Integer(column_index as i32),
         Value::Integer(root_page_id.0 as i32),
     ]);
     let mut buf = Vec::new();
@@ -145,7 +151,7 @@ pub(crate) fn encode_index_row(info: &IndexInfo, root_page_id: PageId) -> Vec<u8
     buf
 }
 
-pub(crate) fn decode_index_row(bytes: &[u8]) -> Result<(IndexInfo, PageId), CatalogError> {
+pub(crate) fn decode_index_row(bytes: &[u8], catalog_rid: Rid) -> Result<IndexInfo, CatalogError> {
     let tuple = Tuple::decode(bytes, &INDEX_CATALOG_ROW_SCHEMA)
         .map_err(|err| CatalogError::Corrupt(err.to_string()))?;
     let values = tuple.values();
@@ -161,13 +167,16 @@ pub(crate) fn decode_index_row(bytes: &[u8]) -> Result<(IndexInfo, PageId), Cata
         return Err(CatalogError::Corrupt("malformed index catalog row".to_string()));
     };
 
-    let info = IndexInfo::new(
+    let root_page_id_offset = bytes.len() - 4;
+    Ok(IndexInfo::new(
         IndexId(*index_id as u32),
         name.clone(),
         TableId(*table_id as u32),
         *column_index as usize,
-    );
-    Ok((info, PageId(*root_page_id as u32)))
+        PageId(*root_page_id as u32),
+        catalog_rid,
+        root_page_id_offset,
+    ))
 }
 
 fn take(bytes: &[u8], offset: usize, len: usize) -> Result<&[u8], CatalogError> {

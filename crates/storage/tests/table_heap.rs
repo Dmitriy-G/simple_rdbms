@@ -83,6 +83,58 @@ fn get_tuple_returns_none_for_deleted_slot() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn update_tuple_in_place_overwrites_a_sub_range_without_changing_length_or_rid()
+-> Result<(), Box<dyn Error>> {
+    let (pool, _dir) = open_pool(4)?;
+    let mut heap = TableHeap::create(&pool, TXN)?;
+
+    let before = heap.insert_tuple(TXN, b"before")?;
+    let target = heap.insert_tuple(TXN, b"aaaaaaaaaa")?;
+    let after = heap.insert_tuple(TXN, b"after")?;
+
+    heap.update_tuple_in_place(TXN, target, 3, b"BBBB")?;
+
+    assert_eq!(heap.get_tuple(target)?.as_deref(), Some(b"aaaBBBBaaa".as_slice()));
+    assert_eq!(heap.get_tuple(before)?.as_deref(), Some(b"before".as_slice()));
+    assert_eq!(heap.get_tuple(after)?.as_deref(), Some(b"after".as_slice()));
+    Ok(())
+}
+
+#[test]
+fn update_tuple_in_place_past_the_tuples_end_is_rejected() -> Result<(), Box<dyn Error>> {
+    let (pool, _dir) = open_pool(4)?;
+    let mut heap = TableHeap::create(&pool, TXN)?;
+    let rid = heap.insert_tuple(TXN, b"short")?;
+
+    match heap.update_tuple_in_place(TXN, rid, 3, b"toolong") {
+        Err(StorageError::InPlaceUpdateOutOfBounds { .. }) => {}
+        Err(other) => panic!("expected InPlaceUpdateOutOfBounds, got {other}"),
+        Ok(()) => panic!("a patch running past the tuple's own length must not be accepted"),
+    }
+    assert_eq!(
+        heap.get_tuple(rid)?.as_deref(),
+        Some(b"short".as_slice()),
+        "a rejected update must leave the original bytes untouched"
+    );
+    Ok(())
+}
+
+#[test]
+fn update_tuple_in_place_on_a_deleted_slot_is_rejected() -> Result<(), Box<dyn Error>> {
+    let (pool, _dir) = open_pool(4)?;
+    let mut heap = TableHeap::create(&pool, TXN)?;
+    let rid = heap.insert_tuple(TXN, b"gone")?;
+    heap.delete_tuple(TXN, rid)?;
+
+    match heap.update_tuple_in_place(TXN, rid, 0, b"new!") {
+        Err(StorageError::CorruptPage { .. }) => {}
+        Err(other) => panic!("expected CorruptPage, got {other}"),
+        Ok(()) => panic!("updating a tombstoned slot must not be accepted"),
+    }
+    Ok(())
+}
+
+#[test]
 fn scanning_a_page_whose_init_never_reached_disk_is_a_clean_empty_scan()
 -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(4)?;

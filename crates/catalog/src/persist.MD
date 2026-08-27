@@ -34,16 +34,23 @@ through a `TEXT` column, which requires valid UTF-8. No serde.
 - `decode_table_info(bytes) -> Result<TableInfo, CatalogError>` -
   crate-visible. Decodes a catalog row's tuple bytes back into a
   `TableInfo`.
-- `encode_index_row(info, root_page_id) -> Vec<u8>` - crate-visible.
-  Encodes an index catalog row's tuple bytes. `root_page_id` is passed
-  separately from `info: &IndexInfo` rather than being a field on
-  `IndexInfo` itself - see `catalog.MD`'s "no in-memory root-page cache"
-  note; this function is the one place the two are reunited, right before
-  the row is written.
-- `decode_index_row(bytes) -> Result<(IndexInfo, PageId), CatalogError>` -
-  crate-visible. The inverse of `encode_index_row`, splitting the decoded
-  row back into an `IndexInfo` (cached in memory) and its `root_page_id`
-  (read fresh on every lookup, never cached - see `catalog.MD`).
+- `encode_index_row(index_id, name, table_id, column_index, root_page_id) -> Vec<u8>` -
+  crate-visible. Encodes an index catalog row's tuple bytes from primitive
+  fields rather than an `&IndexInfo` - `Catalog::create_index` needs the
+  encoded bytes (to get a `Rid` back from inserting them) *before* an
+  `IndexInfo` can be built, since `IndexInfo::new` itself needs that `Rid`
+  and the row's `root_page_id_offset` (see `index_info.MD`); taking
+  primitives instead of `&IndexInfo` avoids that chicken-and-egg
+  ordering entirely.
+- `decode_index_row(bytes, catalog_rid) -> Result<IndexInfo, CatalogError>` -
+  crate-visible. The inverse of `encode_index_row`, building a complete,
+  ready-to-cache `IndexInfo` directly: `catalog_rid` is the caller's own
+  (from `TableHeap::iter`, which already hands back a `Rid` alongside
+  every row's bytes), and `root_page_id_offset` is derived as `bytes.len()
+  - 4` - `root_page_id` is the row schema's last field, a fixed-width
+  `Integer`, so its bytes are always exactly the last 4 bytes of the
+  encoded tuple regardless of `name`'s own length (which is the only
+  variable-width part of the row, and precedes `root_page_id`).
 - `take(bytes, offset, len) -> Result<&[u8], CatalogError>` - private.
   Slices `bytes[offset..offset+len]`, converting an out-of-range slice
   into `CatalogError::Corrupt` instead of panicking.
@@ -64,7 +71,11 @@ assert_eq!(round_tripped, info);
 `Catalog::create_table` calls `encode_table_info` before inserting a row
 into the catalog's own `TableHeap`; `Catalog::open` calls `decode_table_info`
 on every row it reads back out of that heap while rebuilding the in-memory
-index. `Catalog::create_index`/`update_index_root_page` call
-`encode_index_row` before writing to the index catalog's `TableHeap`;
-`Catalog::open`/`index_root_page` call `decode_index_row` on every row
-read back out of it.
+index. `Catalog::create_index` calls `encode_index_row` once, to build the
+row it inserts when a new index is created; `Catalog::open` calls
+`decode_index_row` on every row it reads back out of the index catalog
+heap. Neither `encode_index_row` nor `decode_index_row` is called again
+after that: a root split updates the cached `IndexInfo` and rewrites only
+the row's `root_page_id` bytes in place
+(`storage::heap::TableHeap::update_tuple_in_place`, see `catalog.MD`),
+never re-encoding or re-decoding the whole row.

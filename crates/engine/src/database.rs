@@ -227,6 +227,7 @@ impl Database {
                 }
                 Err(_) => {
                     let _ = self.txn_manager.abort(txn_id, &self.buffer_pool);
+                    let _ = self.reload_catalog();
                 }
             }
         } else if result.is_err() {
@@ -253,6 +254,7 @@ impl Database {
             TxnSlot::None => Err(Error::NoActiveTransaction { statement: "COMMIT".to_string() }),
             TxnSlot::Aborted(txn_id) => {
                 self.txn_manager.abort(txn_id, &self.buffer_pool)?;
+                self.reload_catalog()?;
                 self.txn_slot = TxnSlot::None;
                 self.txn_span = None;
                 self.maybe_checkpoint()?;
@@ -274,16 +276,20 @@ impl Database {
             .txn_id()
             .ok_or_else(|| Error::NoActiveTransaction { statement: "ROLLBACK".to_string() })?;
         self.txn_manager.abort(txn_id, &self.buffer_pool)?;
-
-        let reload_txn =
-            self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
-        self.catalog = Catalog::open(&self.buffer_pool, reload_txn)?;
-        self.txn_manager.commit(reload_txn, &self.buffer_pool)?;
+        self.reload_catalog()?;
 
         self.txn_slot = TxnSlot::None;
         self.txn_span = None;
         self.maybe_checkpoint()?;
         Ok(ResultSet::rows_affected(0))
+    }
+
+    fn reload_catalog(&mut self) -> Result<()> {
+        let reload_txn =
+            self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
+        self.catalog = Catalog::open(&self.buffer_pool, reload_txn)?;
+        self.txn_manager.commit(reload_txn, &self.buffer_pool)?;
+        Ok(())
     }
 
     fn txn_for_statement(&mut self) -> Result<(TxnId, bool)> {
@@ -364,6 +370,7 @@ impl Database {
         let column_types: Vec<_> =
             table.schema.columns().iter().map(|column| column.data_type).collect();
 
+        let mut root_page_id = self.catalog.index_root_page(index_id)?;
         let heap = TableHeap::open(&self.buffer_pool, first_page_id);
         for entry in heap.iter() {
             let (rid, bytes) = entry?;
@@ -373,18 +380,17 @@ impl Database {
             let mut key = Vec::new();
             value.encode_memcomparable(&mut key).map_err(StorageError::from)?;
 
-            let root_page_id = self.catalog.index_root_page(&self.buffer_pool, index_id)?;
             let mut btree_index = BTreeIndex::open(&self.buffer_pool, root_page_id);
-            let root_before = btree_index.root_page_id();
             btree_index.insert(txn_id, &key, rid)?;
             let root_after = btree_index.root_page_id();
-            if root_after != root_before {
+            if root_after != root_page_id {
                 self.catalog.update_index_root_page(
                     &self.buffer_pool,
                     txn_id,
                     index_id,
                     root_after,
                 )?;
+                root_page_id = root_after;
             }
         }
         Ok(())

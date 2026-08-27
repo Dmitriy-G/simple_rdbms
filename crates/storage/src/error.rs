@@ -43,6 +43,18 @@ pub enum StorageError {
 
     #[error("index key cannot be encoded: {0}")]
     UnorderableKey(#[from] types::ValueError),
+
+    #[error(
+        "in-place update of slot {slot} on page {page_id} would write {patch_len} bytes at \
+         offset {offset}, past its {tuple_len}-byte tuple"
+    )]
+    InPlaceUpdateOutOfBounds {
+        page_id: u32,
+        slot: u16,
+        tuple_len: usize,
+        offset: usize,
+        patch_len: usize,
+    },
 }
 
 impl From<StorageError> for common::Error {
@@ -71,6 +83,9 @@ impl From<StorageError> for common::Error {
                 common::Error::InvalidConfiguration { detail: message }
             }
             StorageError::UnorderableKey(_) => common::Error::DatatypeMismatch { detail: message },
+            StorageError::InPlaceUpdateOutOfBounds { .. } => {
+                common::Error::Internal { detail: message }
+            }
         }
     }
 }

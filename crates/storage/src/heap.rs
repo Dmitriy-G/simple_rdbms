@@ -175,6 +175,37 @@ impl<'a, 'pool> SlottedPage<'a, 'pool> {
         }
         Ok(())
     }
+
+    pub fn update_in_place(
+        &mut self,
+        slot: u16,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<(), StorageError> {
+        let page_id = self.guard.page_id();
+        let Some((tuple_start, tuple_len)) = slotted_slot_entry(self.data(), slot, page_id)? else {
+            return Err(StorageError::CorruptPage {
+                page_id: page_id.0,
+                reason: format!("slot {slot} does not exist"),
+            });
+        };
+        if tuple_len == 0 {
+            return Err(StorageError::CorruptPage {
+                page_id: page_id.0,
+                reason: format!("slot {slot} is deleted"),
+            });
+        }
+        if offset + bytes.len() > tuple_len as usize {
+            return Err(StorageError::InPlaceUpdateOutOfBounds {
+                page_id: page_id.0,
+                slot,
+                tuple_len: tuple_len as usize,
+                offset,
+                patch_len: bytes.len(),
+            });
+        }
+        self.guard.write(self.txn_id, tuple_start as usize + offset, bytes)
+    }
 }
 
 pub const MAX_TUPLE_SIZE: usize = crate::page::PAGE_SIZE - HEADER_SIZE - SLOT_SIZE;
@@ -246,6 +277,17 @@ impl<'pool> TableHeap<'pool> {
     pub fn delete_tuple(&mut self, txn_id: TxnId, rid: Rid) -> Result<(), StorageError> {
         let mut guard = self.buffer_pool.fetch_page(rid.page_id)?;
         SlottedPage::new(&mut guard, txn_id).delete(rid.slot)
+    }
+
+    pub fn update_tuple_in_place(
+        &mut self,
+        txn_id: TxnId,
+        rid: Rid,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<(), StorageError> {
+        let mut guard = self.buffer_pool.fetch_page(rid.page_id)?;
+        SlottedPage::new(&mut guard, txn_id).update_in_place(rid.slot, offset, bytes)
     }
 
     pub fn iter(&self) -> TableIter<'_, 'pool> {

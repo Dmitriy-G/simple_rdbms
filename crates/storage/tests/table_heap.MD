@@ -2,8 +2,9 @@
 
 `TableHeap` behavior: inserting enough tuples to span several pages and
 reading them all back, a tuple too large for any page producing a clear
-error instead of a panic (or an infinite loop), and a from-scratch,
-panic-freedom property test against arbitrary page bytes.
+error instead of a panic (or an infinite loop), `update_tuple_in_place`
+overwriting a sub-range without disturbing anything else on the page, and
+a from-scratch, panic-freedom property test against arbitrary page bytes.
 
 ## Key Components
 
@@ -18,6 +19,19 @@ panic-freedom property test against arbitrary page bytes.
   `StorageError::TupleTooLarge`, not accepted or panicked on.
 - `get_tuple_returns_none_for_deleted_slot` - a deleted tuple's `Rid`
   reads back as `None`.
+- `update_tuple_in_place_overwrites_a_sub_range_without_changing_length_or_rid` -
+  inserts three tuples, patches 4 bytes in the middle of the second one,
+  and confirms only that sub-range changed - the first and third tuples,
+  inserted before and after it on the same page, read back byte-for-byte
+  unchanged.
+- `update_tuple_in_place_past_the_tuples_end_is_rejected` - a patch whose
+  `offset + bytes.len()` exceeds the tuple's own length is rejected with
+  `StorageError::InPlaceUpdateOutOfBounds`, and the original bytes are
+  left untouched - proving the rejection happens before any write, not
+  after a partial one.
+- `update_tuple_in_place_on_a_deleted_slot_is_rejected` - updating a
+  tombstoned slot is rejected with `StorageError::CorruptPage`, the same
+  way `get_tuple` refuses to read one back.
 - `scanning_a_page_whose_init_never_reached_disk_is_a_clean_empty_scan` -
   a page allocated but never `SlottedPage::init`-ed (as happens when a
   process exits before flushing a freshly-created page) stays all-zero.
@@ -60,3 +74,5 @@ assert_eq!(heap.get_tuple(rid)?.as_deref(), Some(b"a tuple's encoded bytes".as_s
 Run via `cargo test -p storage --test table_heap`, driving
 `storage::heap::TableHeap` end-to-end - the layer `catalog` and
 `executor`'s `SeqScanExecutor`/`InsertExecutor` build on directly.
+`catalog::Catalog::update_index_root_page` is `update_tuple_in_place`'s
+one caller today (`catalog.MD`).

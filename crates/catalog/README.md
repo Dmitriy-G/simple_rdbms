@@ -24,8 +24,11 @@ first time it's needed takes two separate WAL records — the heap's own
 `*_first_page` field at it — that must become durable together or not at
 all; `tests/bootstrap_atomicity.rs` sweeps every possible crash point
 across that sequence to prove a header pointing at a never-allocated heap
-can never happen. An index's `root_page_id` is never cached in memory —
-see [catalog.MD](src/catalog.MD)'s "No in-memory root-page cache" for why.
+can never happen. An index's `root_page_id` is cached in memory and kept
+in sync with an in-place row rewrite on every root split — see
+[catalog.MD](src/catalog.MD)'s "Root-page caching" for the design, and why
+it depends on `engine::Database` reloading the catalog after every abort,
+not only an explicit `ROLLBACK`.
 
 ## Key Components
 
@@ -64,7 +67,10 @@ means in this engine today.
 Workspace: `common`, `types`, `storage` (a table's catalog row is itself
 stored through a `TableHeap`/`BufferPool`, and `Catalog::create_table`/
 `open` take a `TxnId` for the WAL records that provisioning produces).
-External: `thiserror`, for `CatalogError`. Dev-only: `tempfile`.
+External: `thiserror`, for `CatalogError`. Dev-only: `tempfile`, and
+`storage` again with its `test-util` feature enabled (for
+`BufferPool::fetch_count`, used by `tests/index_persistence.rs`'s
+bounded-page-fetches test).
 
 ## Configuration
 
@@ -76,8 +82,12 @@ already-open `BufferPool` by its caller.
 `tests/bootstrap_atomicity.rs` is the crash-safety proof described above.
 `tests/persistence.rs` checks ordinary (non-crashing) round trips: tables
 created against one `BufferPool` reappear, with identical schemas, when the
-database file is reopened. `tests/smoke.rs` is the minimum-viable
-compile-and-construct check. Run just this crate with:
+database file is reopened. `tests/index_persistence.rs` does the same for
+indexes, plus proves the root-page cache (`catalog.MD`) stays correct
+across a reopen and that many root-page updates neither grow the index
+catalog heap past one page nor cost more page fetches over time.
+`tests/smoke.rs` is the minimum-viable compile-and-construct check. Run
+just this crate with:
 
 ```sh
 cargo test -p catalog

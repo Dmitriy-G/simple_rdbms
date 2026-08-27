@@ -11,7 +11,10 @@ variant, `BufferPoolExhausted`/`TupleTooLarge`/`KeyTooLarge`/
 `DoubleWriteRestoreFailed`/`InvalidDwbCapacity` each become their own,
 `UnorderableKey` becomes `common::Error::DatatypeMismatch` (the closest
 existing condition - this crate has no index-specific `common::Error`
-variant of its own to map onto) - see `common`'s `error.MD` for which).
+variant of its own to map onto), `InPlaceUpdateOutOfBounds` becomes
+`common::Error::Internal` (an invariant only a bug in this engine's own
+bookkeeping could violate, never something a caller's input could trigger)
+- see `common`'s `error.MD` for which).
 
 ## Key Components
 
@@ -62,9 +65,15 @@ variant of its own to map onto) - see `common`'s `error.MD` for which).
   `btree::BTreeIndex::insert` ever sees it, instead of being encoded into a
   key that would corrupt the index's ordering silently. `btree` itself
   never calls `encode_memcomparable` - it stays ignorant of `Value`
-  entirely (see `btree.MD`) - so this variant exists for the caller that
-  will build keys ahead of `insert`, once M9.3 wires an index into the
-  query path.
+  entirely (see `btree.MD`) - `executor::InsertExecutor` and
+  `engine::Database::populate_index` are the callers that build keys ahead
+  of `insert`. `InPlaceUpdateOutOfBounds { page_id, slot, tuple_len,
+  offset, patch_len }` is `heap::TableHeap::update_tuple_in_place`'s safety
+  check: raised instead of silently truncating or spilling into the next
+  tuple's bytes when `offset + patch_len` would run past the slot's
+  existing `tuple_len` - an in-place update is only ever meant to overwrite
+  a fixed-width sub-range of an already-encoded tuple, never to grow or
+  shrink it (see `heap.MD`).
 - `impl From<StorageError> for common::Error` - matches each `StorageError`
   variant to the `common::Error` variant naming the same condition,
   preserving its structured fields rather than collapsing them into a

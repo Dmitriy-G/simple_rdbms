@@ -149,13 +149,15 @@ those lower layers needing to know a connection or a transaction exists.
   parsing. Asks `txn_for_statement` for the transaction to run under
   (which rejects it outright if `txn_slot` is `Aborted`), then binds and
   executes the statement as one fallible step. On autocommit failure the
-  statement's just-begun transaction is undone rather than left dangling
-  for a future crash recovery to clean up (if the abort itself fails
-  there's nothing more useful to report than the original error, so that
-  failure is swallowed); on failure *inside an explicit transaction*,
-  `txn_slot` becomes `Aborted` instead - the transaction is not undone
-  yet, matching the Postgres semantics `common::Error::TransactionAborted`
-  documents.
+  statement's just-begun transaction is undone and the catalog is reloaded
+  (`reload_catalog`, both best-effort - if either fails there's nothing
+  more useful to report than the original error, so that failure is
+  swallowed) rather than left dangling for a future crash recovery to
+  clean up; on failure *inside an explicit transaction*, `txn_slot`
+  becomes `Aborted` instead - the transaction is not undone (or the
+  catalog reloaded) yet, matching the Postgres semantics
+  `common::Error::TransactionAborted` documents; that happens later, when
+  `handle_commit`/`handle_rollback` actually ends it.
 - `Database::handle_begin(&mut self) -> Result<ResultSet>` - private.
   `BEGIN`/`START TRANSACTION`: opens an explicit transaction and creates
   its `txn_span` (`txn_id`, `isolation` fields) - a plain `Span`, not
@@ -169,22 +171,37 @@ those lower layers needing to know a connection or a transaction exists.
   `COMMIT`: if `txn_slot` is `Active`, ends the transaction keeping its
   writes and returns `ResultSet::rows_affected(0)`; if `txn_slot` is
   `Aborted`, performs the rollback that was deferred when the transaction
-  first failed and returns `ResultSet::RolledBack` instead, so the caller
-  can tell its `COMMIT` did the opposite of what it asked; if `txn_slot`
-  is `None`, `common::Error::NoActiveTransaction`. Clears `txn_span` to
+  first failed - undoing its writes and reloading the catalog
+  (`reload_catalog`, propagating either failure this time, unlike the
+  autocommit path: a `COMMIT` the caller is actively waiting on should
+  report a reload failure rather than silently leaving `self.catalog`
+  stale) - and returns `ResultSet::RolledBack` instead, so the caller can
+  tell its `COMMIT` did the opposite of what it asked; if `txn_slot` is
+  `None`, `common::Error::NoActiveTransaction`. Clears `txn_span` to
   `None` in every ending branch.
 - `Database::handle_rollback(&mut self) -> Result<ResultSet>` - private.
   `ROLLBACK`: ends the active explicit transaction (healthy or already
   `Aborted` - `TxnSlot::txn_id` doesn't distinguish them here), undoing
-  its writes, and reloads the catalog from its heap.
+  its writes, and reloads the catalog (`reload_catalog`).
   `common::Error::NoActiveTransaction` if `txn_slot` is `None`. Clears
-  `txn_span` to `None`. The reload is needed because a `CREATE TABLE`
-  inside the rolled-back transaction has its heap-page writes undone by
-  `abort` but the in-memory `tables_by_name`/`tables_by_id` maps don't
-  know that; rather than trying to reverse them surgically, `Catalog::open`
-  (already able to rebuild them from an existing heap) is simply called
-  again, discarding the stale `Catalog` for one read fresh off disk -
-  simplest thing that is actually correct.
+  `txn_span` to `None`.
+- `Database::reload_catalog(&mut self) -> Result<()>` - private. Discards
+  `self.catalog` and rebuilds it from scratch via `Catalog::open`, under
+  its own short-lived transaction (committed immediately - `Catalog::open`
+  only ever *writes* if this is the very first open of a brand-new
+  database, which can't be true here). Called after every abort -
+  autocommit failure, `handle_commit`'s deferred-rollback branch, and
+  `handle_rollback` - not only where the name might suggest. Needed
+  because an aborted statement's WAL undo reverts durable state
+  (a `CREATE TABLE`'s heap-page writes, an index's root-page row after a
+  reverted B+tree split) that `self.catalog`'s in-memory maps and
+  `IndexInfo`'s cached `root_page_id` (`catalog::catalog.MD`'s
+  "Root-page caching") don't automatically learn about; rather than
+  trying to reverse either surgically, `Catalog::open` (already able to
+  rebuild both from their heaps) is simply called again, discarding the
+  stale `Catalog` for one read fresh off disk - simplest thing that is
+  actually correct, and the only sound way to keep a cache like
+  `IndexInfo`'s from silently going stale across an abort.
 - `Database::txn_for_statement(&mut self) -> Result<(TxnId, bool)>` -
   private. The transaction the next statement should run under: the id
   from `txn_slot` if `Active` (`autocommit = false`), a fresh one if
@@ -222,15 +239,19 @@ those lower layers needing to know a connection or a transaction exists.
   `ExecutorContext` to hand one) and, for each row, does exactly what
   `executor::InsertExecutor` does per row when maintaining an index:
   encode the value at `column_index` via
-  `types::MemcomparableEncode::encode_memcomparable`, insert it into
-  `index_id`'s `storage::btree::BTreeIndex` at its current root
-  (`catalog.index_root_page`), and persist a changed root via
-  `catalog.update_index_root_page` if the insert split it. On an empty
-  table this loop simply never executes - no special-casing needed. Runs
-  under the same `txn_id` as the rest of the `CREATE INDEX` statement, so
-  a later failure (or an explicit `ROLLBACK`) undoes the whole thing via
-  the ordinary abort path, the same guarantee `executor::InsertExecutor`
-  relies on for its own index-maintenance failures (`executor::operators::insert.MD`).
+  `types::MemcomparableEncode::encode_memcomparable` and insert it into
+  `index_id`'s `storage::btree::BTreeIndex`. Resolves the index's root
+  page once via `catalog.index_root_page` *before* the loop rather than
+  once per row (mirroring `executor::operators::insert.MD`'s
+  `InsertExecutor` - there is only one index here, but the same
+  once-per-statement principle applies), tracking it in a local that's
+  only updated - via `catalog.update_index_root_page` - when a row's
+  insert actually splits the root. On an empty table this loop simply
+  never executes - no special-casing needed. Runs under the same `txn_id`
+  as the rest of the `CREATE INDEX` statement, so a later failure (or an
+  explicit `ROLLBACK`) undoes the whole thing via the ordinary abort path,
+  the same guarantee `executor::InsertExecutor` relies on for its own
+  index-maintenance failures.
 - `Database::table_names(&self) -> Vec<String>` - every registered
   table's name, sorted for a deterministic order.
 - `Database::table_schema(&self, name) -> Result<Schema>` - the column

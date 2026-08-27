@@ -44,7 +44,7 @@ impl Executor for IndexScanExecutor {
         self.column_types = table.schema.columns().iter().map(|column| column.data_type).collect();
         self.table_first_page_id = Some(table.first_page_id);
 
-        let root_page_id = ctx.catalog.index_root_page(ctx.buffer_pool, self.index_id)?;
+        let root_page_id = ctx.catalog.index_root_page(self.index_id)?;
         let index = BTreeIndex::open(ctx.buffer_pool, root_page_id);
         let (leaf, slot) = index.leaf_for_start(self.start.as_deref())?;
         self.current_leaf = Some(leaf);
