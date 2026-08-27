@@ -78,7 +78,13 @@ record of *what* a write changed, which any undo (M8) or redo-after-crash
 (M7) needs.
 **Solution:** a write-ahead log: every page mutation is described by a log
 record appended (and synced) before the page itself is allowed to reach
-disk, plus periodic checkpointing so the log doesn't grow without bound.
+disk, plus periodic checkpointing so recovery after a crash only has to
+scan back to the last checkpoint instead of the log's entire history.
+Checkpointing bounds recovery *time*, not the log file's size: no record
+is ever truncated or archived (`storage::wal::LogManager` only ever
+appends), so the WAL file itself keeps growing for as long as the
+database stays open — a real, still-open limitation, not one this
+milestone actually closes.
 
 ## M7 — Recovering from a crash ✅ Done
 **Problem:** the WAL (M6) only helps if something replays it. On restart
@@ -127,8 +133,15 @@ scaffolding but that nothing in `sql`'s grammar can reach today; finishing
 `NestedLoopJoinExecutor`, whose `init` and `next` are both still
 `todo!()`; and only then additional join algorithms plus a cost-based
 optimizer choosing among them and among access paths using table and
-index statistics. The optimizer half depends on M9's indexes existing,
-since access-path choice is meaningless with only one access path.
+index statistics. M9 has since shipped, and a basic form of access-path
+choice already exists because of it: `planner::optimizer::IndexScanRule`
+picks an index scan over a sequential scan whenever one qualifies,
+greedily and without comparing cost. What this milestone's optimizer half
+still needs is choosing *among* several qualifying access paths (more
+than one usable index, or an index whose selectivity doesn't obviously
+beat a sequential scan) by estimated cost, and extending that choice
+across a join rather than one table at a time — a harder problem than the
+on/off choice M9 already answers, not one M9 left untouched.
 
 ## M12 — Surviving a torn page write ✅ Done
 **Problem:** even a single page write is not atomic at the hardware level —
@@ -250,3 +263,52 @@ real catalog where the data exists, return empty where it does not, and
 never fabricate a result. Track what works in
 `docs/CLIENT-COMPATIBILITY.md`. See datafusion-postgres (linked above) as
 a reference `pg_catalog` implementation.
+
+## M15 — Changing and removing rows
+**Problem:** rows can be inserted and read but never modified or removed.
+`DELETE` and `UPDATE` do not exist in the token list, the AST or the
+grammar; `TableHeap::delete_tuple` and `update_tuple_in_place` are
+reachable only from the catalog's own bookkeeping, and `BTreeIndex::delete`
+is `todo!()`.
+**Solution:** `DELETE FROM t WHERE ...` and `UPDATE t SET col = expr WHERE
+...`, the delete/update executors, B+tree entry removal with underflow
+rebalancing, index maintenance on both paths, and the `// TODO(M5): vacuum`
+compaction in `heap.rs` so tombstoned space is actually reclaimed. Note
+that this is a hard prerequisite for M18.
+
+## M16 — Column constraints that hold
+**Problem:** `Column::nullable` is parsed as a hardcoded `true`, plumbed
+through the binder into the catalog, persisted to disk, and never checked
+- a schema field that no SQL can set and no code enforces.
+`SqlState::NOT_NULL_VIOLATION` is defined and unreachable.
+**Solution:** `NOT NULL` in the grammar, enforcement at insert and update
+with `23502`, plus `DEFAULT <expr>` and `CHECK (<expr>)`. Add `23514
+check_violation` to `SqlState`. No index work required, so this is the
+cheapest of the four.
+
+## M17 — Identity and uniqueness
+**Problem:** no table can declare a primary key, and the B+tree
+deliberately permits duplicates - `get` walks the leaf sibling chain to
+collect them. `SqlState::UNIQUE_VIOLATION` is defined and unreachable.
+**Solution:** a unique mode on `BTreeIndex::insert` that returns a
+violation instead of inserting a duplicate, `UNIQUE` and `PRIMARY KEY`
+column and table constraints, an automatically created unique index
+backing each, and `PRIMARY KEY` implying `NOT NULL`. Persist the
+constraint kind in the index catalog row so it survives a restart. Note
+the interaction with M15: uniqueness must be re-checked on `UPDATE`, not
+only on `INSERT`.
+
+## M18 — Referential integrity
+**Problem:** no way to express that one table's column references
+another's, so the application has to enforce it and nothing stops an
+orphan row.
+**Solution:** `FOREIGN KEY ... REFERENCES` in `CREATE TABLE`, validation
+on insert and update against the referenced unique index, `ON DELETE` and
+`ON UPDATE` actions (`NO ACTION`, `RESTRICT`, `CASCADE`, `SET NULL`), and
+constraint metadata in the catalog. Add `23503 foreign_key_violation` to
+`SqlState`. State the dependencies explicitly: M15 because the
+referential actions are entirely about delete and update behaviour, and
+M17 because the referenced column must be backed by a unique index for
+the check to be a lookup rather than a scan. Record deferred constraint
+checking (`SET CONSTRAINTS DEFERRED`) as explicitly out of scope, since it
+needs statement-level rather than row-level checking.
