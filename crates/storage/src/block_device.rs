@@ -1,22 +1,80 @@
-use std::cell::Cell;
 use std::fs::File;
 use std::io;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
+use common::sync::recover_lock;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
-pub trait BlockDevice {
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
+pub trait BlockDevice: Send + Sync {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
 
-    fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()>;
+    fn write_at(&self, offset: u64, buf: &[u8]) -> io::Result<()>;
 
-    fn set_len(&mut self, len: u64) -> io::Result<()>;
+    fn set_len(&self, len: u64) -> io::Result<()>;
 
-    fn sync_all(&mut self) -> io::Result<()>;
+    fn sync_all(&self) -> io::Result<()>;
 
-    fn size(&mut self) -> io::Result<u64>;
+    fn size(&self) -> io::Result<u64>;
+}
+
+#[cfg(unix)]
+fn file_read_at(file: &File, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+    use std::os::unix::fs::FileExt;
+    file.read_exact_at(buf, offset)
+}
+
+#[cfg(unix)]
+fn file_write_at(file: &File, offset: u64, buf: &[u8]) -> io::Result<()> {
+    use std::os::unix::fs::FileExt;
+    file.write_all_at(buf, offset)
+}
+
+#[cfg(windows)]
+fn file_read_at(file: &File, offset: u64, mut buf: &mut [u8]) -> io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    let mut offset = offset;
+    while !buf.is_empty() {
+        match file.seek_read(buf, offset) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "failed to fill whole buffer",
+                ));
+            }
+            Ok(n) => {
+                buf = &mut buf[n..];
+                offset += n as u64;
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn file_write_at(file: &File, offset: u64, mut buf: &[u8]) -> io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    let mut offset = offset;
+    while !buf.is_empty() {
+        match file.seek_write(buf, offset) {
+            Ok(0) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write whole buffer",
+                ));
+            }
+            Ok(n) => {
+                buf = &buf[n..];
+                offset += n as u64;
+            }
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
 }
 
 pub struct FileDevice(File);
@@ -28,25 +86,23 @@ impl FileDevice {
 }
 
 impl BlockDevice for FileDevice {
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
-        self.0.seek(SeekFrom::Start(offset))?;
-        self.0.read_exact(buf)
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        file_read_at(&self.0, offset, buf)
     }
 
-    fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
-        self.0.seek(SeekFrom::Start(offset))?;
-        self.0.write_all(buf)
+    fn write_at(&self, offset: u64, buf: &[u8]) -> io::Result<()> {
+        file_write_at(&self.0, offset, buf)
     }
 
-    fn set_len(&mut self, len: u64) -> io::Result<()> {
+    fn set_len(&self, len: u64) -> io::Result<()> {
         self.0.set_len(len)
     }
 
-    fn sync_all(&mut self) -> io::Result<()> {
+    fn sync_all(&self) -> io::Result<()> {
         self.0.sync_all()
     }
 
-    fn size(&mut self) -> io::Result<u64> {
+    fn size(&self) -> io::Result<u64> {
         Ok(self.0.metadata()?.len())
     }
 }
@@ -84,30 +140,30 @@ const SECTOR_SIZE: usize = 512;
 
 pub struct FaultyDevice {
     inner: Box<dyn BlockDevice>,
-    counter: Rc<Cell<u64>>,
+    counter: Arc<AtomicU64>,
     fail_at: u64,
     model: DurabilityModel,
-    pending: Vec<PendingOp>,
+    pending: Mutex<Vec<PendingOp>>,
     tear_sectors: Option<Vec<usize>>,
 }
 
 impl FaultyDevice {
-    pub fn new(inner: Box<dyn BlockDevice>, counter: Rc<Cell<u64>>, fail_at: u64) -> Self {
+    pub fn new(inner: Box<dyn BlockDevice>, counter: Arc<AtomicU64>, fail_at: u64) -> Self {
         Self::with_model(inner, counter, fail_at, DurabilityModel::write_is_durable())
     }
 
     pub fn with_model(
         inner: Box<dyn BlockDevice>,
-        counter: Rc<Cell<u64>>,
+        counter: Arc<AtomicU64>,
         fail_at: u64,
         model: DurabilityModel,
     ) -> Self {
-        Self { inner, counter, fail_at, model, pending: Vec::new(), tear_sectors: None }
+        Self { inner, counter, fail_at, model, pending: Mutex::new(Vec::new()), tear_sectors: None }
     }
 
     pub fn with_torn_sectors(
         inner: Box<dyn BlockDevice>,
-        counter: Rc<Cell<u64>>,
+        counter: Arc<AtomicU64>,
         fail_at: u64,
         model: DurabilityModel,
         sectors: Vec<usize>,
@@ -122,8 +178,7 @@ impl FaultyDevice {
     }
 
     fn tick(&self) -> io::Result<()> {
-        let count = self.counter.get() + 1;
-        self.counter.set(count);
+        let count = self.counter.fetch_add(1, Ordering::AcqRel) + 1;
         if count > self.fail_at {
             return Err(io::Error::other(format!(
                 "injected fault: write {count} exceeds the armed limit of {}",
@@ -133,11 +188,12 @@ impl FaultyDevice {
         Ok(())
     }
 
-    fn materialized(&mut self) -> io::Result<Vec<u8>> {
+    fn materialized(&self) -> io::Result<Vec<u8>> {
         let len = self.inner.size()?;
         let mut buf = vec![0u8; len as usize];
         self.inner.read_at(0, &mut buf)?;
-        for op in &self.pending {
+        let pending = recover_lock(self.pending.lock(), "FaultyDevice.pending");
+        for op in pending.iter() {
             match op {
                 PendingOp::Write { offset, bytes } => {
                     let end = *offset as usize + bytes.len();
@@ -154,7 +210,7 @@ impl FaultyDevice {
         Ok(buf)
     }
 
-    fn tear(&mut self, offset: u64, buf: &[u8]) {
+    fn tear(&self, offset: u64, buf: &[u8]) {
         let Ok(durable_len) = self.inner.size() else {
             return;
         };
@@ -191,8 +247,8 @@ fn random_sector_subset(sector_count: usize, seed: u64) -> Vec<usize> {
 }
 
 impl BlockDevice for FaultyDevice {
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
-        if self.pending.is_empty() {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if recover_lock(self.pending.lock(), "FaultyDevice.pending").is_empty() {
             return self.inner.read_at(offset, buf);
         }
         let materialized = self.materialized()?;
@@ -208,7 +264,7 @@ impl BlockDevice for FaultyDevice {
         Ok(())
     }
 
-    fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
+    fn write_at(&self, offset: u64, buf: &[u8]) -> io::Result<()> {
         if let Err(err) = self.tick() {
             if self.model.tear_on_fault {
                 self.tear(offset, buf);
@@ -216,25 +272,28 @@ impl BlockDevice for FaultyDevice {
             return Err(err);
         }
         if self.model.durable_only_on_sync {
-            self.pending.push(PendingOp::Write { offset, bytes: buf.to_vec() });
+            recover_lock(self.pending.lock(), "FaultyDevice.pending")
+                .push(PendingOp::Write { offset, bytes: buf.to_vec() });
             Ok(())
         } else {
             self.inner.write_at(offset, buf)
         }
     }
 
-    fn set_len(&mut self, len: u64) -> io::Result<()> {
+    fn set_len(&self, len: u64) -> io::Result<()> {
         self.tick()?;
         if self.model.durable_only_on_sync {
-            self.pending.push(PendingOp::SetLen(len));
+            recover_lock(self.pending.lock(), "FaultyDevice.pending").push(PendingOp::SetLen(len));
             Ok(())
         } else {
             self.inner.set_len(len)
         }
     }
 
-    fn sync_all(&mut self) -> io::Result<()> {
-        for op in self.pending.drain(..) {
+    fn sync_all(&self) -> io::Result<()> {
+        let pending: Vec<PendingOp> =
+            recover_lock(self.pending.lock(), "FaultyDevice.pending").drain(..).collect();
+        for op in pending {
             match op {
                 PendingOp::Write { offset, bytes } => self.inner.write_at(offset, &bytes)?,
                 PendingOp::SetLen(len) => self.inner.set_len(len)?,
@@ -243,8 +302,8 @@ impl BlockDevice for FaultyDevice {
         self.inner.sync_all()
     }
 
-    fn size(&mut self) -> io::Result<u64> {
-        if self.pending.is_empty() {
+    fn size(&self) -> io::Result<u64> {
+        if recover_lock(self.pending.lock(), "FaultyDevice.pending").is_empty() {
             return self.inner.size();
         }
         Ok(self.materialized()?.len() as u64)

@@ -1,8 +1,8 @@
-use std::cell::Cell;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use catalog::Catalog;
 use common::TxnId;
@@ -23,7 +23,7 @@ fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
 
 fn faulty_pool(
     dir: &Path,
-    counter: &Rc<Cell<u64>>,
+    counter: &Arc<AtomicU64>,
     fail_at: u64,
 ) -> Result<BufferPool, Box<dyn Error>> {
     let db_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::new(
@@ -64,10 +64,10 @@ fn run_bootstrap(pool: &BufferPool) -> Result<(), Box<dyn Error>> {
 }
 
 fn total_bootstrap_write_count(dir: &Path) -> Result<u64, Box<dyn Error>> {
-    let counter = Rc::new(Cell::new(0));
+    let counter = Arc::new(AtomicU64::new(0));
     let pool = faulty_pool(dir, &counter, u64::MAX)?;
     run_bootstrap(&pool)?;
-    Ok(counter.get())
+    Ok(counter.load(Ordering::Relaxed))
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn the_bootstrap_heap_and_its_header_pointer_become_durable_together_or_not_at_a
     for n in 1..=k {
         let dir = tempfile::tempdir()?;
 
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU64::new(0));
         let attempt = || -> Result<(), Box<dyn Error>> {
             let pool = faulty_pool(dir.path(), &counter, n)?;
             run_bootstrap(&pool)

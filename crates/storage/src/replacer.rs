@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use common::FrameId;
 
-pub trait Replacer {
+pub trait Replacer: Send {
     fn record_access(&mut self, frame_id: FrameId);
 
     fn set_evictable(&mut self, frame_id: FrameId, evictable: bool);

@@ -2,7 +2,7 @@ use common::{PageId, Rid, TxnId};
 
 use crate::buffer::BufferPool;
 use crate::error::StorageError;
-use crate::page::PageGuard;
+use crate::page::PageWriteGuard;
 
 const NO_NEXT_PAGE: PageId = PageId(0);
 
@@ -104,12 +104,12 @@ fn slotted_free_space(bytes: &[u8]) -> usize {
 }
 
 pub struct SlottedPage<'a, 'pool> {
-    guard: &'a mut PageGuard<'pool>,
+    guard: &'a mut PageWriteGuard<'pool>,
     txn_id: TxnId,
 }
 
 impl<'a, 'pool> SlottedPage<'a, 'pool> {
-    pub fn new(guard: &'a mut PageGuard<'pool>, txn_id: TxnId) -> Self {
+    pub fn new(guard: &'a mut PageWriteGuard<'pool>, txn_id: TxnId) -> Self {
         Self { guard, txn_id }
     }
 
@@ -269,7 +269,7 @@ impl<'pool> TableHeap<'pool> {
     }
 
     pub fn get_tuple(&self, rid: Rid) -> Result<Option<Vec<u8>>, StorageError> {
-        let guard = self.buffer_pool.fetch_page(rid.page_id)?;
+        let guard = self.buffer_pool.fetch_page_read(rid.page_id)?;
         let bytes = slotted_read(guard.page().data(), rid.slot, rid.page_id)?.map(|b| b.to_vec());
         Ok(bytes)
     }
@@ -303,7 +303,7 @@ impl<'pool> TableHeap<'pool> {
         page_id: PageId,
         from_slot: u16,
     ) -> Result<PageScan, StorageError> {
-        let guard = buffer_pool.fetch_page(page_id)?;
+        let guard = buffer_pool.fetch_page_read(page_id)?;
         let bytes = guard.page().data();
         let count = checked_slot_count(bytes, page_id)?;
         for slot in from_slot..count {
@@ -337,7 +337,7 @@ impl Iterator for TableIter<'_, '_> {
             }
 
             let page_id = self.current_page?;
-            let guard = match self.heap.buffer_pool.fetch_page(page_id) {
+            let guard = match self.heap.buffer_pool.fetch_page_read(page_id) {
                 Ok(guard) => guard,
                 Err(err) => return Some(Err(err)),
             };

@@ -1,8 +1,8 @@
-use std::cell::Cell;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use common::DbConfig;
 use engine::{Database, ResultSet, Tuple};
@@ -18,7 +18,7 @@ fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
 
 fn faulty_devices(
     dir: &Path,
-    counter: &Rc<Cell<u64>>,
+    counter: &Arc<AtomicU64>,
     fail_at: u64,
     model: DurabilityModel,
 ) -> Result<DeviceTriple, Box<dyn Error>> {
@@ -52,7 +52,7 @@ fn config(dir: &Path) -> DbConfig {
 
 fn total_write_count(workload: &[String]) -> Result<u64, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let counter = Rc::new(Cell::new(0));
+    let counter = Arc::new(AtomicU64::new(0));
     let (db_device, wal_device, dwb_device) =
         faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
     let mut db =
@@ -61,7 +61,7 @@ fn total_write_count(workload: &[String]) -> Result<u64, Box<dyn Error>> {
         db.execute(stmt)?;
     }
     db.close()?;
-    Ok(counter.get())
+    Ok(counter.load(Ordering::Relaxed))
 }
 
 fn observable_state(db: &mut Database) -> Result<Vec<TableRows>, Box<dyn Error>> {
@@ -122,13 +122,13 @@ fn assert_workload_is_crash_safe(
         let dir = tempfile::tempdir()?;
         let db_path_dir = dir.path();
 
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU64::new(0));
         let (db_device, wal_device, dwb_device) = faulty_devices(db_path_dir, &counter, n, model)?;
         let safe_prefix =
             run_until_crash(config(db_path_dir), db_device, wal_device, dwb_device, workload)?;
 
         for recovery_fail_at in [1u64, 2] {
-            let inner_counter = Rc::new(Cell::new(0));
+            let inner_counter = Arc::new(AtomicU64::new(0));
             let (db_device, wal_device, dwb_device) =
                 faulty_devices(db_path_dir, &inner_counter, recovery_fail_at, model)?;
             let _ =
@@ -216,7 +216,7 @@ fn total_write_count_after(prefix: &[String], workload: &[String]) -> Result<u64
         db.close()?;
     }
 
-    let counter = Rc::new(Cell::new(0));
+    let counter = Arc::new(AtomicU64::new(0));
     let (db_device, wal_device, dwb_device) =
         faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
     let mut db =
@@ -225,7 +225,7 @@ fn total_write_count_after(prefix: &[String], workload: &[String]) -> Result<u64
         db.execute(stmt)?;
     }
     db.close()?;
-    Ok(counter.get())
+    Ok(counter.load(Ordering::Relaxed))
 }
 
 fn assert_two_generation_workload_is_crash_safe(
@@ -249,7 +249,7 @@ fn assert_two_generation_workload_is_crash_safe(
             db.close()?;
         }
 
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU64::new(0));
         let (db_device, wal_device, dwb_device) = faulty_devices(db_path_dir, &counter, n1, model)?;
         let safe_prefix1 =
             run_until_crash(config(db_path_dir), db_device, wal_device, dwb_device, gen1)?;

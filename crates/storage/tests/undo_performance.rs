@@ -1,7 +1,7 @@
-use std::cell::Cell;
 use std::error::Error;
 use std::fs::OpenOptions;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::TxnId;
 use storage::block_device::{BlockDevice, FileDevice};
@@ -29,8 +29,8 @@ fn undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times()
         .create(true)
         .truncate(false)
         .open(dir.path().join("test.db.wal"))?;
-    let calls = Rc::new(Cell::new(0));
-    let bytes = Rc::new(Cell::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let bytes = Arc::new(AtomicUsize::new(0));
     let device: Box<dyn BlockDevice> = Box::new(CountingDevice::new(
         Box::new(FileDevice::new(wal_file)),
         calls.clone(),
@@ -54,23 +54,23 @@ fn undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times()
 
     pool.flush_log_all()?;
 
-    calls.set(0);
-    bytes.set(0);
+    calls.store(0, Ordering::Relaxed);
+    bytes.store(0, Ordering::Relaxed);
 
     let last_lsn = pool.last_lsn(txn_id).ok_or("txn should have appended at least one lsn")?;
     undo_transaction(&pool, txn_id, last_lsn)?;
 
     assert!(
-        calls.get() <= 3 * N,
+        calls.load(Ordering::Relaxed) <= 3 * N,
         "expected roughly 2 device reads per undone record, got {} calls for {N} updates",
-        calls.get()
+        calls.load(Ordering::Relaxed)
     );
     assert!(
-        bytes.get() <= 500 * N,
+        bytes.load(Ordering::Relaxed) <= 500 * N,
         "expected a small, constant number of bytes read per undone record, got {} bytes for \
          {N} updates - this is the metric that actually catches the old quadratic behavior (N \
          calls each re-reading the whole, ever-growing durable log)",
-        bytes.get()
+        bytes.load(Ordering::Relaxed)
     );
     Ok(())
 }

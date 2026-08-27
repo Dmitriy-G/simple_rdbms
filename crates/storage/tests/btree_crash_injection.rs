@@ -1,8 +1,8 @@
-use std::cell::Cell;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use common::{PageId, Rid, TxnId};
 use storage::StorageError;
@@ -24,7 +24,7 @@ fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
 
 fn faulty_devices(
     dir: &Path,
-    counter: &Rc<Cell<u64>>,
+    counter: &Arc<AtomicU64>,
     fail_at: u64,
     model: DurabilityModel,
 ) -> Result<DeviceTriple, Box<dyn Error>> {
@@ -57,11 +57,10 @@ fn open_recovered_pool(
     wal_device: Box<dyn BlockDevice>,
     dwb_device: Box<dyn BlockDevice>,
 ) -> Result<BufferPool, StorageError> {
-    let mut disk_manager = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
+    let disk_manager = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
     let log_manager = LogManager::open_with_device(wal_device)?;
-    let mut dwb =
-        DoubleWriteBuffer::open_with_device(dwb_device, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    recovery::recover_double_write(&mut disk_manager, &mut dwb)?;
+    let dwb = DoubleWriteBuffer::open_with_device(dwb_device, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    recovery::recover_double_write(&disk_manager, &dwb)?;
     let pool =
         BufferPool::new(disk_manager, dwb, log_manager, 16, Box::new(LruKReplacer::new(16, 2)));
     recovery::recover(&pool)?;
@@ -132,11 +131,11 @@ fn assert_workload_is_crash_safe(model: DurabilityModel) -> Result<(), Box<dyn E
 
     let total_writes = {
         let dir = tempfile::tempdir()?;
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU64::new(0));
         let (db, wal, dwb) = faulty_devices(dir.path(), &counter, u64::MAX, model)?;
         let committed = run_until_crash(db, wal, dwb, &keys);
         assert_eq!(committed, keys.len(), "an unfaulted run must commit every key");
-        counter.get()
+        counter.load(Ordering::Relaxed)
     };
     assert!(total_writes > 0, "workload must perform at least one write");
 
@@ -145,13 +144,13 @@ fn assert_workload_is_crash_safe(model: DurabilityModel) -> Result<(), Box<dyn E
         let db_path_dir = dir.path();
 
         let safe_prefix = {
-            let counter = Rc::new(Cell::new(0));
+            let counter = Arc::new(AtomicU64::new(0));
             let (db, wal, dwb) = faulty_devices(db_path_dir, &counter, fail_at, model)?;
             run_until_crash(db, wal, dwb, &keys)
         };
 
         for recovery_fail_at in [1u64, 2] {
-            let counter = Rc::new(Cell::new(0));
+            let counter = Arc::new(AtomicU64::new(0));
             if let Ok((db, wal, dwb)) =
                 faulty_devices(db_path_dir, &counter, recovery_fail_at, model)
             {
@@ -159,7 +158,7 @@ fn assert_workload_is_crash_safe(model: DurabilityModel) -> Result<(), Box<dyn E
             }
         }
 
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU64::new(0));
         let (db, wal, dwb) = faulty_devices(db_path_dir, &counter, u64::MAX, model)?;
         let recovered = open_recovered_pool(db, wal, dwb)?;
 
@@ -210,7 +209,7 @@ fn assert_workload_is_crash_safe(model: DurabilityModel) -> Result<(), Box<dyn E
 #[test]
 fn workload_keys_actually_force_a_root_split() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let counter = Rc::new(Cell::new(0));
+    let counter = Arc::new(AtomicU64::new(0));
     let (db, wal, dwb) =
         faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
     let pool = open_recovered_pool(db, wal, dwb)?;

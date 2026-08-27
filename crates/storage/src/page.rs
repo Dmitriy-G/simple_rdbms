@@ -1,3 +1,6 @@
+use std::mem::ManuallyDrop;
+use std::sync::{RwLockReadGuard, RwLockWriteGuard};
+
 use common::{FrameId, Lsn, PageId};
 
 pub const PAGE_SIZE: usize = 4096;
@@ -63,13 +66,27 @@ impl Page {
     }
 }
 
-pub struct PageGuard<'pool> {
+pub struct PageReadGuard<'pool> {
     pub(crate) page_id: PageId,
     pub(crate) frame_id: FrameId,
+    pub(crate) bytes: ManuallyDrop<RwLockReadGuard<'pool, Page>>,
     pub(crate) pool: &'pool crate::buffer::BufferPool,
 }
 
-impl<'pool> PageGuard<'pool> {
+impl PageReadGuard<'_> {
+    pub fn page_id(&self) -> PageId {
+        self.page_id
+    }
+}
+
+pub struct PageWriteGuard<'pool> {
+    pub(crate) page_id: PageId,
+    pub(crate) frame_id: FrameId,
+    pub(crate) bytes: ManuallyDrop<RwLockWriteGuard<'pool, Page>>,
+    pub(crate) pool: &'pool crate::buffer::BufferPool,
+}
+
+impl PageWriteGuard<'_> {
     pub fn page_id(&self) -> PageId {
         self.page_id
     }

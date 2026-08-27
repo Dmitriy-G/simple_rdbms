@@ -15,7 +15,11 @@ for the precise durability claim this mechanism makes.
   file's header page (page 0 of the `.dwb` file).
 - `ENTRY_COUNT_OFFSET`/`PAGE_IDS_OFFSET` - byte offsets, within the header
   page, of the `u32` entry count and the batch's page ids.
-- `DoubleWriteBuffer` - a separate file holding, at any moment, either
+- `DoubleWriteBuffer` - wraps its `Box<dyn BlockDevice>` in a `Mutex`
+  (M10.1, `docs/ROADMAP.md`): every method takes `&self` now, and while
+  `BufferPool::flush_pages` already serializes actual flush batches (so
+  the mutex is never contended in practice), the type itself must be
+  `Send + Sync` regardless. A separate file holding, at any moment, either
   nothing or one in-flight batch of page images: an exact copy of every
   page a `BufferPool` flush is about to write to the real data file, made
   durable *before* any of those real writes happen (see
@@ -53,28 +57,28 @@ for the precise durability claim this mechanism makes.
   page-image slots this double-write buffer has.
 - `DoubleWriteBuffer::offset_of_slot(&self, index) -> u64` - private.
   `(1 + index) * PAGE_SIZE`.
-- `DoubleWriteBuffer::write_batch(&mut self, pages)` - protocol steps 1-3:
+- `DoubleWriteBuffer::write_batch(&self, pages)` - protocol steps 1-3:
   writes every page in `pages` into its own slot (in order, each
   independently checksummed), writes the header recording this batch's
   page ids, then `sync_all`s the whole file. After this returns
   (successfully), the batch is durable and recoverable even if the caller
   crashes before writing a single one of these pages to its real
   location.
-- `DoubleWriteBuffer::clear_batch(&mut self)` - protocol step 6: marks the
+- `DoubleWriteBuffer::clear_batch(&self)` - protocol step 6: marks the
   batch retired (`entry_count = 0`) and `sync_all`s. Called once every
   page in the batch has been written to its real location and that write
   is itself durable (step 5) - after this, the slot images are stale and
   no longer needed.
 - `DoubleWriteBuffer::encode_header(&self, page_ids) -> [u8; PAGE_SIZE]` -
   private. Builds the header page bytes for `write_batch`/`clear_batch`.
-- `DoubleWriteBuffer::read_batch(&mut self) -> Result<Option<Vec<PageId>>, StorageError>` -
+- `DoubleWriteBuffer::read_batch(&self) -> Result<Option<Vec<PageId>>, StorageError>` -
   recovery: decodes the header page, returning the batch's page ids in
   slot order, or `None` if there is nothing to recover - bad magic, an
   `entry_count` of `0` or above `capacity`, or a CRC mismatch are all
   treated alike, as "invalid," per the recovery protocol: none of them
   are errors, since a header can legitimately be caught mid-write by the
   very crash recovery is running to clean up after.
-- `DoubleWriteBuffer::read_slot(&mut self, index) -> Result<[u8; PAGE_SIZE], StorageError>` -
+- `DoubleWriteBuffer::read_slot(&self, index) -> Result<[u8; PAGE_SIZE], StorageError>` -
   recovery: the raw bytes of slot `index` (0-based, matching the order
   `read_batch` returned page ids in), whether or not they pass their own
   checksum - the caller (`recovery::recover_double_write`) is the one that
@@ -86,7 +90,7 @@ for the precise durability claim this mechanism makes.
 ```rust
 use storage::dwb::DoubleWriteBuffer;
 
-let mut dwb = DoubleWriteBuffer::open("test.db.dwb", DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+let dwb = DoubleWriteBuffer::open("test.db.dwb", DoubleWriteBuffer::DEFAULT_CAPACITY)?;
 dwb.write_batch(&[page_a, page_b])?;
 // ... write page_a and page_b to their real locations, then sync ...
 dwb.clear_batch()?;

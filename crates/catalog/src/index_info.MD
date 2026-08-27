@@ -24,12 +24,21 @@ path, not just an explicit `ROLLBACK`.
   (`persist.rs`'s `decode_index_row` derives it as `bytes.len() - 4`,
   since `root_page_id` is the row schema's last, fixed-width field) and
   cached here so `Catalog::update_index_root_page` never has to
-  re-decode the row to find where to write. `root_page_id` (private) is a
-  `Cell<PageId>` - the one field that changes after construction, on every
-  root split; `Cell` rather than a plain field because
-  `Catalog::update_index_root_page` only ever has `&Catalog` (called from
-  `executor::InsertExecutor`, which never gets `&mut Catalog` - see
-  `catalog.MD`), so mutating it needs interior mutability.
+  re-decode the row to find where to write. `root_page_id` (private) is an
+  `AtomicU32` holding a `PageId`'s bits - the one field that changes after
+  construction, on every root split; interior mutability is required
+  because `Catalog::update_index_root_page` only ever has `&Catalog`
+  (called from `executor::InsertExecutor`, which never gets `&mut Catalog`
+  - see `catalog.MD`), and `AtomicU32` rather than `Cell<PageId>`
+  specifically because `Cell` is `!Sync` - a `Catalog` holding one
+  anywhere in its tables would not itself be `Sync`, the one property
+  `M10.1` (`docs/ROADMAP.md`) needs from every type the storage layer
+  hands back, `IndexInfo` included by way of `Catalog::indexes_for_table`.
+  `Clone` and `PartialEq` are implemented by hand rather than derived,
+  since `AtomicU32` implements neither: `Clone` snapshots the current
+  value into a fresh, independent atomic; `PartialEq` compares the loaded
+  values field-for-field, the same shape the derived impl would have
+  produced over a `Cell<PageId>`.
 - `IndexInfo::new(index_id, name, table_id, column_index, root_page_id, catalog_rid, root_page_id_offset) -> Self` -
   builds an index's full catalog entry, including its current root page
   and the two pieces of bookkeeping needed to update it later.

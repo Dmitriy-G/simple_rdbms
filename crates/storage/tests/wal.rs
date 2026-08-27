@@ -33,7 +33,7 @@ fn round_trip_mixed_record_kinds_survives_reopen() -> Result<(), Box<dyn Error>>
 
     let mut lsns = Vec::new();
     {
-        let mut log = LogManager::open(path.clone())?;
+        let log = LogManager::open(path.clone())?;
         let mut last_lsn = Lsn(0);
         for record in records.clone() {
             last_lsn = log.append(record)?;
@@ -42,7 +42,7 @@ fn round_trip_mixed_record_kinds_survives_reopen() -> Result<(), Box<dyn Error>>
         log.flush(last_lsn)?;
     }
 
-    let mut log = LogManager::open(path.clone())?;
+    let log = LogManager::open(path.clone())?;
     let read_back: Vec<_> = log.iter_from(Lsn(0))?.collect();
 
     assert_eq!(read_back.len(), records.len());
@@ -68,7 +68,7 @@ fn truncated_mid_record_iterates_cleanly_up_to_last_intact_record() -> Result<()
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.wal");
 
-    let mut log = LogManager::open(path.clone())?;
+    let log = LogManager::open(path.clone())?;
     let begin_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Begin })?;
     let commit_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
     log.flush(commit_lsn)?;
@@ -90,7 +90,7 @@ fn flipped_byte_fails_crc_at_exactly_that_record_and_stops() -> Result<(), Box<d
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.wal");
 
-    let mut log = LogManager::open(path.clone())?;
+    let log = LogManager::open(path.clone())?;
     let begin_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Begin })?;
     log.append(LogRecord {
         txn_id: TxnId(1),
@@ -128,7 +128,7 @@ fn read_at_returns_each_records_own_lsn_before_and_after_the_durable_boundary()
 -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.wal");
-    let mut log = LogManager::open(path)?;
+    let log = LogManager::open(path)?;
 
     let begin_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Begin })?;
     let commit_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
@@ -156,14 +156,14 @@ fn offset_lsns_survive_reopen() -> Result<(), Box<dyn Error>> {
     let path = dir.path().join("test.wal");
 
     {
-        let mut log = LogManager::open(path.clone())?;
+        let log = LogManager::open(path.clone())?;
         let lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Begin })?;
         log.flush(lsn)?;
     }
 
     let file_len = std::fs::metadata(&path)?.len();
 
-    let mut log = LogManager::open(path)?;
+    let log = LogManager::open(path)?;
     let next_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
     assert_eq!(next_lsn.0, file_len, "the next assigned LSN must equal the file length on reopen");
 

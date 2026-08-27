@@ -5,6 +5,7 @@ pub mod crc;
 mod error;
 mod ids;
 mod sql_state;
+pub mod sync;
 
 pub use config::DbConfig;
 pub use error::{Error, Result, Severity};

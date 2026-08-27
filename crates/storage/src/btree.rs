@@ -4,7 +4,7 @@ use common::{PageId, Rid, TxnId};
 
 use crate::buffer::BufferPool;
 use crate::error::StorageError;
-use crate::page::PageGuard;
+use crate::page::PageWriteGuard;
 
 const NODE_TYPE_RANGE: std::ops::Range<usize> = 12..13;
 const SLOT_COUNT_RANGE: std::ops::Range<usize> = 13..15;
@@ -236,12 +236,12 @@ fn internal_split_point(entries: &[Vec<u8>]) -> usize {
 }
 
 struct Node<'a, 'pool> {
-    guard: &'a mut PageGuard<'pool>,
+    guard: &'a mut PageWriteGuard<'pool>,
     txn_id: TxnId,
 }
 
 impl<'a, 'pool> Node<'a, 'pool> {
-    fn new(guard: &'a mut PageGuard<'pool>, txn_id: TxnId) -> Self {
+    fn new(guard: &'a mut PageWriteGuard<'pool>, txn_id: TxnId) -> Self {
         Self { guard, txn_id }
     }
 
@@ -370,11 +370,17 @@ impl<'pool> BTreeIndex<'pool> {
         self.root_page_id
     }
 
+    // TODO(M10.2): this descent releases each parent's guard before fetching
+    // the child (no latch coupling / crabbing), which is unsafe once two
+    // writers can run at once - a concurrent split could move `key` out from
+    // under a reader between one fetch and the next. Correct while execution
+    // stays serial (M10.1); needs crabbing before the lock manager allows
+    // concurrent writers.
     fn descend_to_leaf(&self, key: &[u8]) -> Result<(PageId, Vec<PageId>), StorageError> {
         let mut path = Vec::new();
         let mut current = self.root_page_id;
         loop {
-            let guard = self.buffer_pool.fetch_page(current)?;
+            let guard = self.buffer_pool.fetch_page_read(current)?;
             let bytes = guard.page().data();
             match node_type(bytes) {
                 NodeType::Leaf => {
@@ -394,7 +400,7 @@ impl<'pool> BTreeIndex<'pool> {
     fn leftmost_leaf(&self) -> Result<PageId, StorageError> {
         let mut current = self.root_page_id;
         loop {
-            let guard = self.buffer_pool.fetch_page(current)?;
+            let guard = self.buffer_pool.fetch_page_read(current)?;
             let bytes = guard.page().data();
             match node_type(bytes) {
                 NodeType::Leaf => {
@@ -417,7 +423,7 @@ impl<'pool> BTreeIndex<'pool> {
         &self,
         page_id: PageId,
     ) -> Result<(Option<PageId>, Vec<Vec<u8>>), StorageError> {
-        let guard = self.buffer_pool.fetch_page(page_id)?;
+        let guard = self.buffer_pool.fetch_page_read(page_id)?;
         let bytes = guard.page().data();
         let tail = tail_raw(bytes);
         let count = checked_slot_count(bytes, page_id)?;
@@ -433,7 +439,7 @@ impl<'pool> BTreeIndex<'pool> {
         let mut results = Vec::new();
         let mut first_leaf = true;
         loop {
-            let guard = self.buffer_pool.fetch_page(current)?;
+            let guard = self.buffer_pool.fetch_page_read(current)?;
             let bytes = guard.page().data();
             let count = checked_slot_count(bytes, current)?;
             let mut idx = if first_leaf { lower_bound(bytes, key, current)? } else { 0 };
@@ -479,7 +485,7 @@ impl<'pool> BTreeIndex<'pool> {
         match start {
             Some(key) => {
                 let (leaf, _path) = self.descend_to_leaf(key)?;
-                let guard = self.buffer_pool.fetch_page(leaf)?;
+                let guard = self.buffer_pool.fetch_page_read(leaf)?;
                 let slot = lower_bound(guard.page().data(), key, leaf)?;
                 Ok((leaf, slot))
             }
@@ -492,7 +498,7 @@ impl<'pool> BTreeIndex<'pool> {
         leaf_page_id: PageId,
         from_slot: u16,
     ) -> Result<LeafScan, StorageError> {
-        let guard = buffer_pool.fetch_page(leaf_page_id)?;
+        let guard = buffer_pool.fetch_page_read(leaf_page_id)?;
         let bytes = guard.page().data();
         let count = checked_slot_count(bytes, leaf_page_id)?;
         if from_slot >= count {
@@ -621,7 +627,7 @@ impl<'pool> BTreeIndex<'pool> {
         let mut current = self.leftmost_leaf().map_err(|e| e.to_string())?;
         loop {
             via_tail.push(current);
-            let guard = self.buffer_pool.fetch_page(current).map_err(|e| e.to_string())?;
+            let guard = self.buffer_pool.fetch_page_read(current).map_err(|e| e.to_string())?;
             let next = tail_raw(guard.page().data());
             drop(guard);
             match next {
@@ -651,8 +657,10 @@ impl<'pool> BTreeIndex<'pool> {
         }
 
         let (low, high) = bounds;
-        let guard =
-            self.buffer_pool.fetch_page(page_id).map_err(|e| format!("page {}: {e}", page_id.0))?;
+        let guard = self
+            .buffer_pool
+            .fetch_page_read(page_id)
+            .map_err(|e| format!("page {}: {e}", page_id.0))?;
         let bytes = guard.page().data();
         let count =
             checked_slot_count(bytes, page_id).map_err(|e| format!("page {}: {e}", page_id.0))?;

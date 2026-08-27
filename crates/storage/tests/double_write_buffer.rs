@@ -1,9 +1,9 @@
-use std::cell::Cell;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::io;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use common::{PageId, TxnId};
 use storage::StorageError;
@@ -19,7 +19,7 @@ use storage::wal::LogManager;
 #[test]
 fn write_batch_then_read_batch_round_trips_page_ids_in_order() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let mut dwb = DoubleWriteBuffer::open(
+    let dwb = DoubleWriteBuffer::open(
         dir.path().join("test.db.dwb"),
         DoubleWriteBuffer::DEFAULT_CAPACITY,
     )?;
@@ -45,7 +45,7 @@ fn write_batch_then_read_batch_round_trips_page_ids_in_order() -> Result<(), Box
 #[test]
 fn clear_batch_makes_read_batch_report_nothing_to_recover() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let mut dwb = DoubleWriteBuffer::open(
+    let dwb = DoubleWriteBuffer::open(
         dir.path().join("test.db.dwb"),
         DoubleWriteBuffer::DEFAULT_CAPACITY,
     )?;
@@ -63,8 +63,8 @@ fn clear_batch_makes_read_batch_report_nothing_to_recover() -> Result<(), Box<dy
 #[test]
 fn recover_double_write_is_a_no_op_when_nothing_was_in_flight() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let mut disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
-    let mut dwb = DoubleWriteBuffer::open(
+    let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+    let dwb = DoubleWriteBuffer::open(
         dir.path().join("test.db.dwb"),
         DoubleWriteBuffer::DEFAULT_CAPACITY,
     )?;
@@ -75,7 +75,7 @@ fn recover_double_write_is_a_no_op_when_nothing_was_in_flight() -> Result<(), Bo
     disk.write_page(page_id, &original)?;
     disk.sync()?;
 
-    recovery::recover_double_write(&mut disk, &mut dwb)?;
+    recovery::recover_double_write(&disk, &dwb)?;
 
     let mut after = Page::new(page_id);
     disk.read_page(page_id, &mut after)?;
@@ -89,14 +89,14 @@ fn a_corrupted_double_write_copy_is_skipped_not_restored_from() -> Result<(), Bo
     let db_path = dir.path().join("test.db");
     let dwb_path = dir.path().join("test.db.dwb");
 
-    let mut disk = DiskManager::open(&db_path, PAGE_SIZE)?;
+    let disk = DiskManager::open(&db_path, PAGE_SIZE)?;
     let page_id = disk.allocate_page()?;
     let mut original = Page::new(page_id);
     original.data_mut()[20..28].copy_from_slice(b"original");
     disk.write_page(page_id, &original)?;
     disk.sync()?;
 
-    let mut dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
     let mut would_be_new = Page::new(page_id);
     would_be_new.data_mut()[20..27].copy_from_slice(b"new img");
     dwb.write_batch(&[would_be_new])?;
@@ -111,8 +111,8 @@ fn a_corrupted_double_write_copy_is_skipped_not_restored_from() -> Result<(), Bo
     file.write_all(&byte)?;
     drop(file);
 
-    let mut dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    recovery::recover_double_write(&mut disk, &mut dwb)?;
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    recovery::recover_double_write(&disk, &dwb)?;
 
     let mut after = Page::new(page_id);
     disk.read_page(page_id, &mut after)?;
@@ -133,7 +133,7 @@ fn recover_double_write_restores_a_page_torn_mid_flush() -> Result<(), Box<dyn E
 
     let page_id;
     {
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU64::new(0));
         let db_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -162,8 +162,8 @@ fn recover_double_write_restores_a_page_torn_mid_flush() -> Result<(), Box<dyn E
         assert!(result.is_err(), "the torn write must surface as an error, simulating a crash");
     }
 
-    let mut disk = DiskManager::open(&db_path, PAGE_SIZE)?;
-    let mut dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let disk = DiskManager::open(&db_path, PAGE_SIZE)?;
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
 
     let mut precheck = Page::new(page_id);
     assert!(
@@ -171,7 +171,7 @@ fn recover_double_write_restores_a_page_torn_mid_flush() -> Result<(), Box<dyn E
         "the torn write must leave the real page failing its own checksum before recovery runs"
     );
 
-    recovery::recover_double_write(&mut disk, &mut dwb)?;
+    recovery::recover_double_write(&disk, &dwb)?;
 
     assert_eq!(
         dwb.read_batch()?,
@@ -194,7 +194,7 @@ fn assert_restores_a_page_torn_at_sectors(sectors: Vec<usize>) -> Result<(), Box
 
     let page_id;
     {
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU64::new(0));
         let db_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -223,8 +223,8 @@ fn assert_restores_a_page_torn_at_sectors(sectors: Vec<usize>) -> Result<(), Box
         assert!(result.is_err(), "the torn write must surface as an error, simulating a crash");
     }
 
-    let mut disk = DiskManager::open(&db_path, PAGE_SIZE)?;
-    let mut dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let disk = DiskManager::open(&db_path, PAGE_SIZE)?;
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
 
     let mut precheck = Page::new(page_id);
     assert!(
@@ -232,7 +232,7 @@ fn assert_restores_a_page_torn_at_sectors(sectors: Vec<usize>) -> Result<(), Box
         "the torn write must leave the real page failing its own checksum before recovery runs"
     );
 
-    recovery::recover_double_write(&mut disk, &mut dwb)?;
+    recovery::recover_double_write(&disk, &dwb)?;
 
     assert_eq!(
         dwb.read_batch()?,
@@ -269,7 +269,7 @@ fn recover_double_write_leaves_the_batch_in_place_when_its_own_restore_write_tea
 
     let page_id;
     {
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU64::new(0));
         let db_file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -299,7 +299,7 @@ fn recover_double_write_leaves_the_batch_in_place_when_its_own_restore_write_tea
     }
 
     {
-        let counter = Rc::new(Cell::new(0));
+        let counter = Arc::new(AtomicU64::new(0));
         let db_file = OpenOptions::new().read(true).write(true).open(&db_path)?;
         let db_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_torn_sectors(
             Box::new(FileDevice::new(db_file)),
@@ -308,26 +308,26 @@ fn recover_double_write_leaves_the_batch_in_place_when_its_own_restore_write_tea
             DurabilityModel::torn_write(),
             vec![4],
         ));
-        let mut disk = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
-        let mut dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+        let disk = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
+        let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
 
-        let result = recovery::recover_double_write(&mut disk, &mut dwb);
+        let result = recovery::recover_double_write(&disk, &dwb);
         assert!(
             result.is_err(),
             "a restore write torn by a second crash must itself surface as an error"
         );
     }
 
-    let mut dwb_check = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let dwb_check = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
     assert!(
         dwb_check.read_batch()?.is_some(),
         "a failed restore must leave the batch in place instead of clearing it"
     );
     drop(dwb_check);
 
-    let mut disk = DiskManager::open(&db_path, PAGE_SIZE)?;
-    let mut dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    recovery::recover_double_write(&mut disk, &mut dwb)?;
+    let disk = DiskManager::open(&db_path, PAGE_SIZE)?;
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    recovery::recover_double_write(&disk, &dwb)?;
     assert_eq!(dwb.read_batch()?, None, "a clean retry must retire the batch");
 
     let mut restored = Page::new(page_id);
@@ -339,29 +339,29 @@ fn recover_double_write_leaves_the_batch_in_place_when_its_own_restore_write_tea
 
 struct SilentlyDropsOneWrite {
     inner: Box<dyn BlockDevice>,
-    calls: usize,
+    calls: AtomicUsize,
     drop_at: usize,
 }
 
 impl BlockDevice for SilentlyDropsOneWrite {
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
         self.inner.read_at(offset, buf)
     }
 
-    fn write_at(&mut self, offset: u64, buf: &[u8]) -> io::Result<()> {
-        self.calls += 1;
-        if self.calls == self.drop_at { Ok(()) } else { self.inner.write_at(offset, buf) }
+    fn write_at(&self, offset: u64, buf: &[u8]) -> io::Result<()> {
+        let calls = self.calls.fetch_add(1, Ordering::Relaxed) + 1;
+        if calls == self.drop_at { Ok(()) } else { self.inner.write_at(offset, buf) }
     }
 
-    fn set_len(&mut self, len: u64) -> io::Result<()> {
+    fn set_len(&self, len: u64) -> io::Result<()> {
         self.inner.set_len(len)
     }
 
-    fn sync_all(&mut self) -> io::Result<()> {
+    fn sync_all(&self) -> io::Result<()> {
         self.inner.sync_all()
     }
 
-    fn size(&mut self) -> io::Result<u64> {
+    fn size(&self) -> io::Result<u64> {
         self.inner.size()
     }
 }
@@ -373,7 +373,7 @@ fn recover_double_write_refuses_to_clear_the_batch_when_a_restore_write_silently
     let db_path = dir.path().join("test.db");
     let dwb_path = dir.path().join("test.db.dwb");
 
-    let mut disk = DiskManager::open(&db_path, PAGE_SIZE)?;
+    let disk = DiskManager::open(&db_path, PAGE_SIZE)?;
     let page_id = disk.allocate_page()?;
     let mut original = Page::new(page_id);
     original.data_mut()[20..28].copy_from_slice(b"original");
@@ -381,7 +381,7 @@ fn recover_double_write_refuses_to_clear_the_batch_when_a_restore_write_silently
     disk.sync()?;
     drop(disk);
 
-    let mut dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
     let mut good_copy = Page::new(page_id);
     good_copy.data_mut()[20..28].copy_from_slice(b"original");
     dwb.write_batch(&[good_copy])?;
@@ -400,13 +400,13 @@ fn recover_double_write_refuses_to_clear_the_batch_when_a_restore_write_silently
     let db_file = OpenOptions::new().read(true).write(true).open(&db_path)?;
     let db_device: Box<dyn BlockDevice> = Box::new(SilentlyDropsOneWrite {
         inner: Box::new(FileDevice::new(db_file)),
-        calls: 0,
+        calls: AtomicUsize::new(0),
         drop_at: 1,
     });
-    let mut disk = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
-    let mut dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let disk = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
 
-    let result = recovery::recover_double_write(&mut disk, &mut dwb);
+    let result = recovery::recover_double_write(&disk, &dwb);
     assert!(
         matches!(
             result,
@@ -416,7 +416,7 @@ fn recover_double_write_refuses_to_clear_the_batch_when_a_restore_write_silently
          got {result:?}"
     );
 
-    let mut dwb_check = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let dwb_check = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
     assert!(
         dwb_check.read_batch()?.is_some(),
         "a refused clear must leave the batch in place instead of clearing it"

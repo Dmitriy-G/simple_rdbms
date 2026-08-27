@@ -10,8 +10,8 @@ use crate::page::{self, Page};
 use crate::wal::{CHECKPOINT_TXN, HEADER_LEN, LogRecordKind};
 
 pub fn recover_double_write(
-    disk: &mut DiskManager,
-    dwb: &mut DoubleWriteBuffer,
+    disk: &DiskManager,
+    dwb: &DoubleWriteBuffer,
 ) -> Result<(), StorageError> {
     let Some(page_ids) = dwb.read_batch()? else {
         return Ok(());

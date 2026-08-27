@@ -1,8 +1,8 @@
-use std::cell::Cell;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use common::{IndexId, PageId, Rid, TableId};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug)]
 pub struct IndexInfo {
     pub index_id: IndexId,
     pub name: String,
@@ -10,7 +10,7 @@ pub struct IndexInfo {
     pub column_index: usize,
     catalog_rid: Rid,
     root_page_id_offset: usize,
-    root_page_id: Cell<PageId>,
+    root_page_id: AtomicU32,
 }
 
 impl IndexInfo {
@@ -30,12 +30,12 @@ impl IndexInfo {
             column_index,
             catalog_rid,
             root_page_id_offset,
-            root_page_id: Cell::new(root_page_id),
+            root_page_id: AtomicU32::new(root_page_id.0),
         }
     }
 
     pub fn root_page_id(&self) -> PageId {
-        self.root_page_id.get()
+        PageId(self.root_page_id.load(Ordering::Relaxed))
     }
 
     pub(crate) fn catalog_rid(&self) -> Rid {
@@ -47,6 +47,33 @@ impl IndexInfo {
     }
 
     pub(crate) fn set_root_page_id(&self, new_root: PageId) {
-        self.root_page_id.set(new_root);
+        self.root_page_id.store(new_root.0, Ordering::Relaxed);
+    }
+}
+
+impl Clone for IndexInfo {
+    fn clone(&self) -> Self {
+        Self {
+            index_id: self.index_id,
+            name: self.name.clone(),
+            table_id: self.table_id,
+            column_index: self.column_index,
+            catalog_rid: self.catalog_rid,
+            root_page_id_offset: self.root_page_id_offset,
+            root_page_id: AtomicU32::new(self.root_page_id.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+impl PartialEq for IndexInfo {
+    fn eq(&self, other: &Self) -> bool {
+        self.index_id == other.index_id
+            && self.name == other.name
+            && self.table_id == other.table_id
+            && self.column_index == other.column_index
+            && self.catalog_rid == other.catalog_rid
+            && self.root_page_id_offset == other.root_page_id_offset
+            && self.root_page_id.load(Ordering::Relaxed)
+                == other.root_page_id.load(Ordering::Relaxed)
     }
 }

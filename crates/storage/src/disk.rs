@@ -1,7 +1,10 @@
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use common::PageId;
+use common::sync::recover_lock;
 
 use crate::block_device::{BlockDevice, FileDevice};
 use crate::error::StorageError;
@@ -25,7 +28,8 @@ pub struct DiskManager {
     #[allow(dead_code)]
     path: Option<PathBuf>,
     page_size: usize,
-    next_page_id: u32,
+    next_page_id: AtomicU32,
+    extended_len: Mutex<u64>,
 }
 
 impl DiskManager {
@@ -37,14 +41,20 @@ impl DiskManager {
     }
 
     pub fn open_with_device(
-        mut device: Box<dyn BlockDevice>,
+        device: Box<dyn BlockDevice>,
         page_size: usize,
         path: Option<PathBuf>,
     ) -> Result<Self, StorageError> {
         let device_len = device.size()?;
 
         if device_len == 0 {
-            let mut manager = Self { device, path, page_size, next_page_id: 1 };
+            let manager = Self {
+                device,
+                path,
+                page_size,
+                next_page_id: AtomicU32::new(1),
+                extended_len: Mutex::new(page_size as u64),
+            };
             manager.write_header()?;
             Ok(manager)
         } else {
@@ -88,12 +98,18 @@ impl DiskManager {
             }
 
             let next_page_id = (device_len / page_size as u64) as u32;
-            Ok(Self { device, path, page_size, next_page_id })
+            Ok(Self {
+                device,
+                path,
+                page_size,
+                next_page_id: AtomicU32::new(next_page_id),
+                extended_len: Mutex::new(device_len),
+            })
         }
     }
 
     pub(crate) fn read_page_unchecked(
-        &mut self,
+        &self,
         page_id: PageId,
         page: &mut Page,
     ) -> Result<(), StorageError> {
@@ -107,7 +123,7 @@ impl DiskManager {
         Ok(())
     }
 
-    pub fn read_page(&mut self, page_id: PageId, page: &mut Page) -> Result<(), StorageError> {
+    pub fn read_page(&self, page_id: PageId, page: &mut Page) -> Result<(), StorageError> {
         self.read_page_unchecked(page_id, page)?;
         if !page::checksum_ok(page.data()) {
             let expected = read_u32(page.data(), CHECKSUM_RANGE.start);
@@ -117,7 +133,7 @@ impl DiskManager {
         Ok(())
     }
 
-    pub fn write_page(&mut self, page_id: PageId, page: &Page) -> Result<(), StorageError> {
+    pub fn write_page(&self, page_id: PageId, page: &Page) -> Result<(), StorageError> {
         let offset = self.offset_of(page_id);
         let mut scratch = *page.data();
         page::stamp_checksum(&mut scratch);
@@ -126,24 +142,48 @@ impl DiskManager {
         Ok(())
     }
 
-    pub fn allocate_page(&mut self) -> Result<PageId, StorageError> {
-        let page_id = PageId(self.next_page_id);
-        self.next_page_id += 1;
-        let new_len = self.next_page_id as u64 * self.page_size as u64;
-        self.device.set_len(new_len)?;
-        Ok(page_id)
+    pub fn allocate_page(&self) -> Result<PageId, StorageError> {
+        let page_id = self.next_page_id.fetch_add(1, Ordering::AcqRel);
+        let target_len = (page_id as u64 + 1) * self.page_size as u64;
+        self.extend_to_at_least(target_len)?;
+        Ok(PageId(page_id))
     }
 
-    pub fn ensure_allocated(&mut self, page_id: PageId) -> Result<(), StorageError> {
-        if page_id.0 >= self.next_page_id {
-            self.next_page_id = page_id.0 + 1;
-            let new_len = self.next_page_id as u64 * self.page_size as u64;
-            self.device.set_len(new_len)?;
+    pub fn ensure_allocated(&self, page_id: PageId) -> Result<(), StorageError> {
+        let needed = page_id.0 + 1;
+        let mut current = self.next_page_id.load(Ordering::Acquire);
+        let mut bumped = false;
+        while current < needed {
+            match self.next_page_id.compare_exchange_weak(
+                current,
+                needed,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    bumped = true;
+                    break;
+                }
+                Err(observed) => current = observed,
+            }
+        }
+        if bumped {
+            let target_len = needed as u64 * self.page_size as u64;
+            self.extend_to_at_least(target_len)?;
         }
         Ok(())
     }
 
-    pub fn sync(&mut self) -> Result<(), StorageError> {
+    fn extend_to_at_least(&self, target_len: u64) -> Result<(), StorageError> {
+        let mut extended = recover_lock(self.extended_len.lock(), "DiskManager.extended_len");
+        if *extended < target_len {
+            self.device.set_len(target_len)?;
+            *extended = target_len;
+        }
+        Ok(())
+    }
+
+    pub fn sync(&self) -> Result<(), StorageError> {
         self.device.sync_all()?;
         Ok(())
     }
@@ -156,7 +196,7 @@ impl DiskManager {
         page_id.0 as u64 * self.page_size as u64
     }
 
-    fn write_header(&mut self) -> Result<(), StorageError> {
+    fn write_header(&self) -> Result<(), StorageError> {
         let mut buf = [0u8; crate::page::PAGE_SIZE];
         buf[header::MAGIC_RANGE].copy_from_slice(MAGIC);
         buf[header::VERSION_RANGE].copy_from_slice(&HEADER_VERSION.to_le_bytes());

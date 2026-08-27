@@ -1,8 +1,10 @@
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use common::PageId;
 use common::crc::crc32;
+use common::sync::recover_lock;
 
 use crate::block_device::{BlockDevice, FileDevice};
 use crate::error::StorageError;
@@ -14,7 +16,7 @@ const ENTRY_COUNT_OFFSET: usize = MAGIC.len();
 const PAGE_IDS_OFFSET: usize = ENTRY_COUNT_OFFSET + 4;
 
 pub struct DoubleWriteBuffer {
-    device: Box<dyn BlockDevice>,
+    device: Mutex<Box<dyn BlockDevice>>,
     capacity: usize,
 }
 
@@ -29,7 +31,7 @@ impl DoubleWriteBuffer {
     }
 
     pub fn open_with_device(
-        mut device: Box<dyn BlockDevice>,
+        device: Box<dyn BlockDevice>,
         capacity: usize,
     ) -> Result<Self, StorageError> {
         if capacity == 0 {
@@ -43,7 +45,7 @@ impl DoubleWriteBuffer {
         if device.size()? < expected_len {
             device.set_len(expected_len)?;
         }
-        Ok(Self { device, capacity })
+        Ok(Self { device: Mutex::new(device), capacity })
     }
 
     pub fn capacity(&self) -> usize {
@@ -54,28 +56,30 @@ impl DoubleWriteBuffer {
         (1 + index) as u64 * PAGE_SIZE as u64
     }
 
-    pub fn write_batch(&mut self, pages: &[Page]) -> Result<(), StorageError> {
+    pub fn write_batch(&self, pages: &[Page]) -> Result<(), StorageError> {
         debug_assert!(
             pages.len() <= self.capacity,
             "batch of {} pages exceeds the double-write buffer's {}-slot capacity",
             pages.len(),
             self.capacity
         );
+        let device = recover_lock(self.device.lock(), "DoubleWriteBuffer.device");
         for (index, page) in pages.iter().enumerate() {
             let mut scratch = *page.data();
             page::stamp_checksum(&mut scratch);
-            self.device.write_at(self.offset_of_slot(index), &scratch)?;
+            device.write_at(self.offset_of_slot(index), &scratch)?;
         }
         let header = self.encode_header(pages.iter().map(Page::id));
-        self.device.write_at(0, &header)?;
-        self.device.sync_all()?;
+        device.write_at(0, &header)?;
+        device.sync_all()?;
         Ok(())
     }
 
-    pub fn clear_batch(&mut self) -> Result<(), StorageError> {
+    pub fn clear_batch(&self) -> Result<(), StorageError> {
         let header = self.encode_header(std::iter::empty());
-        self.device.write_at(0, &header)?;
-        self.device.sync_all()?;
+        let device = recover_lock(self.device.lock(), "DoubleWriteBuffer.device");
+        device.write_at(0, &header)?;
+        device.sync_all()?;
         Ok(())
     }
 
@@ -94,9 +98,9 @@ impl DoubleWriteBuffer {
         buf
     }
 
-    pub fn read_batch(&mut self) -> Result<Option<Vec<PageId>>, StorageError> {
+    pub fn read_batch(&self) -> Result<Option<Vec<PageId>>, StorageError> {
         let mut header = [0u8; PAGE_SIZE];
-        self.device.read_at(0, &mut header)?;
+        recover_lock(self.device.lock(), "DoubleWriteBuffer.device").read_at(0, &mut header)?;
 
         if header[0..MAGIC.len()] != *MAGIC {
             return Ok(None);
@@ -118,9 +122,10 @@ impl DoubleWriteBuffer {
         Ok(Some(ids))
     }
 
-    pub fn read_slot(&mut self, index: usize) -> Result<[u8; PAGE_SIZE], StorageError> {
+    pub fn read_slot(&self, index: usize) -> Result<[u8; PAGE_SIZE], StorageError> {
         let mut buf = [0u8; PAGE_SIZE];
-        self.device.read_at(self.offset_of_slot(index), &mut buf)?;
+        recover_lock(self.device.lock(), "DoubleWriteBuffer.device")
+            .read_at(self.offset_of_slot(index), &mut buf)?;
         Ok(buf)
     }
 }

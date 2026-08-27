@@ -96,14 +96,22 @@ that never committed - both driven by `storage::recovery`.
   not match (a flipped or corrupted byte). Both cases are reported
   identically: recovery treats a crash mid-append as normal, not as
   corruption to raise an error over.
-- `LogManager` - owns the log file. `device`, an in-memory `buffer` of
-  records appended but not yet flushed, `next_lsn` (the byte offset the
-  next `append` will assign - durable file length plus buffer length),
-  `durable_lsn` (one past the last durably-written byte, never less than
-  `HEADER_LEN`), `last_lsn_by_txn` (each transaction's most recently
-  appended LSN, consulted by `append` to fill in `prev_lsn`), and
-  `bytes_appended` (cumulative, for the checkpoint byte-threshold
-  trigger).
+- `LogBufferInner` - private. Everything `LogManager` needs a mutex around
+  as one unit: `device`, an in-memory `buffer` of records appended but not
+  yet flushed, `next_lsn` (the byte offset the next `append` will assign -
+  durable file length plus buffer length), `last_lsn_by_txn` (each
+  transaction's most recently appended LSN, consulted by `append` to fill
+  in `prev_lsn`), and `bytes_appended` (cumulative, for the checkpoint
+  byte-threshold trigger). Grouped into one struct rather than one field
+  each because every one of them changes together on an `append` or a
+  `flush` - there is no scenario where taking the lock for just one of
+  them makes sense.
+- `LogManager` - `Mutex<LogBufferInner>` plus a standalone `AtomicU64
+  durable_lsn` (M10.1, `docs/ROADMAP.md`): every read of `durable_lsn` -
+  above all `flush`'s own early-return check, the hottest read in the
+  type - is a lock-free atomic load instead of a mutex acquisition, since
+  it's consulted on every page flush (`BufferPool::flush_pages`) even
+  when nothing about the buffer or file needs touching.
 - `LogManager::open(path)` - opens (creating if necessary) the log file
   at `path`.
 - `LogManager::open_with_device(device)` - opens a log backed by an
@@ -122,7 +130,7 @@ that never committed - both driven by `storage::recovery`.
   trailing bytes past the last valid record (a torn write from a crash
   mid-append) are truncated away, so appends after reopening always start
   from a clean boundary.
-- `LogManager::append(&mut self, record) -> Result<Lsn, StorageError>` -
+- `LogManager::append(&self, record) -> Result<Lsn, StorageError>` -
   appends `record` to the log, returning its assigned `Lsn`: its byte
   offset in the log stream, i.e. the durable file length plus the current
   in-memory buffer length. Only buffers the bytes in memory; call `flush`
@@ -133,10 +141,11 @@ that never committed - both driven by `storage::recovery`.
   counter - see `docs/ROADMAP.md`'s M13 entry) by the encoded record's
   byte length; despite the name this counts bytes buffered, not yet
   necessarily fsync'd - `flush`'s own counter is what tracks durability.
-- `LogManager::flush(&mut self, up_to)` - forces every buffered record up
+- `LogManager::flush(&self, up_to)` - forces every buffered record up
   to and including the one starting at `up_to` to disk. Idempotent:
-  returns immediately if that record is already durable. The check is
-  `durable_lsn > up_to.0`, strictly - not `>=`: `up_to` is a record's
+  returns immediately if that record is already durable, via the lock-free
+  `durable_lsn` atomic - no mutex is even acquired on the early-return
+  path. The check is `durable_lsn > up_to.0`, strictly - not `>=`: `up_to` is a record's
   *start* offset, and `durable_lsn` is byte-granular now, so `durable_lsn
   == up_to.0` means the durable region ends exactly where that record
   begins - none of it has reached disk yet, and a real flush is still
@@ -148,7 +157,7 @@ that never committed - both driven by `storage::recovery`.
   recording `wal_fsync_duration_seconds` - per `docs/ROADMAP.md`'s M13
   entry, "commit latency lives here," since `TransactionManager::commit`
   calls this synchronously before acknowledging a commit.
-- `LogManager::flush_all(&mut self)` - forces every record appended so
+- `LogManager::flush_all(&self)` - forces every record appended so
   far to disk, regardless of what any individual page needs. Used at
   clean shutdown.
 - `LogManager::durable_lsn(&self) -> Lsn` - the offset one past the last
@@ -160,8 +169,8 @@ that never committed - both driven by `storage::recovery`.
   record. This is the authoritative source for a transaction's tail of
   the log - unlike a value cached at `begin` time, it reflects every
   record appended since, including ones appended through paths that never
-  see a `TransactionManager`, such as `PageGuard::write`'s own `Update`
-  records.
+  see a `TransactionManager`, such as `PageWriteGuard::write`'s own
+  `Update` records.
 - `LogManager::max_txn_id(&self) -> Option<TxnId>` - the highest
   transaction id that appears anywhere in the log (excluding
   `CHECKPOINT_TXN`), or `None` if the log has never recorded a real

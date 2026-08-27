@@ -25,6 +25,9 @@ edge back up into a higher layer.
 - `crc` - a hand-written CRC-32 implementation, exposed as its own
   submodule rather than re-exported flat, since it is a utility rather
   than a core domain type. See `crc.MD`.
+- `sync` - a poisoned-lock recovery helper shared by every layer that
+  synchronizes with `std::sync` primitives, exposed as its own submodule
+  for the same reason as `crc`. See `sync.MD`.
 
 ## Usage Example
 

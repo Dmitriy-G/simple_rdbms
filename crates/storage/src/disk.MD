@@ -63,17 +63,23 @@ touching the file directly.
   layout, and writes it directly, in full, exactly once: stamping a
   brand-new file's very first header in `write_header`, before there is
   any pool or log to write through.
-- `DiskManager` - owns the device and `next_page_id`. `DiskManager::open(path,
-  page_size)` opens (creating if necessary) the database file at `path`.
-  `DiskManager::open_with_device(device, page_size, path)` opens a database
-  file backed by an arbitrary `BlockDevice`, for tests and crash-injection
-  fault wrapping. A brand-new (zero-length) device gets a fresh page-0
-  header written to it; an existing one has its header validated (magic
-  and version) and `next_page_id` derived from the device's own length -
-  `device_len / page_size` - rather than from any stored count, so the
-  device's length is the single source of truth for how many pages have
-  been durably allocated.
-- `DiskManager::read_page_unchecked(&mut self, page_id, page)` (`pub(crate)`) -
+- `DiskManager` - owns the device, an `AtomicU32 next_page_id`, and a
+  `Mutex<u64> extended_len` tracking the file's own last-known length.
+  Every method takes `&self`, not `&mut self` (M10.1, `docs/ROADMAP.md`):
+  `BlockDevice`'s own methods are `&self` (positioned I/O needs only
+  `&File` - see `block_device.MD`), so the only state `DiskManager` itself
+  needs to synchronize is page-id allocation and file growth, not the
+  device. `DiskManager::open(path, page_size)` opens (creating if
+  necessary) the database file at `path`. `DiskManager::open_with_device(device,
+  page_size, path)` opens a database file backed by an arbitrary
+  `BlockDevice`, for tests and crash-injection fault wrapping. A
+  brand-new (zero-length) device gets a fresh page-0 header written to
+  it; an existing one has its header validated (magic and version) and
+  `next_page_id` derived from the device's own length - `device_len /
+  page_size` - rather than from any stored count, so the device's length
+  is the single source of truth for how many pages have been durably
+  allocated.
+- `DiskManager::read_page_unchecked(&self, page_id, page)` (`pub(crate)`) -
   reads `page_id`'s raw bytes from disk into `page`, without verifying its
   checksum. Used internally by `read_page` (which then verifies) and by
   `recovery::recover_double_write`, which must inspect a possibly-torn
@@ -83,7 +89,7 @@ touching the file directly.
   `disk_pages_read_total` (a `metrics` counter - see `docs/ROADMAP.md`'s
   M13 entry) here rather than in `read_page`, so every real disk read is
   counted once regardless of which of the two callers made it.
-- `DiskManager::read_page(&mut self, page_id, page)` - reads the page at
+- `DiskManager::read_page(&self, page_id, page)` - reads the page at
   `page_id` from disk into `page`, verifying its CRC-32 checksum unless
   the page is entirely zero. Skipping verification for an all-zero page is
   deliberate: a page whose initializing write never reached disk (e.g. a
@@ -93,7 +99,7 @@ touching the file directly.
   freshly-allocated page would fail verification the first time it was
   read back. Reading a page that was never allocated (at or past the
   file's current extent) is an error rather than yielding zeroed bytes.
-- `DiskManager::write_page(&mut self, page_id, page)` - writes `page`'s
+- `DiskManager::write_page(&self, page_id, page)` - writes `page`'s
   contents to its slot on disk. Copies the page into a scratch buffer,
   stamps a freshly computed CRC-32 into the scratch copy's
   `CHECKSUM_RANGE`, and writes that - never mutating `page` itself. The
@@ -102,25 +108,40 @@ touching the file directly.
   believes is unchanged, exactly the invariant the write-ahead rule exists
   to prevent. Increments `disk_pages_written_total` once the write
   succeeds.
-- `DiskManager::allocate_page(&mut self) -> Result<PageId, StorageError>` -
-  allocates a new page id by extending the file, without writing any
-  tuple data to it yet. `set_len` is the only durable act of allocation -
-  a reopen derives `next_page_id` straight back from the file's length, so
-  there is no separate header write to race against the new page's own
-  initialization, and no 4KB header rewrite on every allocation either.
-- `DiskManager::ensure_allocated(&mut self, page_id)` - extends the file
-  so that `page_id` is allocated, if it is not already - i.e. redoes an
+- `DiskManager::allocate_page(&self) -> Result<PageId, StorageError>` -
+  allocates a new page id via `next_page_id.fetch_add`, then extends the
+  file to fit it (`extend_to_at_least`). `set_len` is the only durable
+  act of allocation - a reopen derives `next_page_id` straight back from
+  the file's length, so there is no separate header write to race against
+  the new page's own initialization, and no 4KB header rewrite on every
+  allocation either.
+- `DiskManager::ensure_allocated(&self, page_id)` - extends the file so
+  that `page_id` is allocated, if it is not already - i.e. redoes an
   `AllocPage` record. Idempotent: a no-op if `page_id` is already within
-  the file's current extent. Unlike `allocate_page`, this never assigns a
-  *new* id; it only ensures a specific, already-decided one physically
-  exists on disk.
-- `DiskManager::sync(&mut self)` - forces every write made so far to
+  the file's current extent, decided with a compare-exchange loop against
+  `next_page_id` rather than a plain load-then-store, so two concurrent
+  callers racing to ensure the same or overlapping ranges allocated can't
+  both decide they need to bump it. Unlike `allocate_page`, this never
+  assigns a *new* id; it only ensures a specific, already-decided one
+  physically exists on disk.
+- `DiskManager::extend_to_at_least(&self, target_len) -> Result<(), StorageError>` -
+  private. Grows the file to `target_len` if it isn't already at least
+  that long, tracked through `extended_len` rather than by re-querying
+  `device.size()` on every call. The mutex here is what makes
+  `allocate_page`/`ensure_allocated` safe under concurrent callers: `next_page_id`'s
+  `fetch_add` alone only guarantees distinct ids, not that the *file
+  growth* for a smaller id can't lose a race and land after a larger id's
+  growth already completed (which would silently truncate the file back
+  below a page a concurrent caller was just handed) - tracking the
+  high-water mark under the mutex and only ever growing towards it makes
+  `set_len` calls monotonic regardless of which caller's `fetch_add` won.
+- `DiskManager::sync(&self)` - forces every write made so far to
   durable storage.
 - `DiskManager::page_size(&self) -> usize` - the configured page size for
   this database file.
 - `DiskManager::offset_of(&self, page_id) -> u64` - private. `page_id.0 as
   u64 * page_size`.
-- `DiskManager::write_header(&mut self)` - private. Stamps a brand-new
+- `DiskManager::write_header(&self)` - private. Stamps a brand-new
   file's very first page-0 header: magic, version, page size, and
   `catalog_first_page`/`index_catalog_first_page`/`last_checkpoint_lsn` all
   at their "none" sentinels (`page_lsn`, right after the checksum, stays
@@ -131,6 +152,11 @@ touching the file directly.
   and can be redone or undone like any other page mutation. Stamps its own
   checksum before writing, same as `write_page`, since this page is real
   (non-zero) content that later reads through `read_page` will verify.
+  Relies on the write itself extending a zero-length device to a full
+  page (an ordinary write past a file's current end grows it, on every
+  platform this crate targets), so `open_with_device`'s "device_len == 0"
+  branch seeds `extended_len` at `page_size` up front rather than calling
+  `extend_to_at_least` after the fact.
 
 ## Usage Example
 

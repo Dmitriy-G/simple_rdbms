@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use common::crc::crc32;
+use common::sync::recover_lock;
 use common::{Lsn, PageId, TxnId};
 
 use crate::block_device::{BlockDevice, FileDevice};
@@ -233,13 +236,17 @@ fn decode_record(bytes: &[u8], pos: usize) -> Option<(LoggedRecord, usize)> {
     Some((LoggedRecord { lsn, prev_lsn, txn_id, kind }, total_len))
 }
 
-pub struct LogManager {
+struct LogBufferInner {
     device: Box<dyn BlockDevice>,
     buffer: Vec<u8>,
     next_lsn: u64,
-    durable_lsn: u64,
     last_lsn_by_txn: HashMap<TxnId, u64>,
     bytes_appended: u64,
+}
+
+pub struct LogManager {
+    inner: Mutex<LogBufferInner>,
+    durable_lsn: AtomicU64,
 }
 
 impl LogManager {
@@ -250,19 +257,21 @@ impl LogManager {
         Self::open_with_device(Box::new(FileDevice::new(file)))
     }
 
-    pub fn open_with_device(mut device: Box<dyn BlockDevice>) -> Result<Self, StorageError> {
+    pub fn open_with_device(device: Box<dyn BlockDevice>) -> Result<Self, StorageError> {
         let device_len = device.size()?;
 
         if device_len < HEADER_LEN {
             device.set_len(0)?;
             device.write_at(0, MAGIC)?;
             return Ok(Self {
-                device,
-                buffer: Vec::new(),
-                next_lsn: HEADER_LEN,
-                durable_lsn: HEADER_LEN,
-                last_lsn_by_txn: HashMap::new(),
-                bytes_appended: 0,
+                inner: Mutex::new(LogBufferInner {
+                    device,
+                    buffer: Vec::new(),
+                    next_lsn: HEADER_LEN,
+                    last_lsn_by_txn: HashMap::new(),
+                    bytes_appended: 0,
+                }),
+                durable_lsn: AtomicU64::new(HEADER_LEN),
             });
         }
 
@@ -285,100 +294,120 @@ impl LogManager {
 
         let boundary = pos as u64;
         Ok(Self {
-            device,
-            buffer: Vec::new(),
-            next_lsn: boundary,
-            durable_lsn: boundary,
-            last_lsn_by_txn,
-            bytes_appended: 0,
+            inner: Mutex::new(LogBufferInner {
+                device,
+                buffer: Vec::new(),
+                next_lsn: boundary,
+                last_lsn_by_txn,
+                bytes_appended: 0,
+            }),
+            durable_lsn: AtomicU64::new(boundary),
         })
     }
 
-    pub fn append(&mut self, record: LogRecord) -> Result<Lsn, StorageError> {
-        let lsn = Lsn(self.next_lsn);
-        let prev_lsn = self.last_lsn_by_txn.get(&record.txn_id).copied().map(Lsn);
+    pub fn append(&self, record: LogRecord) -> Result<Lsn, StorageError> {
+        let mut inner = recover_lock(self.inner.lock(), "LogManager.inner");
+        let lsn = Lsn(inner.next_lsn);
+        let prev_lsn = inner.last_lsn_by_txn.get(&record.txn_id).copied().map(Lsn);
         let bytes = encode_record(lsn, prev_lsn, record.txn_id, &record.kind);
-        self.next_lsn += bytes.len() as u64;
-        self.bytes_appended += bytes.len() as u64;
-        self.buffer.extend_from_slice(&bytes);
-        self.last_lsn_by_txn.insert(record.txn_id, lsn.0);
+        inner.next_lsn += bytes.len() as u64;
+        inner.bytes_appended += bytes.len() as u64;
+        inner.buffer.extend_from_slice(&bytes);
+        inner.last_lsn_by_txn.insert(record.txn_id, lsn.0);
         tracing::trace!(lsn = lsn.0, txn_id = record.txn_id.0, "append");
         metrics::counter!("wal_bytes_written_total").increment(bytes.len() as u64);
         Ok(lsn)
     }
 
-    pub fn flush(&mut self, up_to: Lsn) -> Result<(), StorageError> {
-        if self.durable_lsn > up_to.0 {
+    pub fn flush(&self, up_to: Lsn) -> Result<(), StorageError> {
+        if self.durable_lsn.load(Ordering::Acquire) > up_to.0 {
             return Ok(());
         }
-        let offset = self.device.size()?;
-        self.device.write_at(offset, &self.buffer)?;
+        let mut inner = recover_lock(self.inner.lock(), "LogManager.inner");
+        let offset = inner.device.size()?;
+        inner.device.write_at(offset, &inner.buffer)?;
         let fsync_start = std::time::Instant::now();
-        self.device.sync_all()?;
+        inner.device.sync_all()?;
         metrics::counter!("wal_fsync_total").increment(1);
         metrics::histogram!("wal_fsync_duration_seconds")
             .record(fsync_start.elapsed().as_secs_f64());
-        self.buffer.clear();
-        self.durable_lsn = self.next_lsn;
+        inner.buffer.clear();
+        self.durable_lsn.store(inner.next_lsn, Ordering::Release);
         Ok(())
     }
 
-    pub fn flush_all(&mut self) -> Result<(), StorageError> {
-        if self.buffer.is_empty() {
-            return Ok(());
-        }
-        self.flush(Lsn(self.next_lsn))
+    pub fn flush_all(&self) -> Result<(), StorageError> {
+        let next_lsn = {
+            let inner = recover_lock(self.inner.lock(), "LogManager.inner");
+            if inner.buffer.is_empty() {
+                return Ok(());
+            }
+            inner.next_lsn
+        };
+        self.flush(Lsn(next_lsn))
     }
 
     pub fn durable_lsn(&self) -> Lsn {
-        Lsn(self.durable_lsn)
+        Lsn(self.durable_lsn.load(Ordering::Acquire))
     }
 
     pub fn bytes_appended(&self) -> u64 {
-        self.bytes_appended
+        recover_lock(self.inner.lock(), "LogManager.inner").bytes_appended
     }
 
     pub fn last_lsn_for(&self, txn_id: TxnId) -> Option<Lsn> {
-        self.last_lsn_by_txn.get(&txn_id).copied().map(Lsn)
+        recover_lock(self.inner.lock(), "LogManager.inner")
+            .last_lsn_by_txn
+            .get(&txn_id)
+            .copied()
+            .map(Lsn)
     }
 
     pub fn max_txn_id(&self) -> Option<TxnId> {
-        self.last_lsn_by_txn.keys().filter(|&&id| id != CHECKPOINT_TXN).max().copied()
+        recover_lock(self.inner.lock(), "LogManager.inner")
+            .last_lsn_by_txn
+            .keys()
+            .filter(|&&id| id != CHECKPOINT_TXN)
+            .max()
+            .copied()
     }
 
-    pub fn iter_from(&mut self, from: Lsn) -> Result<LogIterator, StorageError> {
+    pub fn iter_from(&self, from: Lsn) -> Result<LogIterator, StorageError> {
         let start = from.0.max(HEADER_LEN);
-        let device_len = self.device.size()?;
+        let inner = recover_lock(self.inner.lock(), "LogManager.inner");
+        let device_len = inner.device.size()?;
         let bytes = if start < device_len {
             let mut buf = vec![0u8; (device_len - start) as usize];
-            self.device.read_at(start, &mut buf)?;
-            buf.extend_from_slice(&self.buffer);
+            inner.device.read_at(start, &mut buf)?;
+            buf.extend_from_slice(&inner.buffer);
             buf
         } else {
             let buf_offset = (start - device_len) as usize;
-            self.buffer.get(buf_offset..).unwrap_or(&[]).to_vec()
+            inner.buffer.get(buf_offset..).unwrap_or(&[]).to_vec()
         };
         Ok(LogIterator { bytes, pos: 0, from: Lsn(start) })
     }
 
-    pub fn read_at(&mut self, lsn: Lsn) -> Result<Option<LoggedRecord>, StorageError> {
+    pub fn read_at(&self, lsn: Lsn) -> Result<Option<LoggedRecord>, StorageError> {
         let offset = lsn.0;
         if offset == 0 {
             return Ok(None);
         }
-        if offset < self.durable_lsn {
+        let inner = recover_lock(self.inner.lock(), "LogManager.inner");
+        let durable_lsn = self.durable_lsn.load(Ordering::Acquire);
+        if offset < durable_lsn {
             let mut len_buf = [0u8; 4];
-            self.device.read_at(offset, &mut len_buf)?;
+            inner.device.read_at(offset, &mut len_buf)?;
             let total_len = u32::from_le_bytes(len_buf) as u64;
-            if total_len < MIN_RECORD_LEN as u64 || offset + total_len > self.durable_lsn {
+            if total_len < MIN_RECORD_LEN as u64 || offset + total_len > durable_lsn {
                 return Ok(None);
             }
             let mut record_buf = vec![0u8; total_len as usize];
-            self.device.read_at(offset, &mut record_buf)?;
+            inner.device.read_at(offset, &mut record_buf)?;
             Ok(decode_record(&record_buf, 0).map(|(record, _)| record))
         } else {
-            let buf_offset = (offset - self.durable_lsn) as usize;
-            Ok(decode_record(&self.buffer, buf_offset).map(|(record, _)| record))
+            let buf_offset = (offset - durable_lsn) as usize;
+            Ok(decode_record(&inner.buffer, buf_offset).map(|(record, _)| record))
         }
     }
 }

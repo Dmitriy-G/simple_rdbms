@@ -3,10 +3,10 @@
 `Page`, the fixed-size unit of I/O between the disk manager and the buffer
 pool and the unit of layout for slotted-page heap storage and the future
 B+tree, plus the two byte ranges every page layout built on top of it must
-treat as reserved: a CRC-32 checksum and a `pageLSN`. `PageGuard`, defined
-here alongside `Page` since it needs access to `BufferPool`'s private frame
-table, is the RAII handle that makes a pin release exactly once, at the
-type level.
+treat as reserved: a CRC-32 checksum and a `pageLSN`. `PageReadGuard`/
+`PageWriteGuard`, defined here alongside `Page` since they need access to
+`BufferPool`'s private frame table, are the RAII handles that make a pin
+release exactly once, at the type level.
 
 ## Key Components
 
@@ -64,19 +64,27 @@ type level.
   `Page::set_page_lsn(&mut self, lsn)` stamps this page with `lsn`; called
   by `PageGuard::write` after applying a change, never directly by higher
   layers.
-- `PageGuard<'pool>` - an RAII handle to a page pinned in the buffer pool.
-  Borrowing a page through a `PageGuard` (rather than a bare `&Page`) is
-  what lets the buffer pool track pin counts: acquiring a guard increments
-  the frame's pin count, and dropping it decrements that count, making
-  the frame eligible for eviction again once nothing holds a guard to it.
-  It is the *only* way to release a pin: it has no public constructor
-  (its fields are `pub(crate)`) and `BufferPool` exposes no manual unpin
-  method, so the sole way to release a pin is to drop the guard that holds
-  it - a caller cannot double-release a pin, because there is no second
-  operation left to call. `PageGuard::page_id(&self) -> PageId` returns
-  the id of the page this guard pins. `page()`, `write()`, and `Drop` live
-  in `buffer.rs` alongside `BufferPool` instead, since they need access to
-  its private frame table, pin counts, dirty flags, and log manager.
+- `PageReadGuard<'pool>` / `PageWriteGuard<'pool>` - RAII handles to a page
+  pinned in the buffer pool, holding the frame's `RwLock` read or write
+  guard respectively (wrapped in `ManuallyDrop`, so `Drop` can release the
+  latch explicitly, before unpinning - see `buffer.MD`'s latch-ordering
+  rule). Borrowing a page through one of these (rather than a bare
+  `&Page`) is what lets the buffer pool track pin counts: acquiring a
+  guard increments the frame's pin count, and dropping it decrements that
+  count, making the frame eligible for eviction again once nothing holds
+  a guard to it. A guard is the *only* way to release a pin: neither has
+  a public constructor (their fields are `pub(crate)`) and `BufferPool`
+  exposes no manual unpin method, so the sole way to release a pin is to
+  drop the guard that holds it - a caller cannot double-release a pin,
+  because there is no second operation left to call.
+  `PageReadGuard::page_id(&self)`/`PageWriteGuard::page_id(&self) -> PageId`
+  return the id of the page the guard pins. `page()`, `write()` (write
+  guard only), and `Drop` for both live in `buffer.rs` alongside
+  `BufferPool` instead, since they need access to its private frame
+  table and log manager. `fetch_page`/`new_page` return a
+  `PageWriteGuard` (read and write both go through it, since callers like
+  `btree::Node` interleave the two on one guard); `fetch_page_read`
+  returns a `PageReadGuard`, for callers that only ever read.
 
 ## Usage Example
 
@@ -97,5 +105,6 @@ unchanged would be an unlogged mutation, exactly what the write-ahead rule
 exists to prevent. `DiskManager::read_page` calls `checksum_ok` on every
 page it reads back, turning a mismatch into `StorageError::ChecksumMismatch`.
 Every higher layer reaches a resident page's bytes only through a
-`PageGuard`, obtained from `BufferPool::fetch_page`/`new_page` and
-released by dropping it.
+`PageReadGuard`/`PageWriteGuard`, obtained from
+`BufferPool::fetch_page`/`fetch_page_read`/`new_page` and released by
+dropping it.

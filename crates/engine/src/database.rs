@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use catalog::{Catalog, Column, Schema};
+use common::sync::recover_lock;
 use common::{DbConfig, Error, Result, Severity, TxnId};
 use executor::ExecutorContext;
 use planner::{
@@ -45,8 +47,8 @@ impl TxnSlot {
 
 pub struct Database {
     catalog: Catalog,
-    buffer_pool: BufferPool,
-    txn_manager: TransactionManager,
+    buffer_pool: Arc<BufferPool>,
+    txn_manager: Arc<Mutex<TransactionManager>>,
     checkpoint_byte_threshold: u64,
     bytes_at_last_checkpoint: u64,
     slow_query_warn_threshold_ms: u64,
@@ -91,16 +93,21 @@ impl Database {
 
     fn open_with_managers(
         config: DbConfig,
-        mut disk_manager: DiskManager,
-        mut dwb: DoubleWriteBuffer,
+        disk_manager: DiskManager,
+        dwb: DoubleWriteBuffer,
         log_manager: LogManager,
         conn_span: tracing::span::EnteredSpan,
     ) -> Result<Self> {
-        recovery::recover_double_write(&mut disk_manager, &mut dwb)?;
+        recovery::recover_double_write(&disk_manager, &dwb)?;
 
         let replacer = Box::new(LruKReplacer::new(config.buffer_pool_size, REPLACER_K));
-        let buffer_pool =
-            BufferPool::new(disk_manager, dwb, log_manager, config.buffer_pool_size, replacer);
+        let buffer_pool = Arc::new(BufferPool::new(
+            disk_manager,
+            dwb,
+            log_manager,
+            config.buffer_pool_size,
+            replacer,
+        ));
 
         let highest_txn_id = recovery::recover(&buffer_pool)?;
 
@@ -108,6 +115,7 @@ impl Database {
         let bootstrap_txn = txn_manager.begin(&buffer_pool, IsolationLevel::ReadCommitted)?;
         let catalog = Catalog::open(&buffer_pool, bootstrap_txn)?;
         txn_manager.commit(bootstrap_txn, &buffer_pool)?;
+        let txn_manager = Arc::new(Mutex::new(txn_manager));
 
         let bytes_at_last_checkpoint = buffer_pool.log_bytes_appended();
 
@@ -134,8 +142,10 @@ impl Database {
         })
     }
 
-    pub fn close(mut self) -> Result<()> {
-        write_checkpoint(&self.buffer_pool, &mut self.txn_manager)?;
+    pub fn close(self) -> Result<()> {
+        let mut txn_manager = recover_lock(self.txn_manager.lock(), "Database.txn_manager");
+        write_checkpoint(&self.buffer_pool, &mut txn_manager)?;
+        drop(txn_manager);
         self.buffer_pool.flush_log_all()?;
         self.buffer_pool.flush_all()?;
         self.buffer_pool.sync()?;
@@ -146,7 +156,9 @@ impl Database {
     fn maybe_checkpoint(&mut self) -> Result<()> {
         let grown = self.buffer_pool.log_bytes_appended() - self.bytes_at_last_checkpoint;
         if grown >= self.checkpoint_byte_threshold {
-            write_checkpoint(&self.buffer_pool, &mut self.txn_manager)?;
+            let mut txn_manager = recover_lock(self.txn_manager.lock(), "Database.txn_manager");
+            write_checkpoint(&self.buffer_pool, &mut txn_manager)?;
+            drop(txn_manager);
             self.bytes_at_last_checkpoint = self.buffer_pool.log_bytes_appended();
         }
         Ok(())
@@ -226,11 +238,13 @@ impl Database {
         if autocommit {
             match &result {
                 Ok(_) => {
-                    self.txn_manager.commit(txn_id, &self.buffer_pool)?;
+                    recover_lock(self.txn_manager.lock(), "Database.txn_manager")
+                        .commit(txn_id, &self.buffer_pool)?;
                     self.maybe_checkpoint()?;
                 }
                 Err(_) => {
-                    let _ = self.txn_manager.abort(txn_id, &self.buffer_pool);
+                    let _ = recover_lock(self.txn_manager.lock(), "Database.txn_manager")
+                        .abort(txn_id, &self.buffer_pool);
                     let _ = self.reload_catalog();
                 }
             }
@@ -245,7 +259,8 @@ impl Database {
             return Err(Error::NestedTransaction);
         }
         let isolation_level = IsolationLevel::ReadCommitted;
-        let txn_id = self.txn_manager.begin(&self.buffer_pool, isolation_level)?;
+        let txn_id = recover_lock(self.txn_manager.lock(), "Database.txn_manager")
+            .begin(&self.buffer_pool, isolation_level)?;
         self.txn_slot = TxnSlot::Active(txn_id);
         self.txn_span = Some(
             tracing::info_span!("transaction", txn_id = txn_id.0, isolation = ?isolation_level),
@@ -257,7 +272,8 @@ impl Database {
         match self.txn_slot {
             TxnSlot::None => Err(Error::NoActiveTransaction { statement: "COMMIT".to_string() }),
             TxnSlot::Aborted(txn_id) => {
-                self.txn_manager.abort(txn_id, &self.buffer_pool)?;
+                recover_lock(self.txn_manager.lock(), "Database.txn_manager")
+                    .abort(txn_id, &self.buffer_pool)?;
                 self.reload_catalog()?;
                 self.txn_slot = TxnSlot::None;
                 self.txn_span = None;
@@ -265,7 +281,8 @@ impl Database {
                 Ok(ResultSet::RolledBack)
             }
             TxnSlot::Active(txn_id) => {
-                self.txn_manager.commit(txn_id, &self.buffer_pool)?;
+                recover_lock(self.txn_manager.lock(), "Database.txn_manager")
+                    .commit(txn_id, &self.buffer_pool)?;
                 self.txn_slot = TxnSlot::None;
                 self.txn_span = None;
                 self.maybe_checkpoint()?;
@@ -279,7 +296,8 @@ impl Database {
             .txn_slot
             .txn_id()
             .ok_or_else(|| Error::NoActiveTransaction { statement: "ROLLBACK".to_string() })?;
-        self.txn_manager.abort(txn_id, &self.buffer_pool)?;
+        recover_lock(self.txn_manager.lock(), "Database.txn_manager")
+            .abort(txn_id, &self.buffer_pool)?;
         self.reload_catalog()?;
 
         self.txn_slot = TxnSlot::None;
@@ -315,10 +333,11 @@ impl Database {
     }
 
     fn reload_catalog(&mut self) -> Result<()> {
-        let reload_txn =
-            self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
+        let reload_txn = recover_lock(self.txn_manager.lock(), "Database.txn_manager")
+            .begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
         self.catalog = Catalog::open(&self.buffer_pool, reload_txn)?;
-        self.txn_manager.commit(reload_txn, &self.buffer_pool)?;
+        recover_lock(self.txn_manager.lock(), "Database.txn_manager")
+            .commit(reload_txn, &self.buffer_pool)?;
         Ok(())
     }
 
@@ -327,8 +346,8 @@ impl Database {
             TxnSlot::Active(txn_id) => Ok((txn_id, false)),
             TxnSlot::Aborted(_) => Err(Error::TransactionAborted),
             TxnSlot::None => {
-                let txn_id =
-                    self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
+                let txn_id = recover_lock(self.txn_manager.lock(), "Database.txn_manager")
+                    .begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
                 Ok((txn_id, true))
             }
         }
@@ -440,7 +459,8 @@ impl Database {
     }
 
     fn run(&self, physical: PhysicalPlan, txn_id: TxnId) -> Result<Vec<Tuple>> {
-        let txn = self.txn_manager.get(txn_id)?;
+        let txn_manager = recover_lock(self.txn_manager.lock(), "Database.txn_manager");
+        let txn = txn_manager.get(txn_id)?;
         let mut executor = build_executor(physical);
         let mut ctx = ExecutorContext::new(&self.catalog, &self.buffer_pool, txn);
         executor.init(&mut ctx)?;

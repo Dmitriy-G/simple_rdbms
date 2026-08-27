@@ -14,7 +14,7 @@ fn pages_survive_close_and_reopen() -> Result<(), Box<dyn Error>> {
     let path = dir.path().join("test.db");
 
     let (id1, id2) = {
-        let mut disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
+        let disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
         let id1 = disk.allocate_page()?;
         let id2 = disk.allocate_page()?;
 
@@ -30,7 +30,7 @@ fn pages_survive_close_and_reopen() -> Result<(), Box<dyn Error>> {
         (id1, id2)
     };
 
-    let mut disk = DiskManager::open(path, PAGE_SIZE)?;
+    let disk = DiskManager::open(path, PAGE_SIZE)?;
 
     let mut page1 = Page::new(id1);
     disk.read_page(id1, &mut page1)?;
@@ -49,7 +49,7 @@ fn reopening_with_a_different_page_size_is_a_clear_error() -> Result<(), Box<dyn
     let path = dir.path().join("test.db");
 
     {
-        let mut disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
+        let disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
         disk.allocate_page()?;
         disk.sync()?;
     }
@@ -74,7 +74,7 @@ fn reopening_a_file_with_a_different_format_version_is_a_clear_error() -> Result
     let path = dir.path().join("test.db");
 
     {
-        let mut disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
+        let disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
         disk.allocate_page()?;
         disk.sync()?;
     }
@@ -103,7 +103,7 @@ fn reopening_a_file_whose_length_is_not_a_page_multiple_is_a_clear_error()
     let path = dir.path().join("test.db");
 
     {
-        let mut disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
+        let disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
         disk.allocate_page()?;
         disk.sync()?;
     }
@@ -129,7 +129,7 @@ fn reopening_a_file_whose_length_is_not_a_page_multiple_is_a_clear_error()
 fn reading_an_unallocated_page_is_an_error_not_zeros() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.db");
-    let mut disk = DiskManager::open(path, PAGE_SIZE)?;
+    let disk = DiskManager::open(path, PAGE_SIZE)?;
 
     let mut page = Page::new(PageId(99));
     let result = disk.read_page(PageId(99), &mut page);
@@ -154,7 +154,7 @@ fn flip_byte_at(path: &Path, page_id: PageId, offset_in_page: u64) -> Result<(),
 fn freshly_allocated_never_written_page_reads_back_clean() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.db");
-    let mut disk = DiskManager::open(path, PAGE_SIZE)?;
+    let disk = DiskManager::open(path, PAGE_SIZE)?;
 
     let page_id = disk.allocate_page()?;
     let mut page = Page::new(page_id);
@@ -169,7 +169,7 @@ fn flipped_byte_in_the_header_region_is_a_checksum_mismatch() -> Result<(), Box<
     let path = dir.path().join("test.db");
 
     let page_id = {
-        let mut disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
+        let disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
         let page_id = disk.allocate_page()?;
         let mut page = Page::new(page_id);
         page.data_mut()[12..14].copy_from_slice(&3u16.to_le_bytes());
@@ -180,7 +180,7 @@ fn flipped_byte_in_the_header_region_is_a_checksum_mismatch() -> Result<(), Box<
 
     flip_byte_at(&path, page_id, 12)?;
 
-    let mut disk = DiskManager::open(path, PAGE_SIZE)?;
+    let disk = DiskManager::open(path, PAGE_SIZE)?;
     let mut page = Page::new(page_id);
     match disk.read_page(page_id, &mut page) {
         Err(StorageError::ChecksumMismatch { page_id: reported, .. }) => {
@@ -198,7 +198,7 @@ fn flipped_byte_in_the_tuple_payload_region_is_a_checksum_mismatch() -> Result<(
     let path = dir.path().join("test.db");
 
     let page_id = {
-        let mut disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
+        let disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
         let page_id = disk.allocate_page()?;
         let mut page = Page::new(page_id);
         page.data_mut()[PAGE_SIZE - 1] = 0xAB;
@@ -209,7 +209,7 @@ fn flipped_byte_in_the_tuple_payload_region_is_a_checksum_mismatch() -> Result<(
 
     flip_byte_at(&path, page_id, (PAGE_SIZE - 1) as u64)?;
 
-    let mut disk = DiskManager::open(path, PAGE_SIZE)?;
+    let disk = DiskManager::open(path, PAGE_SIZE)?;
     let mut page = Page::new(page_id);
     match disk.read_page(page_id, &mut page) {
         Err(StorageError::ChecksumMismatch { page_id: reported, .. }) => {
@@ -227,7 +227,7 @@ fn flipped_byte_inside_the_checksum_field_is_detected() -> Result<(), Box<dyn Er
     let path = dir.path().join("test.db");
 
     let page_id = {
-        let mut disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
+        let disk = DiskManager::open(path.clone(), PAGE_SIZE)?;
         let page_id = disk.allocate_page()?;
         let mut page = Page::new(page_id);
         page.data_mut()[20..25].copy_from_slice(b"hello");
@@ -238,7 +238,7 @@ fn flipped_byte_inside_the_checksum_field_is_detected() -> Result<(), Box<dyn Er
 
     flip_byte_at(&path, page_id, 1)?;
 
-    let mut disk = DiskManager::open(path, PAGE_SIZE)?;
+    let disk = DiskManager::open(path, PAGE_SIZE)?;
     let mut page = Page::new(page_id);
     match disk.read_page(page_id, &mut page) {
         Err(StorageError::ChecksumMismatch { page_id: reported, .. }) => {

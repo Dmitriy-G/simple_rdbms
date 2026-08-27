@@ -12,8 +12,13 @@ workload without actually killing a process.
 
 ## Key Components
 
-- `BlockDevice` - the trait. `DiskManager` and `LogManager` are written
-  entirely in terms of it, never `std::fs::File` directly.
+- `BlockDevice: Send + Sync` - the trait. `DiskManager` and `LogManager`
+  are written entirely in terms of it, never `std::fs::File` directly.
+  Every method takes `&self` (M10.1, `docs/ROADMAP.md`): positioned I/O
+  (`read_at`/`write_at`, below) addresses a byte range explicitly rather
+  than through a shared cursor, so it needs only `&File`, and the `Send +
+  Sync` supertrait bound is what lets `DiskManager`/`LogManager` hold a
+  `Box<dyn BlockDevice>` and still be `Send + Sync` themselves.
   `read_at(offset, buf)` reads `buf.len()` bytes starting at `offset`,
   failing if fewer are available. `write_at(offset, buf)` writes `buf`
   starting at `offset`. `set_len(len)` truncates or extends the device to
@@ -21,8 +26,23 @@ workload without actually killing a process.
   durable storage. `size()` returns the device's current length in bytes
   (named `size` rather than `len` since a device isn't a collection - no
   `is_empty` makes sense alongside it).
+- `file_read_at`/`file_write_at` - private, platform-specific free
+  functions `FileDevice` delegates to. On Unix, `std::os::unix::fs::FileExt`
+  already provides `read_exact_at`/`write_all_at`, which loop internally
+  to guarantee the whole buffer transfers - used directly. Windows has no
+  such guarantee from `std::os::windows::fs::FileExt::seek_read`/`seek_write`
+  (either can transfer fewer bytes than asked, the same way a raw
+  `read`/`write` syscall can), so the Windows versions loop themselves,
+  advancing the buffer and offset after each partial transfer and
+  retrying on `Interrupted`. Two implementations behind `#[cfg(unix)]`/
+  `#[cfg(windows)]` rather than one portable one because this crate is
+  developed on Windows but CI (`.github/workflows/ci.yml`) runs on
+  `ubuntu-latest` - both must compile and both must actually work, not
+  just the one the test suite happens to run under.
 - `FileDevice` - the real `BlockDevice`: an ordinary OS file.
-  `FileDevice::new(file)` wraps an already-open file.
+  `FileDevice::new(file)` wraps an already-open file. `set_len`/`sync_all`/
+  `size` delegate straight to `std::fs::File`'s own methods, which are
+  already `&self` (positioned I/O needs no exclusivity there either).
 - `DurabilityModel` - how `FaultyDevice` treats a completed
   `write_at`/`set_len` call: does it land on the wrapped device
   immediately, or does it only become durable once a later `sync_all`
@@ -61,11 +81,16 @@ workload without actually killing a process.
   passes `fail_at`, simulating a crash mid-workload. Reads never fail.
   Whether a write that completed *before* the fault fired actually
   survives the "crash" depends on `model`. The counter is an
-  `Rc<Cell<u64>>` so that two `FaultyDevice`s - one wrapping the database
-  file, one wrapping the WAL - can share a single counter, making "fail at
+  `Arc<AtomicU64>` (an `Rc<Cell<u64>>` before M10.1 - `docs/ROADMAP.md` -
+  changed since `BlockDevice: Send + Sync` now, and `Rc`/`Cell` are
+  neither) so that two `FaultyDevice`s - one wrapping the database file,
+  one wrapping the WAL - can share a single counter, making "fail at
   write N" count across the whole system rather than per file, which is
-  what actually happens when a process dies. `FaultyDevice::new(inner,
-  counter, fail_at)` wraps `inner` under `DurabilityModel::write_is_durable`.
+  what actually happens when a process dies; `pending` (below) is a
+  `Mutex<Vec<PendingOp>>` for the same M10.1 reason, even though nothing
+  in this crate actually fetches a `FaultyDevice` from more than one
+  thread at once today. `FaultyDevice::new(inner, counter, fail_at)`
+  wraps `inner` under `DurabilityModel::write_is_durable`.
   `FaultyDevice::with_model(inner, counter, fail_at, model)` wraps under an
   explicit model; when `model.tear_on_fault` is set, the landed sectors
   are a seeded-random subset derived from `fail_at`, so a sweep failure at
@@ -80,18 +105,19 @@ workload without actually killing a process.
   mid-write can land any subset of them rather than a clean prefix.
 - `PendingOp` - private. A `write_at`/`set_len` call not yet covered by a
   `sync_all`, under a model with `durable_only_on_sync` set. `Write {
-  offset, bytes }` or `SetLen(u64)`.
+  offset, bytes }` or `SetLen(u64)`, held in the `Mutex<Vec<PendingOp>>`
+  described above.
 - `FaultyDevice::tick(&self) -> io::Result<()>` - private. Ticks the
-  shared write counter, returning an injected error once it has exceeded
-  `fail_at`.
-- `FaultyDevice::materialized(&mut self) -> io::Result<Vec<u8>>` - private.
+  shared write counter (`AtomicU64::fetch_add`), returning an injected
+  error once it has exceeded `fail_at`.
+- `FaultyDevice::materialized(&self) -> io::Result<Vec<u8>>` - private.
   The device's contents as a live process would currently see them:
   whatever's really durable on `inner`, with every still-pending
   write/length-change replayed on top, in order. Only ever called with a
   non-empty `pending` (which requires `model.durable_only_on_sync`) -
   `read_at`/`size` skip straight to `inner` otherwise, since there is
   nothing to overlay.
-- `FaultyDevice::tear(&mut self, offset, buf)` - private. Lands the
+- `FaultyDevice::tear(&self, offset, buf)` - private. Lands the
   sectors of `buf` that a torn version of this call would actually reach
   the inner device, writing each landed sector directly - never through
   `pending` regardless of `model.durable_only_on_sync`, since a sector a
@@ -125,12 +151,12 @@ workload without actually killing a process.
 ## Usage Example
 
 ```rust
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use storage::block_device::{DurabilityModel, FaultyDevice, FileDevice};
 
-let counter = Rc::new(Cell::new(0));
+let counter = Arc::new(AtomicU64::new(0));
 let db_device = FaultyDevice::with_model(
     Box::new(FileDevice::new(db_file)),
     counter.clone(),
