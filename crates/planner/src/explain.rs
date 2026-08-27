@@ -178,6 +178,15 @@ fn is_successor(start: &[u8], end: &[u8]) -> bool {
     end.len() == start.len() + 1 && end[..start.len()] == *start && end[start.len()] == 0x00
 }
 
+fn decode_bound(bytes: &[u8], data_type: DataType) -> Option<(Value, bool)> {
+    let (value, consumed) = decode_memcomparable(bytes, data_type).ok()?;
+    match bytes.len() - consumed {
+        0 => Some((value, false)),
+        1 if bytes[consumed] == 0x00 => Some((value, true)),
+        _ => None,
+    }
+}
+
 pub(crate) fn render_index_cond(
     index_id: IndexId,
     table_id: TableId,
@@ -211,12 +220,14 @@ fn render_index_cond_inner(
         _ => {
             let mut parts = Vec::new();
             if let Some(s) = start {
-                let (value, _) = decode_memcomparable(s, data_type).ok()?;
-                parts.push(format!("{column_name} >= {}", render_value(&value)));
+                let (value, has_sentinel) = decode_bound(s, data_type)?;
+                let op = if has_sentinel { ">" } else { ">=" };
+                parts.push(format!("{column_name} {op} {}", render_value(&value)));
             }
             if let Some(e) = end {
-                let (value, _) = decode_memcomparable(e, data_type).ok()?;
-                parts.push(format!("{column_name} < {}", render_value(&value)));
+                let (value, has_sentinel) = decode_bound(e, data_type)?;
+                let op = if has_sentinel { "<=" } else { "<" };
+                parts.push(format!("{column_name} {op} {}", render_value(&value)));
             }
             Some(parts.join(" AND "))
         }

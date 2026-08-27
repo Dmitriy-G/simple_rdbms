@@ -125,6 +125,114 @@ fn explain_verbose_includes_both_plans_plain_explain_only_the_physical_one() {
     assert!(verbose.contains("Physical plan:"), "expected a physical plan header:\n{verbose}");
 }
 
+fn index_cond_text(db: &mut Database, query: &str) -> String {
+    let result = db.execute(query).unwrap_or_else(|err| panic!("explain `{query}` failed: {err}"));
+    let lines = plan_lines(result);
+    let plan = lines.join("\n");
+    lines
+        .iter()
+        .find(|line| line.contains("Index Cond:"))
+        .unwrap_or_else(|| panic!("expected an Index Cond line, got:\n{plan}"))
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn index_cond_renders_the_operator_actually_in_force() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+    db.execute("CREATE TABLE users (id INTEGER, age INTEGER)").expect("create table");
+    db.execute("CREATE INDEX users_age_idx ON users (age)").expect("create index");
+
+    assert_eq!(
+        index_cond_text(&mut db, "EXPLAIN SELECT * FROM users WHERE age = 21"),
+        "Index Cond: age = 21"
+    );
+    assert_eq!(
+        index_cond_text(&mut db, "EXPLAIN SELECT * FROM users WHERE age < 65"),
+        "Index Cond: age < 65"
+    );
+    assert_eq!(
+        index_cond_text(&mut db, "EXPLAIN SELECT * FROM users WHERE age <= 65"),
+        "Index Cond: age <= 65"
+    );
+    assert_eq!(
+        index_cond_text(&mut db, "EXPLAIN SELECT * FROM users WHERE age > 21"),
+        "Index Cond: age > 21"
+    );
+    assert_eq!(
+        index_cond_text(&mut db, "EXPLAIN SELECT * FROM users WHERE age >= 21"),
+        "Index Cond: age >= 21"
+    );
+    assert_eq!(
+        index_cond_text(&mut db, "EXPLAIN SELECT * FROM users WHERE age >= 21 AND age < 65"),
+        "Index Cond: age >= 21 AND age < 65"
+    );
+}
+
+fn parse_index_cond_bound(part: &str) -> (&'static str, i32) {
+    for op in [">=", "<=", "<>", "=", "<", ">"] {
+        if let Some((_, rest)) = part.split_once(op) {
+            let value: i32 = rest.trim().parse().unwrap_or_else(|_| {
+                panic!("expected an integer literal in Index Cond, got: {rest}")
+            });
+            return (op, value);
+        }
+    }
+    panic!("no recognized operator in Index Cond part: {part}");
+}
+
+fn matches_bound(age: i32, op: &str, value: i32) -> bool {
+    match op {
+        "=" => age == value,
+        "<" => age < value,
+        "<=" => age <= value,
+        ">" => age > value,
+        ">=" => age >= value,
+        other => panic!("unexpected operator {other}"),
+    }
+}
+
+#[test]
+fn index_cond_boundary_matches_the_rows_the_query_actually_returns() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+    db.execute("CREATE TABLE users (id INTEGER, age INTEGER)").expect("create table");
+    db.execute("CREATE INDEX users_age_idx ON users (age)").expect("create index");
+
+    let ages: Vec<i32> = (18..=70).collect();
+    for (id, age) in ages.iter().enumerate() {
+        db.execute(&format!("INSERT INTO users VALUES ({id}, {age})")).expect("insert");
+    }
+
+    let queries = [
+        "SELECT * FROM users WHERE age = 21",
+        "SELECT * FROM users WHERE age < 65",
+        "SELECT * FROM users WHERE age <= 65",
+        "SELECT * FROM users WHERE age > 21",
+        "SELECT * FROM users WHERE age >= 21",
+        "SELECT * FROM users WHERE age >= 21 AND age < 65",
+    ];
+
+    for query in queries {
+        let explain_query = format!("EXPLAIN {query}");
+        let index_cond = index_cond_text(&mut db, &explain_query);
+        let claimed = index_cond.trim_start_matches("Index Cond: ");
+
+        let bounds: Vec<(&str, i32)> = claimed.split(" AND ").map(parse_index_cond_bound).collect();
+        let expected_count = ages
+            .iter()
+            .filter(|age| bounds.iter().all(|(op, value)| matches_bound(**age, op, *value)))
+            .count();
+
+        let actual_count = rows_of(db.execute(query).expect("select")).len();
+        assert_eq!(
+            actual_count, expected_count,
+            "for `{query}`, Index Cond `{index_cond}` implies {expected_count} rows but got {actual_count}"
+        );
+    }
+}
+
 #[test]
 fn compound_predicate_shows_index_cond_and_residual_filter() {
     let dir = tempfile::tempdir().expect("create temp dir");

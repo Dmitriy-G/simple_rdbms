@@ -81,16 +81,27 @@ memcomparable bounds back into a readable condition.
   signature, checked byte-for-byte so `render_index_cond` can recognize
   the bound pair `IndexScanRule` produces for `col = value` and collapse
   it back to `=` instead of printing it as a two-sided range.
+- `decode_bound(bytes, data_type) -> Option<(Value, bool)>` - private.
+  Decodes one bound with `types::decode_memcomparable` and reports
+  whether it carries `optimizer::successor`'s trailing `0x00` sentinel,
+  which is exactly when `consumed < bytes.len()`. Asserts rather than
+  assumes: the only tolerated leftover is a single `0x00` byte
+  immediately after the decoded value, so a future encoding change that
+  leaves unexpected trailing bytes falls out to `None` (and from there
+  to `<undecodable>`) instead of being silently accepted.
 - `render_index_cond(index_id, table_id, start, end, catalog) -> String` -
   renders an `IndexScan`'s `Index Cond:` child line: `(no bounds)` if
   both bounds are `None`, `col = value` if `end` is `start`'s successor,
-  otherwise `col >= value` and/or `col < value` for whichever bounds are
-  present, joined with `AND`. Decodes each bound with
-  `types::decode_memcomparable` against the indexed column's `DataType`
-  looked up through `catalog`; any failure along the way (unknown index,
-  unknown column, a decode error) falls back to the literal string
-  `<undecodable>` rather than propagating an error - a broken `EXPLAIN`
-  line must never fail the statement that asked for it.
+  otherwise the boundary each side's bound actually represents - `start`
+  is `col > value` when it carries the sentinel and `col >= value` when
+  it doesn't, `end` is `col <= value` when it carries the sentinel and
+  `col < value` when it doesn't (`decode_bound`) - joined with `AND` when
+  both are present. Decodes each bound against the indexed column's
+  `DataType` looked up through `catalog`; any failure along the way
+  (unknown index, unknown column, a decode error, an unrecognized
+  trailing byte) falls back to the literal string `<undecodable>` rather
+  than propagating an error - a broken `EXPLAIN` line must never fail the
+  statement that asked for it.
 - `render_index_cond_inner(index_id, table_id, start, end, catalog) -> Option<String>` -
   private. `render_index_cond`'s actual logic, written against `Option`'s
   `?` so every failure path falls out to `None` in one place, which the
