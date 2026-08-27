@@ -28,6 +28,22 @@ made when lowering to a `PhysicalPlan`.
   handles `BoundStatement::CreateIndex` directly against the catalog and
   never actually constructs this variant (see `optimizer.MD`).
 
+- `output_columns(plan, catalog) -> explain::ColumnList` - private. The
+  output schema `explain::render`'s `Filter`/`Projection`/`Join` arms
+  resolve column names against: a scan's full table schema, a
+  `Projection`'s per-expression names (`explain::projected_column`), a
+  `Join`'s two input schemas concatenated, and no columns at all for
+  `Insert`/`CreateTable`/`CreateIndex`, which produce no output rows.
+- `render(plan, catalog, verbose, depth, out)` - private. `explain_logical`'s
+  actual work: an exhaustive match with no wildcard arm over every
+  `LogicalPlan` variant, appending one indented line (two spaces per
+  `depth`) per node, plus an `Index Scan`'s `Index Cond:` child line and,
+  under `verbose`, one further continuation line
+  (`explain.MD`'s `push_verbose_line`). Living beside the enum it matches
+  means adding a variant here is a compile error until this match grows
+  an arm for it, rather than a silently-stale `EXPLAIN` line discovered
+  later.
+
 ## Usage Example
 
 ```rust

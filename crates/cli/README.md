@@ -39,12 +39,15 @@ crate has no library target for an integration test to link against.
 
 ## Features
 
-`CREATE TABLE`, `INSERT`, `SELECT`, and `BEGIN`/`COMMIT`/`ROLLBACK` all
-work through the REPL today, exactly as far as `engine` supports them (see
-`engine`'s README for what's not yet implemented below it). The REPL
-itself has no additional gaps beyond that: statement buffering, `NULL`
-rendering, aligned table output, and the three meta commands all work as
-described above.
+`CREATE TABLE`, `INSERT`, `SELECT`, `BEGIN`/`COMMIT`/`ROLLBACK`, and
+`EXPLAIN [VERBOSE]` all work through the REPL today, exactly as far as
+`engine` supports them (see `engine`'s README for what's not yet
+implemented below it). `EXPLAIN`'s result is a single-column `QUERY PLAN`
+result set - no special-casing needed in `format_table`, which already
+handles a one-column table like any other. The REPL itself has no
+additional gaps beyond that: statement buffering, `NULL` rendering,
+aligned table output, and the three meta commands all work as described
+above.
 
 ## Dependencies
 

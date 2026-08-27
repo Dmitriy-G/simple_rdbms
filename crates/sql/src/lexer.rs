@@ -130,6 +130,7 @@ impl<'a> Lexer<'a> {
             "TRANSACTION" => TokenKind::Transaction,
             "COMMIT" => TokenKind::Commit,
             "ROLLBACK" => TokenKind::Rollback,
+            "EXPLAIN" => TokenKind::Explain,
             _ => TokenKind::Identifier(text.to_string()),
         }
     }

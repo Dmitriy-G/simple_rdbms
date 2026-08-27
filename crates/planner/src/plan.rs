@@ -25,6 +25,10 @@ pub fn plan(statement: BoundStatement) -> Result<LogicalPlan, PlannerError> {
             table_id: create.table_id,
             column_index: create.column_index,
         },
+        BoundStatement::Explain { .. } => unreachable!(
+            "Database::execute unwraps BoundStatement::Explain and plans its inner statement \
+             directly, never handing the Explain wrapper itself to plan()"
+        ),
     };
     Ok(plan)
 }

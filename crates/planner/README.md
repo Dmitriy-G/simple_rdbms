@@ -42,6 +42,9 @@ to_physical -> PhysicalPlan` for a `SELECT`; `INSERT`/`CREATE TABLE`/
   [physical_plan.MD](src/physical_plan.MD).
 - `plan` - lowers a `BoundStatement` into a `LogicalPlan`. See
   [plan.MD](src/plan.MD).
+- `explain` - `explain_logical`, `explain_physical`: render either plan
+  tree as `EXPLAIN`'s human-readable output against a `Catalog`. See
+  [explain.MD](src/explain.MD).
 
 `BinaryOperator`/`UnaryOperator` are also part of this crate's public API,
 re-exported from `sql` rather than duplicated, so a downstream crate that
@@ -70,6 +73,12 @@ correct by construction. Choosing *among* several viable access paths by
 estimated cost, and dropping a filter an equality index scan alone could
 already satisfy, are both left to roadmap milestone M11 — see
 `docs/ROADMAP.md`.
+
+`EXPLAIN [VERBOSE] <statement>` binds and lowers its target exactly as if
+run directly, then hands the resulting `LogicalPlan`/`PhysicalPlan` to
+`explain_logical`/`explain_physical` instead of to the executor —
+`engine::Database::execute` never begins a transaction or touches the
+buffer pool beyond the already-resident `Catalog` to answer one.
 
 ## Dependencies
 

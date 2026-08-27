@@ -16,7 +16,10 @@ Lowers a bound statement into a `LogicalPlan`.
   identically-shaped `LogicalPlan` variant, present only so this match
   stays exhaustive - neither is ever fed through `Optimizer`/`to_physical`;
   `engine::Database::execute_bound` handles both directly against the
-  catalog (see `logical_plan.MD`).
+  catalog (see `logical_plan.MD`). `BoundStatement::Explain` hits this
+  match's one `unreachable!` arm - `engine::Database`'s `EXPLAIN` handling
+  unwraps the `Explain` wrapper and calls `plan` on its `inner` statement
+  directly, so `plan` itself is never handed the wrapper.
 
 ## Usage Example
 

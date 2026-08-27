@@ -18,36 +18,7 @@ impl Parser {
     }
 
     pub fn parse(&mut self) -> Result<Statement, SqlError> {
-        let statement = match &self.current().kind {
-            TokenKind::Select => Statement::Select(self.parse_select()?),
-            TokenKind::Insert => Statement::Insert(self.parse_insert()?),
-            TokenKind::Create => match self.peek_kind(1) {
-                TokenKind::Index => Statement::CreateIndex(self.parse_create_index()?),
-                _ => Statement::CreateTable(self.parse_create_table()?),
-            },
-            TokenKind::Begin => {
-                self.advance();
-                Statement::Begin
-            }
-            TokenKind::Start => {
-                self.advance();
-                self.expect_kind(TokenKind::Transaction, "TRANSACTION")?;
-                Statement::Begin
-            }
-            TokenKind::Commit => {
-                self.advance();
-                Statement::Commit
-            }
-            TokenKind::Rollback => {
-                self.advance();
-                Statement::Rollback
-            }
-            _ => {
-                return Err(
-                    self.unexpected("SELECT, INSERT, CREATE, BEGIN, START, COMMIT, or ROLLBACK")
-                );
-            }
-        };
+        let statement = self.parse_statement()?;
 
         if matches!(self.current().kind, TokenKind::Semicolon) {
             self.advance();
@@ -55,6 +26,61 @@ impl Parser {
         match self.current().kind {
             TokenKind::Eof => Ok(statement),
             _ => Err(self.unexpected("end of statement")),
+        }
+    }
+
+    fn parse_statement(&mut self) -> Result<Statement, SqlError> {
+        match &self.current().kind {
+            TokenKind::Select => Ok(Statement::Select(self.parse_select()?)),
+            TokenKind::Insert => Ok(Statement::Insert(self.parse_insert()?)),
+            TokenKind::Create => match self.peek_kind(1) {
+                TokenKind::Index => Ok(Statement::CreateIndex(self.parse_create_index()?)),
+                _ => Ok(Statement::CreateTable(self.parse_create_table()?)),
+            },
+            TokenKind::Begin => {
+                self.advance();
+                Ok(Statement::Begin)
+            }
+            TokenKind::Start => {
+                self.advance();
+                self.expect_kind(TokenKind::Transaction, "TRANSACTION")?;
+                Ok(Statement::Begin)
+            }
+            TokenKind::Commit => {
+                self.advance();
+                Ok(Statement::Commit)
+            }
+            TokenKind::Rollback => {
+                self.advance();
+                Ok(Statement::Rollback)
+            }
+            TokenKind::Explain => self.parse_explain(),
+            _ => Err(self
+                .unexpected("SELECT, INSERT, CREATE, BEGIN, START, COMMIT, ROLLBACK, or EXPLAIN")),
+        }
+    }
+
+    fn parse_explain(&mut self) -> Result<Statement, SqlError> {
+        let explain_offset = self.current().offset;
+        self.expect_kind(TokenKind::Explain, "EXPLAIN")?;
+        let verbose = self.consume_verbose_keyword();
+        let inner = self.parse_statement()?;
+        match &inner {
+            Statement::Begin | Statement::Commit | Statement::Rollback => {
+                Err(SqlError::ExplainOfTransactionControl { offset: explain_offset })
+            }
+            Statement::Explain { .. } => Err(SqlError::NestedExplain { offset: explain_offset }),
+            _ => Ok(Statement::Explain { verbose, inner: Box::new(inner) }),
+        }
+    }
+
+    fn consume_verbose_keyword(&mut self) -> bool {
+        match &self.current().kind {
+            TokenKind::Identifier(name) if name.eq_ignore_ascii_case("VERBOSE") => {
+                self.advance();
+                true
+            }
+            _ => false,
         }
     }
 

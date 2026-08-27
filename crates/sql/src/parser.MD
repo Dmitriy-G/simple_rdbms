@@ -12,15 +12,40 @@ cursor rather than by recursing over the input text.
 - `Parser::new(tokens) -> Self` - creates a parser over a complete token
   stream (as produced by `Lexer::tokenize`).
 - `Parser::parse(&mut self) -> Result<Statement, SqlError>` - parses
-  exactly one statement, terminated by `;` or end of input; dispatches on
-  the leading keyword to `parse_select`, `parse_insert`,
-  `parse_create_table`/`parse_create_index`, or one of the
+  exactly one statement via `parse_statement`, terminated by `;` or end of
+  input.
+- `Parser::parse_statement(&mut self) -> Result<Statement, SqlError>` -
+  private. Dispatches on the leading keyword to `parse_select`,
+  `parse_insert`, `parse_create_table`/`parse_create_index`, one of the
   transaction-control keywords (`BEGIN`, `START TRANSACTION`, `COMMIT`,
-  `ROLLBACK`). `CREATE` alone doesn't say which: `parse` peeks one token
-  ahead (`peek_kind(1)`) to see `TABLE` or `INDEX` before committing to
-  either sub-parser, since both `parse_create_table` and
-  `parse_create_index` re-consume the `CREATE` token themselves rather
-  than being handed a stream with it already stripped.
+  `ROLLBACK`), or `parse_explain`. `CREATE` alone doesn't say which:
+  dispatch peeks one token ahead (`peek_kind(1)`) to see `TABLE` or
+  `INDEX` before committing to either sub-parser, since both
+  `parse_create_table` and `parse_create_index` re-consume the `CREATE`
+  token themselves rather than being handed a stream with it already
+  stripped. Also the recursive base case `parse_explain` calls to parse
+  its inner statement, so an `EXPLAIN`'s target goes through the exact
+  same dispatch as a top-level statement.
+- `Parser::parse_explain(&mut self) -> Result<Statement, SqlError>` -
+  private. Consumes `EXPLAIN`, then `consume_verbose_keyword` for an
+  optional `VERBOSE`, then recurses into `parse_statement` for the target.
+  Rejects the result with `SqlError::ExplainOfTransactionControl` if the
+  target parsed as `Begin`/`Commit`/`Rollback` (they have no plan to
+  explain) or `SqlError::NestedExplain` if it parsed as another `Explain`
+  (caught this way rather than by pre-checking the leading token, since
+  the recursive `parse_statement` call is what actually produces the
+  nested `Statement::Explain` to reject) - both checks run after the
+  recursive parse succeeds, so the error always points at the *outer*
+  `EXPLAIN`'s offset, not the inner one.
+- `Parser::consume_verbose_keyword(&mut self) -> bool` - private. The only
+  place `VERBOSE` is recognized at all: if the current token is an
+  `Identifier` spelled `VERBOSE` (case-insensitively), consumes it and
+  returns `true`; otherwise leaves the cursor untouched and returns
+  `false`. Called only from `parse_explain`, immediately after `EXPLAIN` -
+  `VERBOSE` has no `TokenKind` of its own (`token.MD`), so this is the
+  only grammar position where the word carries special meaning; anywhere
+  else, including `SELECT verbose FROM t`, it lexes and parses as a plain
+  column reference.
 - `Parser::parse_select(&mut self) -> Result<SelectStatement, SqlError>` -
   private. Parses a `SELECT` statement.
 - `Parser::parse_select_list(&mut self) -> Result<Vec<SelectItem>, SqlError>` -

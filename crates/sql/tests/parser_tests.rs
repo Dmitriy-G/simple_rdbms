@@ -378,6 +378,83 @@ fn unexpected_char_reports_offset() {
 }
 
 #[test]
+fn parses_explain_select() {
+    let stmt = parse("EXPLAIN SELECT * FROM t");
+    assert_eq!(
+        stmt,
+        Statement::Explain {
+            verbose: false,
+            inner: Box::new(Statement::Select(SelectStatement {
+                items: vec![SelectItem::Wildcard],
+                from: "t".to_string(),
+                where_clause: None,
+            })),
+        }
+    );
+}
+
+#[test]
+fn parses_explain_verbose() {
+    let stmt = parse("EXPLAIN VERBOSE SELECT * FROM t");
+    let Statement::Explain { verbose, inner } = stmt else { panic!("expected an EXPLAIN") };
+    assert!(verbose);
+    assert!(matches!(*inner, Statement::Select(_)));
+}
+
+#[test]
+fn explain_verbose_is_case_insensitive() {
+    let stmt = parse("explain verbose select * from t");
+    let Statement::Explain { verbose, .. } = stmt else { panic!("expected an EXPLAIN") };
+    assert!(verbose);
+}
+
+#[test]
+fn explain_of_insert_and_create_statements_parses() {
+    assert!(matches!(
+        parse("EXPLAIN INSERT INTO t VALUES (1)"),
+        Statement::Explain { verbose: false, inner } if matches!(*inner, Statement::Insert(_))
+    ));
+    assert!(matches!(
+        parse("EXPLAIN CREATE TABLE t (a INTEGER)"),
+        Statement::Explain { verbose: false, inner } if matches!(*inner, Statement::CreateTable(_))
+    ));
+    assert!(matches!(
+        parse("EXPLAIN CREATE INDEX idx ON t (a)"),
+        Statement::Explain { verbose: false, inner } if matches!(*inner, Statement::CreateIndex(_))
+    ));
+}
+
+#[test]
+fn select_verbose_still_parses_verbose_as_a_column_reference() {
+    let stmt = parse("SELECT verbose FROM t");
+    assert_eq!(
+        stmt,
+        Statement::Select(SelectStatement {
+            items: vec![SelectItem::Expr(Expr::Column("verbose".to_string()))],
+            from: "t".to_string(),
+            where_clause: None,
+        })
+    );
+}
+
+#[test]
+fn explain_of_begin_commit_rollback_is_a_parse_error() {
+    for target in ["BEGIN", "COMMIT", "ROLLBACK"] {
+        let err = parse_err(&format!("EXPLAIN {target}"));
+        assert!(
+            matches!(err, SqlError::ExplainOfTransactionControl { .. }),
+            "expected ExplainOfTransactionControl for EXPLAIN {target}, got {err:?}"
+        );
+    }
+}
+
+#[test]
+fn nested_explain_is_a_parse_error() {
+    let err = parse_err("EXPLAIN EXPLAIN SELECT * FROM t");
+    assert!(matches!(err, SqlError::NestedExplain { .. }), "got {err:?}");
+}
+
+#[test]
 fn render_points_a_caret_at_the_offending_token() {
     let source = "SELECT * FROM t WHERE a = @";
     let err = parse_err(source);

@@ -21,7 +21,12 @@ Errors raised while lexing or parsing SQL text.
   (an integer literal too large for `i64`, or a float literal outside
   `f64`'s range), rather than being silently replaced with a sentinel
   value; `text` is the exact source text the user typed and `offset` is
-  where the literal starts.
+  where the literal starts. `ExplainOfTransactionControl { offset }` is
+  raised when `EXPLAIN`'s target parses as `BEGIN`, `COMMIT`, or
+  `ROLLBACK` - none of them go through `planner::plan`, so there is no
+  plan to show. `NestedExplain { offset }` is raised when `EXPLAIN`'s
+  target is itself an `EXPLAIN`; both point at the offset of the outer
+  `EXPLAIN` keyword, not the rejected inner statement.
 - `SqlError::offset(source) -> usize` - the byte offset in `source` this
   error points at. An `UnexpectedEof` has no token of its own to point at,
   so it points one past the end of `source`.

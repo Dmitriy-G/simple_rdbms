@@ -16,6 +16,15 @@ pub enum SqlError {
 
     #[error("invalid numeric literal '{text}' at offset {offset}")]
     InvalidNumericLiteral { text: String, offset: usize },
+
+    #[error(
+        "EXPLAIN cannot be used with BEGIN, COMMIT, or ROLLBACK at offset {offset}: they have \
+         no plan"
+    )]
+    ExplainOfTransactionControl { offset: usize },
+
+    #[error("EXPLAIN cannot be nested at offset {offset}")]
+    NestedExplain { offset: usize },
 }
 
 impl SqlError {
@@ -24,7 +33,9 @@ impl SqlError {
             SqlError::UnexpectedChar { offset, .. }
             | SqlError::UnterminatedString { offset }
             | SqlError::UnexpectedToken { offset, .. }
-            | SqlError::InvalidNumericLiteral { offset, .. } => *offset,
+            | SqlError::InvalidNumericLiteral { offset, .. }
+            | SqlError::ExplainOfTransactionControl { offset }
+            | SqlError::NestedExplain { offset } => *offset,
             SqlError::UnexpectedEof { .. } => source.len(),
         }
     }

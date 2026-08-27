@@ -33,6 +33,16 @@ optimizer's algorithm-selection rules have a type that can only represent
   algorithms for the same logical operator is future work for the
   cost-based optimizer (see `optimizer.MD`).
 
+- `output_columns(plan, catalog) -> explain::ColumnList` - private. The
+  `PhysicalPlan` mirror of `logical_plan::output_columns`, used the same
+  way by `render`'s `Filter`/`Projection`/`NestedLoopJoin` arms.
+- `render(plan, catalog, verbose, depth, out)` - private. `explain_physical`'s
+  actual work: an exhaustive match with no wildcard arm over every
+  `PhysicalPlan` variant, structurally mirroring `logical_plan::render`
+  (`NestedLoopJoin` renders as `Nested Loop`, same as `LogicalPlan::Join`
+  does) - see `logical_plan.MD` and `explain.MD` for why the match lives
+  here rather than in `explain.rs` itself.
+
 ## Usage Example
 
 ```rust

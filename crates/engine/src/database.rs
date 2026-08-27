@@ -3,7 +3,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use catalog::{Catalog, Column, Schema};
 use common::{DbConfig, Error, Result, Severity, TxnId};
 use executor::ExecutorContext;
-use planner::{Binder, BoundStatement, IndexScanRule, Optimizer, PhysicalPlan, to_physical};
+use planner::{
+    Binder, BoundStatement, IndexScanRule, Optimizer, PhysicalPlan, explain_logical,
+    explain_physical, to_physical,
+};
 use sql::{Lexer, Parser, SqlError, Statement};
 use storage::StorageError;
 use storage::btree::BTreeIndex;
@@ -207,6 +210,7 @@ impl Database {
             Statement::Begin => self.handle_begin(),
             Statement::Commit => self.handle_commit(),
             Statement::Rollback => self.handle_rollback(),
+            explain @ Statement::Explain { .. } => self.handle_explain(explain),
             other => self.execute_non_control_statement(other),
         };
         metrics::histogram!("query_duration_seconds", "statement_kind" => kind)
@@ -284,6 +288,32 @@ impl Database {
         Ok(ResultSet::rows_affected(0))
     }
 
+    fn handle_explain(&mut self, statement: Statement) -> Result<ResultSet> {
+        let bound = Binder::new(&self.catalog).bind(statement).map_err(Error::from)?;
+        let BoundStatement::Explain { verbose, inner } = bound else {
+            unreachable!(
+                "handle_explain is only called for Statement::Explain, whose binder output is \
+                 always BoundStatement::Explain"
+            )
+        };
+
+        let logical = planner::plan(*inner)?;
+        let optimized =
+            Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &self.catalog);
+        let physical = to_physical(optimized.clone());
+
+        let mut lines = Vec::new();
+        if verbose {
+            lines.push("Logical plan:".to_string());
+            lines.extend(explain_logical(&optimized, &self.catalog, verbose));
+            lines.push("Physical plan:".to_string());
+        }
+        lines.extend(explain_physical(&physical, &self.catalog, verbose));
+
+        let rows = lines.into_iter().map(|line| Tuple::new(vec![Value::Varchar(line)])).collect();
+        Ok(ResultSet::rows(vec!["QUERY PLAN".to_string()], rows))
+    }
+
     fn reload_catalog(&mut self) -> Result<()> {
         let reload_txn =
             self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
@@ -355,6 +385,11 @@ impl Database {
                 self.populate_index(txn_id, create.table_id, create.column_index, index_id)?;
                 Ok(ResultSet::rows_affected(0))
             }
+            BoundStatement::Explain { .. } => unreachable!(
+                "Statement::Explain is intercepted in execute_impl and handled entirely by \
+                 handle_explain, which unwraps its own BoundStatement::Explain itself rather \
+                 than ever calling execute_bound with one"
+            ),
         }
     }
 
@@ -441,6 +476,7 @@ fn statement_kind(statement: &Statement) -> &'static str {
         Statement::Begin => "BEGIN",
         Statement::Commit => "COMMIT",
         Statement::Rollback => "ROLLBACK",
+        Statement::Explain { .. } => "EXPLAIN",
     }
 }
 

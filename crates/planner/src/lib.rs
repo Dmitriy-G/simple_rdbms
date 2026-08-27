@@ -2,6 +2,7 @@
 
 mod binder;
 mod error;
+pub mod explain;
 mod logical_plan;
 mod optimizer;
 mod physical_plan;
@@ -12,6 +13,7 @@ pub use binder::{
     BoundSelect, BoundStatement,
 };
 pub use error::PlannerError;
+pub use explain::{explain_logical, explain_physical};
 pub use logical_plan::LogicalPlan;
 pub use optimizer::{IndexScanRule, Optimizer, OptimizerRule};
 pub use physical_plan::{PhysicalPlan, to_physical};

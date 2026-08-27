@@ -136,6 +136,9 @@ those lower layers needing to know a connection or a transaction exists.
   Parses the statement, then dispatches: `BEGIN`/`START TRANSACTION`,
   `COMMIT`, and `ROLLBACK` go straight to their `handle_*` method (they
   reference no tables or columns, so binding is meaningless for them);
+  `EXPLAIN` goes to `handle_explain`, which does its own binding rather
+  than going through `execute_non_control_statement` - `EXPLAIN` needs no
+  transaction at all, so it must never reach `txn_for_statement`;
   everything else goes to `execute_non_control_statement`. Times just the
   dispatch call (not parsing) and records it into the
   `query_duration_seconds` histogram labeled `statement_kind` - never by
@@ -158,6 +161,25 @@ those lower layers needing to know a connection or a transaction exists.
   catalog reloaded) yet, matching the Postgres semantics
   `common::Error::TransactionAborted` documents; that happens later, when
   `handle_commit`/`handle_rollback` actually ends it.
+- `Database::handle_explain(&mut self, statement) -> Result<ResultSet>` -
+  private. `EXPLAIN [VERBOSE] <inner>`: binds `statement` (the whole
+  `sql::Statement::Explain`, not just `inner`) against `self.catalog`,
+  unwraps the resulting `planner::BoundStatement::Explain`, then runs
+  `planner::plan` -> `Optimizer::optimize` -> `to_physical` on `inner`
+  exactly like `execute_bound`'s `Select` arm does, but hands the
+  optimized logical plan (only under `VERBOSE`, prefixed with a `"Logical
+  plan:"` header row) and the physical plan (always, prefixed with
+  `"Physical plan:"` when the logical one is also shown) to
+  `planner::explain_logical`/`planner::explain_physical` instead of to
+  `run`. Deliberately does not go through `txn_for_statement`/
+  `execute_non_control_statement` at all: no transaction is begun, no
+  autocommit bookkeeping happens, and an already-open explicit
+  transaction (e.g. `EXPLAIN INSERT ...` mid-`BEGIN`) is left completely
+  untouched, since binding and planning only ever read the already-loaded
+  `self.catalog` in memory - the buffer pool is never touched beyond that.
+  Each returned line becomes one `Value::Varchar` row under a single
+  `QUERY PLAN` column (`ResultSet::rows`), the conventional name a SQL
+  client special-cases.
 - `Database::handle_begin(&mut self) -> Result<ResultSet>` - private.
   `BEGIN`/`START TRANSACTION`: opens an explicit transaction and creates
   its `txn_span` (`txn_id`, `isolation` fields) - a plain `Span`, not
@@ -231,7 +253,9 @@ those lower layers needing to know a connection or a transaction exists.
   resulting rows are wrapped into a `ResultSet`. `CreateIndex` calls
   `catalog.create_index` then `populate_index` - like `CreateTable`, it
   never reaches `planner::plan`/`Optimizer`/`to_physical` at all, since it
-  has no tuple stream to pull and nothing to plan.
+  has no tuple stream to pull and nothing to plan. `Explain` hits this
+  match's one `unreachable!` arm - `handle_explain` unwraps its own
+  `BoundStatement::Explain` and never calls `execute_bound` with one.
 - `Database::populate_index(&self, txn_id, table_id, column_index,
   index_id) -> Result<()>` - private. Scans `table_id`'s heap directly
   (`storage::heap::TableHeap::open`/`iter`, not through a `SeqScanExecutor`
@@ -275,8 +299,8 @@ those lower layers needing to know a connection or a transaction exists.
   connection/transaction/statement hierarchy.
 - `statement_kind(&Statement) -> &'static str` - private free function.
   `"SELECT"`/`"INSERT"`/`"CREATE TABLE"`/`"CREATE INDEX"`/`"BEGIN"`/
-  `"COMMIT"`/`"ROLLBACK"`, used to fill `execute_impl`'s `statement_kind`
-  span field.
+  `"COMMIT"`/`"ROLLBACK"`/`"EXPLAIN"`, used to fill `execute_impl`'s
+  `statement_kind` span field.
 - `syntax_error(err, sql) -> Error` - private free function. Builds
   `common::Error::Syntax { message, offset }` from a `sql::SqlError`:
   `message` is `err.render(sql)` (the error plus the offending line and a

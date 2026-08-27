@@ -10,6 +10,7 @@ pub enum BoundStatement {
     Insert(BoundInsert),
     CreateTable(BoundCreateTable),
     CreateIndex(BoundCreateIndex),
+    Explain { verbose: bool, inner: Box<BoundStatement> },
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +85,10 @@ impl<'a> Binder<'a> {
             }
             sql::Statement::CreateIndex(create) => {
                 Ok(BoundStatement::CreateIndex(self.bind_create_index(create)?))
+            }
+            sql::Statement::Explain { verbose, inner } => {
+                let inner = self.bind(*inner)?;
+                Ok(BoundStatement::Explain { verbose, inner: Box::new(inner) })
             }
             sql::Statement::Begin | sql::Statement::Commit | sql::Statement::Rollback => {
                 unreachable!(

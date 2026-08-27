@@ -75,6 +75,22 @@ parse error (not a panic).
   `BIGINT` and `DOUBLE` columns parses to the expected `DataType`s.
 - `unexpected_char_reports_offset` - an illegal character (`@`) errors
   with `UnexpectedChar` naming the character and its offset.
+- `parses_explain_select` - `EXPLAIN SELECT * FROM t` parses to
+  `Statement::Explain { verbose: false, inner: Box::new(Statement::Select(...)) }`.
+- `parses_explain_verbose`, `explain_verbose_is_case_insensitive` -
+  `EXPLAIN VERBOSE <select>` sets `verbose: true`, in either letter case.
+- `explain_of_insert_and_create_statements_parses` - `EXPLAIN` accepts
+  `INSERT`, `CREATE TABLE`, and `CREATE INDEX` as its target, not only
+  `SELECT`.
+- `select_verbose_still_parses_verbose_as_a_column_reference` - `SELECT
+  verbose FROM t` parses `verbose` as an ordinary `Expr::Column`, proving
+  `VERBOSE` never became a reserved word outside the one grammar position
+  right after `EXPLAIN`.
+- `explain_of_begin_commit_rollback_is_a_parse_error` - `EXPLAIN BEGIN`/
+  `EXPLAIN COMMIT`/`EXPLAIN ROLLBACK` each report
+  `SqlError::ExplainOfTransactionControl` rather than parsing.
+- `nested_explain_is_a_parse_error` - `EXPLAIN EXPLAIN SELECT * FROM t`
+  reports `SqlError::NestedExplain`.
 - `render_points_a_caret_at_the_offending_token` - `SqlError::render`
   produces exactly three lines (message, source line, caret) with the
   caret aligned to the offending byte offset.

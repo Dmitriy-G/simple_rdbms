@@ -11,7 +11,12 @@ becomes "semantically valid against this database's schema".
   the catalog and expressions type-checked, but still shaped like the SQL
   it came from rather than lowered to relational algebra. `Select`,
   `Insert`, `CreateTable`, and `CreateIndex` each wrap the corresponding
-  bound struct.
+  bound struct. `Explain { verbose, inner }` wraps the bound form of
+  whatever statement `EXPLAIN` targets - binding recurses into `inner`
+  normally, so a missing table or column inside an `EXPLAIN`'d query
+  fails exactly the same way it would unexplained; `engine::Database`
+  unwraps this variant itself rather than ever handing it to
+  `planner::plan` (`plan.MD`).
 - `BoundSelect` - a `SELECT` after binding. `table_id` is the resolved
   source table. `projections` are the projected expressions, resolved to
   column ordinals. `column_names` are display names for `projections`, in
@@ -56,7 +61,12 @@ becomes "semantically valid against this database's schema".
   type-checking every expression. Transaction-control statements
   (`Begin`/`Commit`/`Rollback`) reference no tables or columns and are
   intercepted in `Database::execute` before binding, so reaching this
-  method with one is unreachable.
+  method with one is unreachable. `sql::Statement::Explain { verbose,
+  inner }` recurses: calls `bind` on `inner` and wraps the result in
+  `BoundStatement::Explain`, carrying `verbose` through unchanged - the
+  parser already guarantees `inner` is never itself a transaction-control
+  statement or another `Explain` (`sql::parser.MD`'s `parse_explain`), so
+  this recursive call can never hit the unreachable arm above.
 - `Binder::bind_select(&self, select) -> Result<BoundSelect, PlannerError>` -
   private. Resolves the source table, expands `*` or binds each selected
   expression, and type-checks the optional `WHERE` predicate as `Boolean`.

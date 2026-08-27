@@ -9,6 +9,7 @@ pub enum Statement {
     Begin,
     Commit,
     Rollback,
+    Explain { verbose: bool, inner: Box<Statement> },
 }
 
 #[derive(Debug, Clone, PartialEq)]

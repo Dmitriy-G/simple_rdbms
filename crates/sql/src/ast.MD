@@ -13,7 +13,12 @@ consumes.
   `CREATE INDEX` statement. `Begin` is `BEGIN` or `START TRANSACTION`:
   starts an explicit transaction. `Commit` ends the current explicit
   transaction, keeping its writes. `Rollback` ends the current explicit
-  transaction, undoing its writes.
+  transaction, undoing its writes. `Explain { verbose, inner }` is an
+  `EXPLAIN [VERBOSE] <statement>`: `inner` is the statement to explain,
+  restricted by `Parser::parse_explain` to whatever `planner::plan` can
+  handle (`Select`, `Insert`, `CreateTable`, `CreateIndex`) - a
+  transaction-control statement or another `Explain` as the target is a
+  parse error, not something that reaches this variant.
 - `SelectStatement` - a `SELECT` query: `SELECT <items> FROM <table>
   [WHERE <expr>]`. No joins, `GROUP BY`, or `ORDER BY` yet. `items` are the
   projected items, in output order. `from` is the single source table's

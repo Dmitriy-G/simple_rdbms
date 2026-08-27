@@ -21,6 +21,7 @@ pub enum TokenKind {
     Transaction,
     Commit,
     Rollback,
+    Explain,
 
     Identifier(String),
     IntegerLiteral(i64),

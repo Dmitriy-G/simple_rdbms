@@ -97,6 +97,47 @@ Carol's `age` is `NULL` and `age > 20 AND age < 40` evaluates to `NULL`
 (not `false`) for her row, three-valued `OR` still resolves to `true`
 because the other operand is definitely `true`.
 
+## EXPLAIN
+
+`EXPLAIN [VERBOSE] <statement>` shows the access path the optimizer chose
+without running the statement - the same table, first with no index and
+then with one added on the filtered column:
+
+```
+simple_rdbms> CREATE TABLE users (id INTEGER, name TEXT, age INTEGER);
+OK
+simple_rdbms> INSERT INTO users (id, name, age) VALUES (1, 'Alice', 30), (2, 'Bob', 25), (3, 'Carol', 40);
+OK (3 rows)
+simple_rdbms> EXPLAIN SELECT name FROM users WHERE age >= 21;
+QUERY PLAN
+-------------------------
+Projection  cols=[name]
+  Filter  age >= 21
+    Seq Scan  table=users
+simple_rdbms> CREATE INDEX users_age_idx ON users (age);
+OK
+simple_rdbms> EXPLAIN SELECT name FROM users WHERE age >= 21;
+QUERY PLAN
+-----------------------------------------------
+Projection  cols=[name]
+  Filter  age >= 21
+    Index Scan  table=users index=users_age_idx
+      Index Cond: age >= 21
+simple_rdbms> .exit
+```
+
+Before the index exists, the plan is a `Seq Scan` under the `Filter`; once
+`users_age_idx` exists on `age`, the exact same query's plan changes to an
+`Index Scan` with a decoded `Index Cond: age >= 21` - never raw
+memcomparable bytes - and the `Filter` node stays above it re-checking the
+full predicate, which is what makes a compound predicate with only one
+indexable conjunct safe: the index narrows candidates, the `Filter`
+decides membership. `EXPLAIN` never executes its target - no rows are
+read, no transaction is started - so it is safe to run against a live
+table of any size, and `EXPLAIN VERBOSE` additionally prints the
+optimized logical plan (before lowering) ahead of the physical one shown
+above.
+
 ## Running in a container
 
 `crates/server` is a separate, headless binary from `cli` — no REPL, no

@@ -29,7 +29,10 @@ of grammar; a `Parser` is what gives the token stream structure.
 - `Lexer::lex_ident_or_keyword(&mut self) -> TokenKind` - private. Scans
   an identifier, matching it case-insensitively against the keyword set;
   anything that doesn't match a keyword becomes an `Identifier` carrying
-  the original (case-sensitive) spelling.
+  the original (case-sensitive) spelling. `VERBOSE` is deliberately absent
+  from this keyword set - it always lexes as a plain `Identifier` here,
+  and only `Parser::consume_verbose_keyword` (`parser.MD`) gives it
+  special meaning, and only directly after `EXPLAIN`.
 - `Lexer::lex_punct(&mut self, start) -> Result<TokenKind, SqlError>` -
   private. Scans one punctuation or operator token, including the
   two-character lookahead needed for `<=`, `<>`, `>=`, and `!=`.

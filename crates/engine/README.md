@@ -54,6 +54,15 @@ populates the new index from every existing row
 (`Database::populate_index`) before returning, under the same transaction
 as the `CREATE INDEX` statement itself.
 
+`EXPLAIN [VERBOSE] <statement>` runs the same bind -> plan -> optimize ->
+lower prefix as its target statement would, then stops: the resulting
+plan tree(s) are rendered by `planner::explain_logical`/`explain_physical`
+and returned as rows instead of ever reaching `executor_factory`/the
+executor. It never begins a transaction and never touches the buffer pool
+beyond the catalog already resident in memory, so `EXPLAIN INSERT ...`
+inside an open explicit transaction leaves that transaction exactly as it
+was (`Database::handle_explain`, `database.MD`).
+
 ## Key Components
 
 - `database` - `Database`, owns the catalog, buffer pool, and transaction
@@ -75,8 +84,10 @@ depending on `types` directly.
 
 `CREATE TABLE`, `CREATE INDEX`, `INSERT`, `SELECT` (choosing an index scan
 over a sequential scan where `planner::optimizer::IndexScanRule` applies),
-and `BEGIN`/`COMMIT`/`ROLLBACK` all work end to end today, durable across a
-restart and atomic per transaction (`docs/adr/0004-acid-scope.md`). Crash
+`BEGIN`/`COMMIT`/`ROLLBACK`, and `EXPLAIN [VERBOSE]` (of any statement
+`planner::plan` can handle - not a transaction-control statement or
+another `EXPLAIN`) all work end to end today, durable across a restart
+and atomic per transaction (`docs/adr/0004-acid-scope.md`). Crash
 recovery and torn-page repair run on every open and are swept exhaustively
 by `tests/crash_injection.rs` across every fail point and every
 `storage::block_device::DurabilityModel`; `tests/index_equivalence.rs`

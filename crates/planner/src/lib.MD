@@ -25,6 +25,9 @@ operation will be executed (e.g. which join algorithm).
 - `PhysicalPlan`, `to_physical` - a plan tree committed to concrete
   execution algorithms. See `physical_plan.MD`.
 - `plan` - lowers a `BoundStatement` into a `LogicalPlan`. See `plan.MD`.
+- `explain_logical`, `explain_physical` - render a `LogicalPlan`/
+  `PhysicalPlan` as `EXPLAIN`'s human-readable node tree against a
+  `Catalog`. See `explain.MD`.
 - `BinaryOperator`, `UnaryOperator` - re-exported from `sql`, so
   downstream crates that only see `BoundExpr` (whose `BinaryOp`/`UnaryOp`
   variants carry these operator types) can name them without depending on
