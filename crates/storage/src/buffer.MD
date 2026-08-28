@@ -92,6 +92,47 @@ read - `BufferPool` uses it itself for its own read-only header/LSN
 accessors, and `crates/storage/tests/buffer_pool_concurrency.rs` uses it
 to prove concurrent readers actually work.
 
+**The one-write-guard-per-page rule - read this before calling `fetch_page`
+a second time without dropping the first:**
+
+- A thread may hold at most one write guard on a given page at a time.
+  Asking for a second - a second `fetch_page`/`new_page` on the same page
+  before the first guard drops - is a self-deadlock: `frames[idx].page`
+  is a plain `std::sync::RwLock`, which is not reentrant, so the second
+  call blocks forever on a latch this same thread already holds. Debug
+  builds detect this (see `try_install`'s neighbor `write_guard` and its
+  thread-local `HELD_WRITE_GUARD_FRAMES` set below) and panic naming the
+  page instead of letting the thread park.
+- Multiple read guards on one page are always fine, whether they belong
+  to one thread or many - `RwLock::read` is reentrant-safe and shared by
+  design. A read guard also never blocks behind another read guard, only
+  behind a live write guard.
+- `new_page` and `fetch_page` return write guards; reach for
+  `fetch_page_read` whenever a call site only ever reads the page.
+  Prefer the read form where either would do - it is the one that
+  composes: two read guards on the same page from the same thread (or
+  different ones) coexist without incident, where two write guards
+  self-deadlock and a write-then-read on the same page from one thread
+  only works today because it happens to reuse the *same* guard rather
+  than acquiring a second one.
+
+This is a real behavioral change from before per-frame `RwLock`s existed
+(`docs/adr/0008-write-guard-reentrancy.md`): when `PageGuard`
+was purely a pin with no latch behind it, a thread holding two guards to
+the same page was ordinary and several of this crate's own tests relied
+on it. `BufferPool::write_guard` is the only place a write guard is
+minted, so it is the one place this rule can be enforced centrally: under
+`#[cfg(debug_assertions)]`, a thread-local `HashSet<FrameId>`
+(`HELD_WRITE_GUARD_FRAMES`) records every frame this thread currently
+holds a write guard on; `write_guard` panics if the frame is already in
+the set, and `PageWriteGuard::drop` removes it. Compiled out entirely
+under `#[cfg(not(debug_assertions))]` - a release build pays nothing for
+this and, symmetrically, gets no protection from it; the panic exists to
+catch the mistake in development and CI, not to guard production against
+one it should never reach in the first place. `PageReadGuard` needs no
+equivalent set, since read guards never conflict with each other on the
+same thread.
+
 ## Key Components
 
 - `Frame` - private. See the field-by-field breakdown above.
@@ -248,11 +289,23 @@ to prove concurrent readers actually work.
   `read_guard(&self, page_id, frame_id) -> PageReadGuard<'_>` - private.
   Take the frame's `RwLock` write/read latch and wrap it in the
   corresponding guard type. Called only after the frame is already
-  pinned (by `fetch_frame` or `new_page`).
+  pinned (by `fetch_frame` or `new_page`). In debug builds, `write_guard`
+  checks and inserts `frame_id` into `HELD_WRITE_GUARD_FRAMES` (below)
+  *before* taking the actual `RwLock` write latch, panicking instead of
+  blocking if this thread already holds a write guard on this frame -
+  see the one-write-guard-per-page rule above.
+- `HELD_WRITE_GUARD_FRAMES` - `#[cfg(debug_assertions)]`, private,
+  thread-local. The `HashSet<FrameId>` `write_guard`/
+  `PageWriteGuard::drop` insert into and remove from to detect a
+  same-thread double write guard. Absent entirely in release builds.
 - `BufferPool::unpin_frame(&self, frame_id)` - private. Decrements a
   frame's pin count (an `AtomicU32`, so this itself needs no lock); if
-  that was the last pin, acquires `index`'s mutex just long enough to
-  tell the replacer the frame is evictable again. Moves the
+  that was the last pin, acquires `index`'s mutex and re-reads the pin
+  count before telling the replacer the frame is evictable again. The
+  re-read closes a TOCTOU: between the `fetch_sub` observing `0` and this
+  call taking `index`'s mutex, another thread can win `pin_if_cached` on
+  the same page and re-pin the frame, in which case the stale `0` must
+  not be allowed to mark a now-pinned frame evictable. Moves the
   `buffer_pool_pinned_frames` gauge down.
 - `BufferPool::flush_pages(&self, pages) -> Result<(), StorageError>` -
   private. Emits a `trace!` naming the batch size before doing anything,
@@ -339,7 +392,9 @@ to prove concurrent readers actually work.
   page's `page_lsn` with the record's assigned LSN. Marks the frame
   dirty (setting `dirty_since_lsn` only if it was previously clean, so
   the recorded `recLSN` is always the *first* dirtying write, per ARIES).
-- `impl Drop for PageWriteGuard` - releases the write latch, then unpins.
+- `impl Drop for PageWriteGuard` - releases the write latch, then (in
+  debug builds) removes its frame from `HELD_WRITE_GUARD_FRAMES`, then
+  unpins.
 - `read_u32`/`read_u64` - private helpers.
 
 ## Usage Example

@@ -11,9 +11,9 @@ use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
 
 const MARKER_OFFSET: usize = 100;
-const POOL_SIZE: usize = 4;
-const PAGE_COUNT: usize = 20;
 const THREAD_COUNT: usize = 8;
+const POOL_SIZE: usize = THREAD_COUNT + 1;
+const PAGE_COUNT: usize = 20;
 const ITERATIONS_PER_THREAD: usize = 200;
 
 const COUNTER_OFFSET: usize = 200;

@@ -1,4 +1,7 @@
 use std::error::Error;
+use std::sync::{Barrier, mpsc};
+use std::thread;
+use std::time::Duration;
 
 use common::TxnId;
 use storage::StorageError;
@@ -86,36 +89,42 @@ fn fetch_errors_rather_than_panics_when_every_frame_is_pinned() -> Result<(), Bo
 }
 
 #[test]
-fn second_live_guard_keeps_page_pinned_under_eviction_pressure() -> Result<(), Box<dyn Error>> {
+fn second_live_read_guard_keeps_page_pinned_under_eviction_pressure() -> Result<(), Box<dyn Error>>
+{
     let (pool, _dir) = open_pool_lru(2)?;
 
     let (p, mut guard1) = pool.new_page(TxnId(0))?;
     guard1.write(TxnId(0), MARKER_OFFSET, &[42])?;
-    let guard2 = pool.fetch_page(p)?;
-
     drop(guard1);
+
+    let read_guard1 = pool.fetch_page_read(p)?;
+    let read_guard2 = pool.fetch_page_read(p)?;
+
+    drop(read_guard1);
 
     apply_pressure(&pool, 20)?;
 
     assert_eq!(
-        guard2.page().data()[MARKER_OFFSET],
+        read_guard2.page().data()[MARKER_OFFSET],
         42,
-        "page P must not have been evicted while guard2 was still alive"
+        "page P must not have been evicted while read_guard2 was still alive"
     );
-    drop(guard2);
+    drop(read_guard2);
     Ok(())
 }
 
 #[test]
-fn pin_count_reaches_zero_only_after_the_last_guard_drops() -> Result<(), Box<dyn Error>> {
+fn pin_count_reaches_zero_only_after_the_last_read_guard_drops() -> Result<(), Box<dyn Error>> {
     const N: usize = 4;
     let (pool, _dir) = open_pool_lru(2)?;
 
     let (p, mut first) = pool.new_page(TxnId(0))?;
     first.write(TxnId(0), MARKER_OFFSET, &[7])?;
-    let mut guards = vec![first];
-    for _ in 1..N {
-        guards.push(pool.fetch_page(p)?);
+    drop(first);
+
+    let mut guards = Vec::with_capacity(N);
+    for _ in 0..N {
+        guards.push(pool.fetch_page_read(p)?);
     }
     assert_eq!(guards.len(), N);
 
@@ -135,4 +144,49 @@ fn pin_count_reaches_zero_only_after_the_last_guard_drops() -> Result<(), Box<dy
     guards.clear();
     apply_pressure(&pool, 5)?;
     Ok(())
+}
+
+#[test]
+fn write_guard_blocks_until_concurrent_read_guard_drops() -> Result<(), Box<dyn Error>> {
+    let (pool, _dir) = open_pool(4)?;
+    let (p, guard) = pool.new_page(TxnId(0))?;
+    drop(guard);
+
+    let read_guard = pool.fetch_page_read(p)?;
+    let barrier = Barrier::new(2);
+    let (tx, rx) = mpsc::channel();
+
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            barrier.wait();
+            let acquired = pool.fetch_page(p).is_ok();
+            tx.send(acquired).expect("send result");
+        });
+
+        barrier.wait();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(200)),
+            Err(mpsc::RecvTimeoutError::Timeout),
+            "a write guard must not be granted while a read guard is still alive"
+        );
+
+        drop(read_guard);
+
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)),
+            Ok(true),
+            "the write guard must be granted once the read guard drops"
+        );
+    });
+
+    Ok(())
+}
+
+#[test]
+#[cfg(debug_assertions)]
+#[should_panic(expected = "self-deadlock")]
+fn a_second_write_guard_on_the_same_page_from_one_thread_panics() {
+    let (pool, _dir) = open_pool(2).expect("open pool");
+    let (p, _first) = pool.new_page(TxnId(0)).expect("new page");
+    let _second = pool.fetch_page(p);
 }

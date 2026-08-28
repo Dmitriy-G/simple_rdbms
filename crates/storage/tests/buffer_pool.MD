@@ -2,9 +2,28 @@
 
 Buffer pool behavior: eviction under pressure, dirty data surviving a
 flush and refetch, pinning every frame forcing a clean error instead of a
-panic, and the pin-count protocol itself (a page stays resident for as
-long as *any* `PageGuard` on it is alive, and only becomes evictable once
-the last one drops).
+panic, the pin-count protocol itself (a page stays resident for as long
+as *any* `PageGuard` on it is alive, and only becomes evictable once the
+last one drops), and the write-guard rules `buffer.MD`'s latch-ordering
+section documents: at most one write guard per page per thread, any
+number of read guards, and a write guard blocking behind a live read
+guard rather than racing it.
+
+Three of these tests used to take a *second write guard* on an
+already-write-guarded page to prove the pin-count property, back when
+`PageGuard` was purely a pin with no latch attached. Once M10.2 gave each
+frame its own `RwLock` (`buffer.MD`), that pattern became a same-thread
+self-deadlock: `std::sync::RwLock` is not reentrant, so a second
+`fetch_page` on a page this thread already holds a write guard to blocks
+forever on itself, and would have hung `cargo test --workspace` rather
+than failing it. `second_live_read_guard_keeps_page_pinned_under_eviction_pressure`
+and `pin_count_reaches_zero_only_after_the_last_read_guard_drops` were
+rewritten to establish the page's content through one write guard,
+**drop it**, and take every additional live guard as a `fetch_page_read`
+instead - keeping the exact property under test (a live guard keeps its
+page unevictable) while only changing the latch mode, since the pin-count
+mechanics `unpin_frame` implements don't care whether a pin came from a
+read or a write guard.
 
 ## Key Components
 
@@ -32,16 +51,43 @@ the last one drops).
 - `fetch_errors_rather_than_panics_when_every_frame_is_pinned` - with
   every frame in a 2-frame pool pinned, a third `new_page` call must
   return `StorageError::BufferPoolExhausted`, not panic.
-- `second_live_guard_keeps_page_pinned_under_eviction_pressure` - proves
-  `PageGuard` is the sole owner of its own pin, not a shared handle to
-  "the page is pinned or not": releasing one of two live guards on the
-  same page must not release the pin the other still holds, verified by
-  applying heavy eviction pressure and checking the page survives.
-- `pin_count_reaches_zero_only_after_the_last_guard_drops` - takes `N = 4`
-  guards on the same page, drops them one at a time, and after each drop
-  except the last, confirms the page survives a fresh round of eviction
-  pressure; only after the final guard drops does pressure succeed in
-  reclaiming its frame.
+- `second_live_read_guard_keeps_page_pinned_under_eviction_pressure` -
+  proves `PageGuard` is the sole owner of its own pin, not a shared handle
+  to "the page is pinned or not": writes the page's marker through one
+  write guard and drops it, takes two `fetch_page_read` guards on the
+  same page, and confirms releasing one must not release the pin the
+  other still holds, verified by applying heavy eviction pressure and
+  checking the page survives.
+- `pin_count_reaches_zero_only_after_the_last_read_guard_drops` -
+  establishes the page's marker through one write guard, drops it, then
+  takes `N = 4` `fetch_page_read` guards on the same page and drops them
+  one at a time; after each drop except the last, confirms the page
+  survives a fresh round of eviction pressure, and only after the final
+  guard drops does pressure succeed in reclaiming its frame.
+- `write_guard_blocks_until_concurrent_read_guard_drops` - the read-guard
+  rule's other half: while this thread holds a `fetch_page_read` guard on
+  P, a second thread's `fetch_page(P)` must block rather than racing it -
+  proven, not just asserted, by having that thread report through an
+  `mpsc` channel and confirming a `recv_timeout` first *times out* (the
+  write is still blocked) and only then succeeds, immediately after the
+  read guard is dropped. Unlike the self-deadlock this file is otherwise
+  about, this is ordinary, correct blocking between two different
+  threads - the write guard is never granted to the same thread that
+  holds the read guard - so it belongs here as the positive case the
+  single-thread rule doesn't cover: reads never block each other, and a
+  write blocks behind them without erroring or deadlocking. A `Barrier`
+  starts the two sides together so the timeout check can't pass merely
+  because the writer thread hadn't started yet.
+- `a_second_write_guard_on_the_same_page_from_one_thread_panics` -
+  `#[cfg(debug_assertions)]`, `#[should_panic(expected = "self-deadlock")]`:
+  holds a `new_page` write guard and calls `fetch_page` on the same page
+  from the same thread without dropping it first, proving
+  `buffer::BufferPool`'s debug-only reentrancy detector
+  (`buffer.MD`) fires instead of letting the thread park on its own
+  latch forever. Gated on `debug_assertions` because the detector itself
+  is compiled out in release - the test would otherwise fail to panic in
+  a release run, not because the bug reappeared, but because there is
+  nothing left in that build to catch it.
 
 ## Usage Example
 

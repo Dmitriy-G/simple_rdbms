@@ -16,6 +16,12 @@ use crate::wal::{LogManager, LogRecord, LogRecordKind};
 #[cfg(any(test, feature = "test-util"))]
 use std::sync::atomic::AtomicUsize;
 
+#[cfg(debug_assertions)]
+thread_local! {
+    static HELD_WRITE_GUARD_FRAMES: std::cell::RefCell<std::collections::HashSet<FrameId>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
 struct Frame {
     page: RwLock<Page>,
     pin_count: AtomicU32,
@@ -301,6 +307,16 @@ impl BufferPool {
     }
 
     fn write_guard(&self, page_id: PageId, frame_id: FrameId) -> PageWriteGuard<'_> {
+        #[cfg(debug_assertions)]
+        HELD_WRITE_GUARD_FRAMES.with(|held| {
+            if !held.borrow_mut().insert(frame_id) {
+                panic!(
+                    "self-deadlock: this thread already holds a write guard on page {page_id:?} \
+                     (frame {frame_id:?}); a thread may hold at most one write guard per page \
+                     at a time - use fetch_page_read for a second, read-only view"
+                );
+            }
+        });
         let bytes =
             recover_lock(self.frames[frame_id.0 as usize].page.write(), "BufferPool.frame.page");
         PageWriteGuard { page_id, frame_id, bytes: ManuallyDrop::new(bytes), pool: self }
@@ -323,9 +339,10 @@ impl BufferPool {
         let remaining = pin_count.fetch_sub(1, Ordering::AcqRel) - 1;
         metrics::gauge!("buffer_pool_pinned_frames").decrement(1.0);
         if remaining == 0 {
-            recover_lock(self.index.lock(), "BufferPool.index")
-                .replacer
-                .set_evictable(frame_id, true);
+            let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+            if pin_count.load(Ordering::Acquire) == 0 {
+                index.replacer.set_evictable(frame_id, true);
+            }
         }
     }
 
@@ -516,6 +533,10 @@ impl Drop for PageWriteGuard<'_> {
         // SAFETY: same as `PageReadGuard`'s Drop - `bytes` is taken exactly once
         // and dropped before the pin is released.
         unsafe { ManuallyDrop::drop(&mut self.bytes) };
+        #[cfg(debug_assertions)]
+        HELD_WRITE_GUARD_FRAMES.with(|held| {
+            held.borrow_mut().remove(&self.frame_id);
+        });
         self.pool.unpin_frame(self.frame_id);
     }
 }

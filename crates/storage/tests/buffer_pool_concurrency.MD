@@ -16,10 +16,25 @@ eventually sit on top of.
 
 - `MARKER_OFFSET` - `100`, the same arbitrary marker byte offset
   `buffer_pool.MD`'s tests use.
-- `POOL_SIZE` / `PAGE_COUNT` - a 4-frame pool against 20 pages, so every
-  thread's fetches force ongoing eviction and reinstallation of frames
-  throughout the run, not just a one-time warm-up.
 - `THREAD_COUNT` / `ITERATIONS_PER_THREAD` - 8 threads, 200 fetches each.
+- `POOL_SIZE` / `PAGE_COUNT` - `THREAD_COUNT + 1` frames (9) against 20
+  pages: still small enough relative to `PAGE_COUNT` that every thread's
+  fetches force ongoing eviction and reinstallation of frames throughout
+  the run rather than a one-time warm-up, but never smaller than the
+  number of threads. Each thread only ever has one page pinned at a
+  time, so `THREAD_COUNT` is a hard ceiling on how many distinct frames
+  every thread could simultaneously demand at once; sizing the pool
+  below that ceiling doesn't add interesting contention; it just means
+  the pool can be legitimately out of evictable frames at the exact
+  moment every thread's stride (`thread_index * 37 + i`, see below)
+  happens to land on `THREAD_COUNT` distinct, not-yet-resident pages in
+  the same instant - which the stride does at `i = 0` deterministically,
+  not by rare bad luck (`thread_index * 37 % 20` is already 8 distinct
+  values for `thread_index` in `0..8`). A pool this small is a real
+  capacity shortfall for that access pattern, not a `BufferPool` bug -
+  `StorageError::BufferPoolExhausted` is the documented, correct response
+  to more concurrent distinct-page demand than frames exist - so the fix
+  belongs in this test's sizing, not in `try_install`/`acquire_free_frame`.
 - `eight_threads_fetching_reading_and_releasing_never_see_torn_or_wrong_page_contents` -
   writes a distinct one-byte marker into each of `PAGE_COUNT` pages and
   flushes, then spawns `THREAD_COUNT` threads that each loop
