@@ -100,6 +100,15 @@ impl BufferPool {
         recover_lock(self.write_observations.lock(), "BufferPool.write_observations").clone()
     }
 
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn frame_count_for(&self, page_id: PageId) -> usize {
+        recover_lock(self.index.lock(), "BufferPool.index")
+            .frame_page
+            .iter()
+            .filter(|&&resident| resident == Some(page_id))
+            .count()
+    }
+
     pub fn fetch_page(&self, page_id: PageId) -> Result<PageWriteGuard<'_>, StorageError> {
         let frame_id = self.fetch_frame(page_id)?;
         Ok(self.write_guard(page_id, frame_id))
@@ -124,15 +133,19 @@ impl BufferPool {
         let frame_id = self.acquire_free_frame()?;
         let mut page = Page::new(page_id);
         self.disk_manager.read_page(page_id, &mut page)?;
-        self.install(frame_id, page_id, page, None);
-        Ok(frame_id)
+        // TODO(M10.2): two threads missing on the same page each still pay for
+        // this read - try_install below discards the loser's copy rather than
+        // avoiding the second read. Avoiding it needs a per-page "loading"
+        // placeholder other threads wait on; worth adding once there's
+        // contention to measure.
+        Ok(self.try_install(frame_id, page_id, page, None))
     }
 
     pub fn new_page(&self, txn_id: TxnId) -> Result<(PageId, PageWriteGuard<'_>), StorageError> {
         let page_id = self.disk_manager.allocate_page()?;
         let lsn = self.append_log(txn_id, LogRecordKind::AllocPage { page_id })?;
         let frame_id = self.acquire_free_frame()?;
-        self.install(frame_id, page_id, Page::new(page_id), Some(lsn));
+        let frame_id = self.try_install(frame_id, page_id, Page::new(page_id), Some(lsn));
         Ok((page_id, self.write_guard(page_id, frame_id)))
     }
 
@@ -262,23 +275,29 @@ impl BufferPool {
         Ok(frame_id)
     }
 
-    fn install(
+    fn try_install(
         &self,
         frame_id: FrameId,
         page_id: PageId,
         page: Page,
         dirty_since_lsn: Option<Lsn>,
-    ) {
+    ) -> FrameId {
+        let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+        if let Some(&winner) = index.page_table.get(&page_id) {
+            index.free_list.push(frame_id);
+            self.pin_locked(&mut index, winner);
+            return winner;
+        }
+
         let idx = frame_id.0 as usize;
         *recover_lock(self.frames[idx].page.write(), "BufferPool.frame.page") = page;
         self.frames[idx]
             .dirty_since_lsn
             .store(dirty_since_lsn.map_or(0, |lsn| lsn.0), Ordering::Release);
-
-        let mut index = recover_lock(self.index.lock(), "BufferPool.index");
         index.page_table.insert(page_id, frame_id);
         index.frame_page[idx] = Some(page_id);
         self.pin_locked(&mut index, frame_id);
+        frame_id
     }
 
     fn write_guard(&self, page_id: PageId, frame_id: FrameId) -> PageWriteGuard<'_> {

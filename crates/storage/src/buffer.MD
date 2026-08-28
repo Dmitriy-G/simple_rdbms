@@ -55,7 +55,27 @@ the mutex, then releases it *before* flushing that victim if it was
 dirty (`flush_pages` takes each frame's `RwLock` for a read-only
 snapshot, never the pool mutex). This is the rule M10.2's lock manager
 will be tempted to violate by taking a shortcut that holds the pool
-mutex "just for this one flush" - don't.
+mutex "just for this one flush" - don't. `fetch_frame` returns a bare
+`FrameId` and never takes a frame latch itself - `fetch_page`/
+`fetch_page_read` take it afterward, in `write_guard`/`read_guard` - so
+the shared fetch/pin/evict/install logic already follows this structurally;
+M10.2 will be tempted to inline pinning and latching into one step, and
+doing so would reintroduce exactly the ordering this rule forbids.
+
+`try_install` (below) takes one narrow, deliberate exception: it writes a
+freshly-read page's bytes into its frame's `RwLock` *while still holding*
+`index`'s mutex, rather than after releasing it. This is safe only because
+the frame is not yet reachable by any other thread - it is in neither
+`page_table` nor `frame_page` until the `insert` a few lines later, so no
+concurrent `pin_if_cached` can find it and no `acquire_free_frame` can
+evict it. Releasing the mutex first and writing the bytes after would open
+a window where the mapping is visible but the frame still holds its
+previous occupant's bytes (or, for a brand-new frame, zeroes) - a
+concurrent reader could then latch and read stale content before the
+installing thread gets around to overwriting it. Holding the mutex the
+extra instant it takes to copy one page's worth of bytes into an
+as-yet-unpublished frame costs nothing, since nothing else can be waiting
+on that specific frame yet.
 
 `PageReadGuard`/`PageWriteGuard` (`page.rs`) hold the frame's `RwLock`
 guard (wrapped in `ManuallyDrop`, so `Drop` can release it explicitly)
@@ -94,6 +114,13 @@ to prove concurrent readers actually work.
   `fetch_page_read` calls made so far (for tests asserting an operation
   touched only the pages it needed), and every disk write `flush_pages`
   has performed, in order.
+- `BufferPool::frame_count_for(&self, page_id) -> usize` -
+  test/`test-util`-only introspection: how many frames currently list
+  `page_id` in `frame_page`. Always `0` or `1` once `try_install`'s
+  double-checked insert is correct; a concurrency test that drives two
+  threads to miss on the same page at once and then observes `2` here has
+  reproduced the M10.1 double-fetch race this module's `try_install` was
+  written to close.
 - `BufferPool::fetch_page(&self, page_id) -> Result<PageWriteGuard<'_>, StorageError>` -
   fetches `page_id`, pinning it and returning a write-capable guard. If
   the page is not already resident, brings it in from disk, evicting a
@@ -115,11 +142,27 @@ to prove concurrent readers actually work.
 - `BufferPool::fetch_frame(&self, page_id) -> Result<FrameId, StorageError>` -
   private. The fetch/pin/evict/install logic shared by `fetch_page` and
   `fetch_page_read`; the two public methods differ only in which kind of
-  guard they wrap the resulting `FrameId` in.
+  guard they wrap the resulting `FrameId` in. On a miss, reads the page
+  into a fresh, not-yet-pinned buffer with no lock held across the read,
+  then hands it to `try_install` to publish - which is exactly the window
+  where two threads can miss on the same `page_id` at once; `try_install`,
+  not exclusion here, is what makes that safe. Carries a
+  `TODO(M10.2)` noting that both threads still pay for the disk read in
+  that case - only the wasted *frame* is reclaimed, not the wasted read;
+  avoiding the read too needs a per-page "loading" placeholder the losing
+  thread could wait on instead, which is worth building once real
+  contention justifies it.
 - `BufferPool::new_page(&self, txn_id) -> Result<(PageId, PageWriteGuard<'_>), StorageError>` -
   allocates a brand-new page via the disk manager and pins it in the
   pool, returning a write guard to it. Logs an `AllocPage` record on
-  behalf of `txn_id` before installing the page.
+  behalf of `txn_id` before installing the page. Routes through
+  `try_install` like `fetch_frame` does, even though it can never actually
+  race: `page_id` comes from `disk_manager.allocate_page`'s atomic
+  counter, so no two callers can ever be handed the same id to install,
+  and `try_install`'s re-check is guaranteed to find the page table empty.
+  Sharing the one helper avoids maintaining a second, subtly-different
+  install path whose race-freedom would otherwise depend on this same
+  atomic-allocation fact without saying so anywhere.
 - `BufferPool::flush_page(&self, page_id)` - flushes `page_id` to disk if
   its frame is dirty.
 - `BufferPool::flush_all(&self)` - flushes every dirty resident page to
@@ -177,15 +220,30 @@ to prove concurrent readers actually work.
   `buffer_pool_evictions_total` alongside it), and a `warn!` (every frame
   pinned - eviction pressure an operator should know about) right before
   returning `StorageError::BufferPoolExhausted`.
-- `BufferPool::install(&self, frame_id, page_id, page, dirty_since_lsn)` -
-  private. Stores `page` into `frame_id`'s `RwLock` (a plain write latch;
-  nothing else can reach this frame by `page_id` yet), then records it
-  under `page_id` in the page table and pins it, both under `index`'s
-  mutex. Only ever called on a frame that was just freed or evicted, so
-  no live guard can be observing its bytes. `dirty_since_lsn` is
-  `Some(lsn)` if the page is already dirty as of installation (a
-  brand-new page, dirtied by its own `AllocPage` record), or `None` for a
-  page freshly read from disk.
+- `BufferPool::try_install(&self, frame_id, page_id, page, dirty_since_lsn) -> FrameId` -
+  private. The double-checked publish step both `fetch_frame` and
+  `new_page` funnel through: under `index`'s mutex, re-checks whether
+  `page_id` is already present in the page table before doing anything
+  else. If it is - another thread's `try_install` for the same page won
+  the race first - `frame_id` (the caller's freshly-read-into but
+  never-published frame) is pushed back onto the free list unpinned, the
+  winner's frame is pinned in its place, and the winner's `FrameId` is
+  returned; the caller's own read was wasted work but leaves nothing to
+  clean up, since `frame_id` was never recorded in `page_table` or
+  `frame_page` and its bytes were never touched. Otherwise this thread has
+  won: it stores `page` into `frame_id`'s `RwLock`, sets
+  `dirty_since_lsn` (`Some(lsn)` for a brand-new page dirtied by its own
+  `AllocPage` record, `None` for a page freshly read from disk), records
+  the mapping in `page_table`/`frame_page`, pins it, and returns
+  `frame_id` unchanged. The bytes write happens only in the
+  winning branch, and only after the re-check confirms there is a race to
+  win - writing first and checking after (the pre-M10.2-fix shape of this
+  function) is what let a losing thread clobber a frame it was about to
+  hand back. See the latch-ordering rule above for why this is the one
+  place in the module that deliberately holds `index`'s mutex across a
+  frame latch acquisition. Only ever called with a frame that was just
+  freed or evicted, so no live guard can already be observing its bytes
+  going in.
 - `BufferPool::write_guard(&self, page_id, frame_id) -> PageWriteGuard<'_>`/
   `read_guard(&self, page_id, frame_id) -> PageReadGuard<'_>` - private.
   Take the frame's `RwLock` write/read latch and wrap it in the

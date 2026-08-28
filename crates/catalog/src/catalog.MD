@@ -52,6 +52,24 @@ runs before `Catalog::open` (`engine::database.rs`'s `open_with_managers`),
 so a cache built by `open` after recovery already reflects every completed
 redo and undo.
 
+**Locking is deliberately out of scope here.** `engine::Database` owns its
+`Catalog` directly (a plain field, no `Mutex`/`RwLock` around it) even
+though `BufferPool` became `Send + Sync` in M10.1 and `Catalog` itself
+already is too - nothing about M10.1 required `Catalog` to gain a lock,
+only that it be safe to *move* into a `Send + Sync`-bounded `Database`.
+Wrapping it in a coarse `RwLock` now, before any concurrent access
+actually exists, would be guessing at a granularity with nothing to
+design against: the right shape depends on the DDL/DML access pattern
+M10.2's connection layer settles on (one lock for the whole catalog vs.
+per-table, readers-block-writers vs. an MVCC-style snapshot) and on how
+that layer's rollback invalidation interacts with the root-page cache
+described above - `engine::Database` reloading `self.catalog` wholesale
+on every abort only works today because there is exactly one `Catalog`
+and exactly one thread that can be reloading it. A coarse lock added
+now, before those rules exist, would very likely have to be torn out or
+reshaped once they do; leaving `Catalog` unguarded is the deliberate
+choice to defer that design to M10.2 rather than an oversight.
+
 ## Key Components
 
 - `Catalog` - the catalog struct: an in-memory table index
