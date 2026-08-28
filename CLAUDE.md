@@ -2,6 +2,119 @@
 
 Guidance for anyone — human or agent — working in this repository.
 
+## What this is
+
+A relational database engine built from scratch in Rust, as a learning
+project structured as a layered Cargo workspace (`docs/adr/0002-crate-splitting.md`).
+What works today: durable slotted-page storage with checksummed pages, a
+buffer pool with LRU-K eviction, write-ahead logging, ARIES-style crash
+recovery with fuzzy checkpointing, a double-write buffer protecting
+against torn page writes, `BEGIN`/`COMMIT`/`ROLLBACK` transactions, a
+B+tree index the optimizer picks over a sequential scan automatically
+(`planner::optimizer::IndexScanRule`), `EXPLAIN` for both logical and
+physical plans, a Prometheus metrics and liveness/readiness server, and a
+`Send + Sync` storage layer built for a future multi-connection frontend.
+What does not exist yet: `DELETE`/`UPDATE`, multi-table joins, column
+constraints (`NOT NULL`/`UNIQUE`/`FOREIGN KEY`), a network wire protocol,
+and concurrent statement execution. See `docs/ROADMAP.md` for exactly
+what closes each of those gaps and in what order.
+
+## Contents
+
+- [Where to read next](#where-to-read-next)
+- [Invariants that must not be broken](#invariants-that-must-not-be-broken)
+- [Known scaffolding](#known-scaffolding)
+- [Commands](#commands)
+- [Dependency-edge rules](#dependency-edge-rules)
+- [Documentation](#documentation)
+- [Error handling](#error-handling)
+- [Logging](#logging)
+- [Commit and branch conventions](#commit-and-branch-conventions)
+- [Testing rules](#testing-rules)
+
+## Where to read next
+
+A fresh session needs to know what to open before it needs to know how to
+name a branch:
+
+1. `docs/ROADMAP.md` — every milestone, what's done, what's next, and the
+   dependency that fixes each one's position. Milestone numbers are
+   permanent identifiers: a completed milestone keeps its number forever,
+   and implementation order has twice diverged from numeric order without
+   renumbering anything (M12 shipped ahead of M9; M14 no longer depends
+   on M10 — see the roadmap's own introduction for why).
+2. `docs/adr/` — ten ADRs recording decisions that are expensive to
+   rediscover. The ones a change is most likely to violate without
+   reading first: 0003 (index after the log), 0004 (what ACID means
+   here today), 0005 (the durability boundary after the double-write
+   buffer), 0008 (write-guard reentrancy), 0009 (buffer pool frame
+   ownership), 0010 (waiting for a frame instead of failing).
+3. The relevant `crates/<crate>/README.md`, then the sibling `.MD` of
+   each file being changed.
+
+## Invariants that must not be broken
+
+This is the most important section in this file. Each of these is
+currently documented in full only in one `.MD`, so a change made without
+opening that file first can break it without any test catching the
+mistake at review time.
+
+- **Log before page.** A dirty page may never reach disk before the log
+  record describing it. `storage::buffer::BufferPool::flush_pages` forces
+  the log durable to the batch's highest `page_lsn` before writing any
+  page to its real location (`buffer.MD`), and `PageWriteGuard::write` is
+  the only way ordinary code mutates a page's bytes — never
+  `Page::data_mut()` directly. The one documented exception is
+  `BufferPool::stamp_write`, used only by `recovery::recover` to reapply
+  a change that is already durably logged (Redo) or already covered by
+  its own `Clr` record (Undo), where logging again would misdescribe
+  what happened.
+- **Latch ordering.** Take the buffer pool's index lock, find or install
+  the frame, pin it, release the index lock, then take the frame's own
+  latch. Never hold the index lock across a frame latch or across disk
+  I/O. The one documented exception is `try_install`, which holds both
+  briefly, but only for a frame not yet reachable through the page table
+  (`buffer.MD`'s latch-ordering rule).
+- **One write guard per page per thread.** `RwLock` is not reentrant; a
+  second write guard on a page this thread already holds one for
+  self-deadlocks. Use `fetch_page_read` for a second, read-only view.
+  Debug builds detect the mistake and panic instead of hanging
+  (`docs/adr/0008-write-guard-reentrancy.md`).
+- **All-zero pages are valid.** `heap::NO_NEXT_PAGE` is `PageId(0)` and a
+  slotted page's used-space count is computed so it reads as zero on an
+  untouched page, specifically so a freshly allocated page — all zero
+  bytes, never explicitly initialized — decodes as a valid, empty page
+  rather than a corrupt one. Any new on-disk struct must preserve this:
+  pick encodings where all-zeros is a legal, safe state.
+- **The page-0 header is versioned and logged.** Its format version is
+  checked on open (`disk::header::VERSION_RANGE`) and every mutation to
+  it goes through `PageWriteGuard::write` like any other page, so it is
+  redone and undone exactly like the rest of the database rather than
+  racing ahead of it as an unlogged direct write.
+- **Errors are logged once, at the engine boundary.** See the "Error
+  handling" section below rather than duplicating it here.
+
+## Known scaffolding
+
+Code that exists but cannot be reached yet, so it should not be mistaken
+for working capability. Each is named with the milestone that finishes
+it — this was requested in an earlier roadmap task and never landed, and
+belongs here rather than in `docs/ROADMAP.md` since this is the file a
+fresh session reads first:
+
+- `catalog::Column::nullable` — parsed, persisted, plumbed through the
+  binder, never enforced (M16).
+- `common::SqlState::NOT_NULL_VIOLATION` — defined, never raised (M16).
+- `common::SqlState::UNIQUE_VIOLATION` — defined, never raised (M17); the
+  B+tree still permits duplicate keys.
+- `storage::btree::BTreeIndex::delete` — the method exists; its body is
+  `todo!()` (M15).
+- `executor::NestedLoopJoinExecutor` — exists and is wired into the
+  executor factory; `init` and `next` are both `todo!()` (M11).
+  `planner::LogicalPlan::Join`/`PhysicalPlan::NestedLoopJoin` already
+  exist as the node kinds it would run, but nothing in `sql`'s grammar
+  can produce them yet — `FROM` accepts exactly one table (M11).
+
 ## Commands
 
 Build:
@@ -30,9 +143,14 @@ Test:
 cargo test --workspace
 ```
 
-All four (`fmt --check`, `clippy -D warnings`, `build`, `test`) must pass
-on a clean checkout; CI (`.github/workflows/ci.yml`) runs the same commands
-on every PR.
+Check documentation:
+```sh
+bash scripts/check_docs.sh
+```
+
+All five (`fmt --check`, `clippy -D warnings`, `build`, `test`,
+`check_docs.sh`) must pass on a clean checkout; CI
+(`.github/workflows/ci.yml`) runs the same commands on every PR.
 
 ## Dependency-edge rules
 
@@ -236,3 +354,22 @@ be shared across multiple files under `tests/`, it lives in
 `tests/support/`, declared with `mod support;` by whichever test file
 needs it — never behind `#[cfg(test)]` in `src/`, which would hide it from
 every other test file that wants it too.
+
+The crash-injection harness (`crates/engine/tests/crash_injection.rs`,
+`crates/storage/tests/btree_crash_injection.rs`) is the repository's
+primary correctness gate for durability, and sweeps every write point
+across several workloads under four durability models
+(`DurabilityModel::write_is_durable`/`requires_sync`/`torn_write`/
+`torn_write_requires_sync`, `storage::block_device.rs`), asserting the
+state recovered after a crash at that point matches a safely committed
+prefix. Any change to storage, the WAL, recovery, or the double-write
+buffer must run both of these before it is considered done, and a change
+that alters their results is wrong until proven otherwise.
+
+Concurrency tests carry their own discipline. Bound every repetition with
+a timeout — a hang and a slow pass are otherwise indistinguishable
+without one — and reproduce CI's low-core scheduling with `taskset -c
+0,1` (or an equivalent CPU-affinity constraint) rather than trusting a
+wide local machine; a race that needs real contention to manifest can
+pass every time on a many-core workstation and still fail reliably in
+CI.
