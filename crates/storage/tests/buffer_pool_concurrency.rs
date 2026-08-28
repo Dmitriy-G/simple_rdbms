@@ -1,7 +1,8 @@
 use std::error::Error;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
+use std::time::Duration;
 
 use common::TxnId;
 use storage::buffer::BufferPool;
@@ -13,14 +14,14 @@ use storage::wal::LogManager;
 
 const MARKER_OFFSET: usize = 100;
 const THREAD_COUNT: usize = 8;
-const POOL_SIZE: usize = THREAD_COUNT + 1;
+const POOL_SIZE: usize = 4;
 const PAGE_COUNT: usize = 20;
 const ITERATIONS_PER_THREAD: usize = 200;
 
 const COUNTER_OFFSET: usize = 200;
 const RMW_PAGE_COUNT: usize = 3;
 const RMW_THREAD_COUNT: usize = 8;
-const RMW_POOL_SIZE: usize = RMW_THREAD_COUNT + 1;
+const RMW_POOL_SIZE: usize = 4;
 const RMW_ROUNDS: usize = 200;
 
 const RACE_POOL_SIZE: usize = 2;
@@ -64,7 +65,8 @@ fn eight_threads_fetching_reading_and_releasing_never_see_torn_or_wrong_page_con
         .map(|thread_index| {
             let pool = Arc::clone(&pool);
             let page_ids = Arc::clone(&page_ids);
-            thread::spawn(move || -> Result<(), String> {
+            thread::spawn(move || -> Result<usize, String> {
+                let mut completed = 0;
                 for i in 0..ITERATIONS_PER_THREAD {
                     let slot = (thread_index * 37 + i) % page_ids.len();
                     let page_id = page_ids[slot];
@@ -77,16 +79,23 @@ fn eight_threads_fetching_reading_and_releasing_never_see_torn_or_wrong_page_con
                              {actual}"
                         ));
                     }
+                    completed += 1;
                 }
-                Ok(())
+                Ok(completed)
             })
         })
         .collect();
 
-    for handle in handles {
-        handle.join().expect("worker thread panicked")?;
+    for (thread_index, handle) in handles.into_iter().enumerate() {
+        let completed = handle.join().expect("worker thread panicked")?;
+        assert_eq!(
+            completed, ITERATIONS_PER_THREAD,
+            "thread {thread_index}: completed {completed} of {ITERATIONS_PER_THREAD} \
+             iterations - every thread must make progress even though the pool ({POOL_SIZE} \
+             frames) is smaller than the thread count ({THREAD_COUNT})"
+        );
     }
-    pool.assert_invariants();
+    pool.assert_frame_accounting();
     Ok(())
 }
 
@@ -112,6 +121,7 @@ fn concurrent_read_modify_write_cycles_never_lose_an_update() -> Result<(), Box<
     pool.flush_all()?;
 
     let mut expected = [0u32; RMW_PAGE_COUNT];
+    let completed_cycles = AtomicUsize::new(0);
     for round in 0..RMW_ROUNDS {
         for _ in 0..RMW_POOL_SIZE {
             let (_, guard) = pool.new_page(TxnId(0))?;
@@ -125,6 +135,7 @@ fn concurrent_read_modify_write_cycles_never_lose_an_update() -> Result<(), Box<
                     let pool = &pool;
                     let page_ids = &page_ids;
                     let barrier = &barrier;
+                    let completed_cycles = &completed_cycles;
                     scope.spawn(move || -> Result<(), String> {
                         let txn_id = TxnId((round * RMW_THREAD_COUNT + thread_index) as u64 + 1);
                         let page_id = page_ids[(thread_index + round) % page_ids.len()];
@@ -134,6 +145,7 @@ fn concurrent_read_modify_write_cycles_never_lose_an_update() -> Result<(), Box<
                         guard
                             .write(txn_id, COUNTER_OFFSET, &(current + 1).to_le_bytes())
                             .map_err(|err| err.to_string())?;
+                        completed_cycles.fetch_add(1, Ordering::Relaxed);
                         Ok(())
                     })
                 })
@@ -149,7 +161,13 @@ fn concurrent_read_modify_write_cycles_never_lose_an_update() -> Result<(), Box<
         }
     }
 
-    pool.assert_invariants();
+    assert_eq!(
+        completed_cycles.load(Ordering::Relaxed),
+        RMW_ROUNDS * RMW_THREAD_COUNT,
+        "every thread must complete its read-modify-write cycle every round even though the \
+         pool ({RMW_POOL_SIZE} frames) is smaller than the thread count ({RMW_THREAD_COUNT})"
+    );
+    pool.assert_frame_accounting();
     pool.flush_all()?;
     drop(pool);
 
@@ -168,7 +186,7 @@ fn concurrent_read_modify_write_cycles_never_lose_an_update() -> Result<(), Box<
             expected[slot]
         );
     }
-    reopened.assert_invariants();
+    reopened.assert_frame_accounting();
     Ok(())
 }
 
@@ -218,12 +236,13 @@ fn two_threads_racing_a_cold_page_install_yields_exactly_one_frame() -> Result<(
             "page {page_id:?}: expected exactly one resident frame after the race"
         );
     }
-    pool.assert_invariants();
+    pool.assert_frame_accounting();
     Ok(())
 }
 
 const HAMMER_THREAD_COUNT: usize = 8;
-const HAMMER_ITERATIONS_WHILE_PARKED: u64 = 20_000;
+const HAMMER_ITERATIONS_WHILE_PARKED: u64 = 2_000;
+const HAMMER_FRAME_WAIT_TIMEOUT: Duration = Duration::from_millis(2);
 
 #[test]
 fn an_owned_frame_is_never_resurrected_by_a_racing_unpin() -> Result<(), Box<dyn Error>> {
@@ -235,7 +254,10 @@ fn an_owned_frame_is_never_resurrected_by_a_racing_unpin() -> Result<(), Box<dyn
     )?;
     let log = LogManager::open(dir.path().join("test.db.wal"))?;
     let replacer = Box::new(LruKReplacer::new(1, 2));
-    let pool = Arc::new(BufferPool::new(disk, dwb, log, 1, replacer));
+    let pool = Arc::new(
+        BufferPool::new(disk, dwb, log, 1, replacer)
+            .with_frame_wait_timeout(HAMMER_FRAME_WAIT_TIMEOUT),
+    );
 
     let (p_old, guard) = pool.new_page(TxnId(0))?;
     drop(guard);
@@ -310,7 +332,7 @@ fn an_owned_frame_is_never_resurrected_by_a_racing_unpin() -> Result<(), Box<dyn
     pool.clear_install_hook();
     assert!(installed.load(Ordering::Acquire), "installer never brought {p_new:?} in");
 
-    pool.assert_invariants();
+    pool.assert_frame_accounting();
     assert_eq!(
         pool.frame_count_for(p_new),
         1,

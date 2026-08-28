@@ -49,8 +49,15 @@ read or a write guard.
   to disk before eviction and comes back correctly on refetch after an
   explicit `flush_all`.
 - `fetch_errors_rather_than_panics_when_every_frame_is_pinned` - with
-  every frame in a 2-frame pool pinned, a third `new_page` call must
-  return `StorageError::BufferPoolExhausted`, not panic.
+  every frame in a 2-frame pool pinned *by this same thread*, a third
+  `new_page` call must return `StorageError::BufferPoolExhausted`
+  immediately, not panic and not block. Since
+  `docs/adr/0010-buffer-pool-waits-for-a-frame.md`, `acquire_free_frame`
+  waits for a frame to free up rather than failing on the spot - this
+  test's every-frame-pinned-by-the-caller shape is specifically the one
+  case waiting can never resolve (a guaranteed self-deadlock), which is
+  why it still fails fast rather than hanging for 30 seconds before
+  timing out with `BufferPoolWaitTimedOut` instead.
 - `second_live_read_guard_keeps_page_pinned_under_eviction_pressure` -
   proves `PageGuard` is the sole owner of its own pin, not a shared handle
   to "the page is pinned or not": writes the page's marker through one
@@ -88,6 +95,10 @@ read or a write guard.
   is compiled out in release - the test would otherwise fail to panic in
   a release run, not because the bug reappeared, but because there is
   nothing left in that build to catch it.
+- Every test above except this last one (which panics before returning)
+  finishes with `pool.assert_frame_accounting()` -
+  `buffer::BufferPool`'s general-purpose page-table/`frame_page`/
+  `free_list`/`owned` consistency check (`buffer.MD`).
 
 ## Usage Example
 

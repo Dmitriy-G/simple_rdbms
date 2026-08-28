@@ -41,6 +41,9 @@ pub enum Error {
     #[error("buffer pool exhausted: no evictable frame available")]
     BufferPoolExhausted,
 
+    #[error("timed out after waiting {waited_ms}ms for a free buffer pool frame")]
+    BufferPoolWaitTimedOut { waited_ms: u64 },
+
     #[error("tuple of {size} bytes exceeds the {max}-byte maximum for a single page")]
     TupleTooLarge { size: usize, max: usize },
 
@@ -113,6 +116,7 @@ impl Error {
             Error::PageNotFound { .. } => SqlState::DATA_CORRUPTED,
             Error::DoubleWriteRestoreFailed { .. } => SqlState::IO_ERROR,
             Error::BufferPoolExhausted => SqlState::OUT_OF_MEMORY,
+            Error::BufferPoolWaitTimedOut { .. } => SqlState::OUT_OF_MEMORY,
             Error::TupleTooLarge { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
             Error::KeyTooLarge { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
             Error::InvalidConfiguration { .. } => SqlState::CONNECTION_FAILURE,
@@ -150,6 +154,7 @@ impl Error {
             | Error::Internal { .. } => Severity::Fatal,
 
             Error::BufferPoolExhausted
+            | Error::BufferPoolWaitTimedOut { .. }
             | Error::TupleTooLarge { .. }
             | Error::KeyTooLarge { .. }
             | Error::Syntax { .. }
@@ -187,6 +192,7 @@ impl Error {
             | Error::PageNotFound { .. }
             | Error::DoubleWriteRestoreFailed { .. }
             | Error::BufferPoolExhausted
+            | Error::BufferPoolWaitTimedOut { .. }
             | Error::TupleTooLarge { .. }
             | Error::KeyTooLarge { .. }
             | Error::InvalidConfiguration { .. }

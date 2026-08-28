@@ -67,6 +67,7 @@ fn evicts_under_pressure_and_dirty_data_survives_flush_and_refetch() -> Result<(
     assert_eq!(guard.page().data()[MARKER_OFFSET], 9);
     drop(guard);
 
+    pool.assert_frame_accounting();
     Ok(())
 }
 
@@ -85,6 +86,7 @@ fn fetch_errors_rather_than_panics_when_every_frame_is_pinned() -> Result<(), Bo
 
     drop(guard_a);
     drop(guard_b);
+    pool.assert_frame_accounting();
     Ok(())
 }
 
@@ -110,6 +112,7 @@ fn second_live_read_guard_keeps_page_pinned_under_eviction_pressure() -> Result<
         "page P must not have been evicted while read_guard2 was still alive"
     );
     drop(read_guard2);
+    pool.assert_frame_accounting();
     Ok(())
 }
 
@@ -143,6 +146,7 @@ fn pin_count_reaches_zero_only_after_the_last_read_guard_drops() -> Result<(), B
 
     guards.clear();
     apply_pressure(&pool, 5)?;
+    pool.assert_frame_accounting();
     Ok(())
 }
 
@@ -179,6 +183,7 @@ fn write_guard_blocks_until_concurrent_read_guard_drops() -> Result<(), Box<dyn 
         );
     });
 
+    pool.assert_frame_accounting();
     Ok(())
 }
 

@@ -9,35 +9,36 @@ of the double-checked install (`buffer::BufferPool::try_install`,
 the same page at once used to hit, and (`docs/adr/0009-buffer-pool-frame-ownership.md`)
 of the frame-ownership flag that closes a second, rarer race in the same
 neighborhood - a stale `unpin_frame` re-check resurrecting a frame
-another thread had already evicted and was still installing into.
-Deliberately does not exercise transaction isolation, which M10.1 does
-not add (see `buffer.MD`'s latch-ordering rule); it only exercises the
-frame-level `RwLock`, pin-count bookkeeping, and page-table publication
-that isolation will eventually sit on top of.
+another thread had already evicted and was still installing into - and
+(`docs/adr/0010-buffer-pool-waits-for-a-frame.md`) of `acquire_free_frame`
+waiting for a free frame instead of failing immediately, plus the
+per-page `loading` dedup that waiting made necessary: real waiting
+turned the double-checked install's "two threads both read a cold page"
+window from a few instructions wide into potentially seconds wide,
+letting a slow loser's stale disk read outlive the winner's full
+write-then-evict cycle and overwrite it. Deliberately does not exercise
+transaction isolation, which M10.1 does not add (see `buffer.MD`'s
+latch-ordering rule); it only exercises the frame-level `RwLock`,
+pin-count bookkeeping, and page-table publication that isolation will
+eventually sit on top of.
 
 ## Key Components
 
 - `MARKER_OFFSET` - `100`, the same arbitrary marker byte offset
   `buffer_pool.MD`'s tests use.
 - `THREAD_COUNT` / `ITERATIONS_PER_THREAD` - 8 threads, 200 fetches each.
-- `POOL_SIZE` / `PAGE_COUNT` - `THREAD_COUNT + 1` frames (9) against 20
-  pages: still small enough relative to `PAGE_COUNT` that every thread's
-  fetches force ongoing eviction and reinstallation of frames throughout
-  the run rather than a one-time warm-up, but never smaller than the
-  number of threads. Each thread only ever has one page pinned at a
-  time, so `THREAD_COUNT` is a hard ceiling on how many distinct frames
-  every thread could simultaneously demand at once; sizing the pool
-  below that ceiling doesn't add interesting contention; it just means
-  the pool can be legitimately out of evictable frames at the exact
-  moment every thread's stride (`thread_index * 37 + i`, see below)
-  happens to land on `THREAD_COUNT` distinct, not-yet-resident pages in
-  the same instant - which the stride does at `i = 0` deterministically,
-  not by rare bad luck (`thread_index * 37 % 20` is already 8 distinct
-  values for `thread_index` in `0..8`). A pool this small is a real
-  capacity shortfall for that access pattern, not a `BufferPool` bug -
-  `StorageError::BufferPoolExhausted` is the documented, correct response
-  to more concurrent distinct-page demand than frames exist - so the fix
-  belongs in this test's sizing, not in `try_install`/`acquire_free_frame`.
+- `POOL_SIZE` / `PAGE_COUNT` - `4` frames against 20 pages: deliberately
+  smaller than `THREAD_COUNT`, so the pool is routinely too small for
+  every thread's simultaneous demand and `acquire_free_frame` regularly
+  has to wait for a frame rather than find one immediately
+  (`docs/adr/0010-buffer-pool-waits-for-a-frame.md`) - this used to be
+  `THREAD_COUNT + 1`, sized specifically to *avoid* that, back when
+  `acquire_free_frame` returned `StorageError::BufferPoolExhausted`
+  instead of waiting and a pool that small would have made that error
+  routine rather than the exceptional case it was meant to test. A pool
+  smaller than the thread count is now the point: the test asserts every
+  thread still completes all `ITERATIONS_PER_THREAD` iterations despite
+  it, which is only a meaningful property once waiting works.
 - `eight_threads_fetching_reading_and_releasing_never_see_torn_or_wrong_page_contents` -
   writes a distinct one-byte marker into each of `PAGE_COUNT` pages and
   flushes, then spawns `THREAD_COUNT` threads that each loop
@@ -52,9 +53,15 @@ that isolation will eventually sit on top of.
   count race that let a live frame be evicted would all surface here as a
   mismatched marker (or a panic) in some thread; a clean join of all
   eight is the proof this doesn't happen. Every worker returns
-  `Result<(), String>` instead of panicking directly, so a failure names
-  the exact page and thread rather than aborting the process before the
-  other threads' state can be inspected. Only ever exercises
+  `Result<usize, String>` (the count of iterations it actually completed)
+  instead of panicking directly, so a failure names the exact page and
+  thread rather than aborting the process before the other threads' state
+  can be inspected; the count is then asserted equal to
+  `ITERATIONS_PER_THREAD` for every thread, so a thread that silently
+  stopped early without returning an `Err` - the specific failure mode a
+  pool smaller than the thread count could produce if waiting were
+  broken - would still fail the test rather than pass quietly with an
+  incomplete run. Only ever exercises
   `fetch_page_read` on pages that are, at worst, already resident, so it
   says nothing about the double-fetch race below - that needs a genuine
   cache *miss* shared by two threads at once, which is what the next two
@@ -64,16 +71,22 @@ that isolation will eventually sit on top of.
   `read_counter(data)` reads it back as a little-endian `u32`.
 - `RMW_PAGE_COUNT` / `RMW_THREAD_COUNT` / `RMW_POOL_SIZE` / `RMW_ROUNDS` -
   3 target pages contended by 8 threads (more threads than pages, so a
-  page's counter is fought over every round), `RMW_THREAD_COUNT + 1`
-  frames, and 200 rounds. The pool must hold at least `RMW_THREAD_COUNT`
-  frames, not just `RMW_PAGE_COUNT`: `try_install`'s whole design lets
-  every racing thread claim its own frame and read the page *before*
-  any of them checks whether it already lost, so in the worst case all
-  eight threads competing this round each hold a distinct frame
-  transiently, even though only `RMW_PAGE_COUNT` of them ever end up
-  actually installed - a smaller pool hits a real, uninteresting
-  `BufferPoolExhausted` from that transient demand rather than the race
-  this test exists to catch.
+  page's counter is fought over every round), `4` frames, and 200 rounds.
+  `RMW_POOL_SIZE` used to be `RMW_THREAD_COUNT + 1`: `try_install`'s old
+  design let every racing thread claim its own frame and read the page
+  *before* any of them checked whether it already lost, so in the worst
+  case all eight threads competing this round could each hold a distinct
+  frame transiently even though only `RMW_PAGE_COUNT` of them ever ended
+  up installed, and a smaller pool would have hit a real, uninteresting
+  `BufferPoolExhausted` from that transient demand instead of the race
+  this test exists to catch. `fetch_frame`'s per-page `loading` dedup
+  (`docs/adr/0010-buffer-pool-waits-for-a-frame.md`) removed that
+  transient demand entirely - only one thread per page ever reads disk
+  and holds a frame for it now - so the pool only ever needs to hold
+  `RMW_PAGE_COUNT` frames at once, and shrinking it to `4` (still `>=
+  RMW_PAGE_COUNT`, well below `RMW_THREAD_COUNT`) is what actually
+  exercises real waiting via `acquire_free_frame` instead of the
+  install-race alone.
 - `concurrent_read_modify_write_cycles_never_lose_an_update` - allocates
   `RMW_PAGE_COUNT` pages with a zeroed counter and flushes them, then
   runs `RMW_ROUNDS` rounds. Each round first forces every target page out
@@ -92,13 +105,27 @@ that isolation will eventually sit on top of.
   pattern) so the assertion reads back durable state rather than
   whatever happens to still be resident; each page's counter must equal
   the number of rounds that targeted it, computed independently of the
-  worker loop. Before the M10.2 fix, a lost race let two threads each
-  install their own frame for the same page and write their increment
-  into it, and only one of those frames stays reachable through the page
-  table afterward - the other's increment is gone forever, so the
-  reopened counter comes up short. A single missed race is enough to
-  make this fail, since the discrepancy persists through every later
-  round rather than only showing up transiently.
+  worker loop. Before the original M10.2 fix, a lost race let two threads
+  each install their own frame for the same page and write their
+  increment into it, and only one of those frames stayed reachable
+  through the page table afterward - the other's increment was gone
+  forever, so the reopened counter came up short. This test is also what
+  caught `docs/adr/0010-buffer-pool-waits-for-a-frame.md`'s bug while
+  `POOL_SIZE`/`RMW_POOL_SIZE` were first being shrunk: with real waiting
+  in `acquire_free_frame`, a losing racer's stale disk read could survive
+  long enough to overwrite a winner's already-flushed-and-evicted update,
+  losing an increment the exact same way but through a different
+  mechanism (staleness, not a page-table race) - reliably reproducible
+  within a handful of rounds at the smaller pool size before the
+  `loading` dedup fix landed. A single missed or stale write is enough to
+  make this fail either way, since the discrepancy persists through
+  every later round rather than only showing up transiently. Also
+  asserts, right after the round loop, that a shared `AtomicUsize`
+  counter incremented once per successful thread-round reached exactly
+  `RMW_ROUNDS * RMW_THREAD_COUNT` - the same "no thread silently stopped
+  early" property the marker test's per-thread iteration count checks,
+  here as one pooled total since threads are re-spawned every round
+  rather than living for the whole test.
 - `RACE_POOL_SIZE` / `RACE_ITERATIONS` - a 2-frame pool (exactly enough
   for two racing threads) and 200 trials.
 - `two_threads_racing_a_cold_page_install_yields_exactly_one_frame` -
@@ -115,16 +142,30 @@ that isolation will eventually sit on top of.
   fail; it directly checks the invariant `try_install` exists to
   maintain (one page, one frame) without waiting for a lost update to
   manifest as a wrong number somewhere downstream.
-- Every test above finishes with `pool.assert_invariants()` (or
-  `reopened.assert_invariants()` for the read-modify-write test, since
-  `pool` itself is dropped before the reopen) - `buffer::BufferPool`'s
-  general-purpose page-table/`frame_page` consistency check
-  (`buffer.MD`), cheap enough to run unconditionally alongside whatever
-  content-level assertions each test already makes.
-- `HAMMER_THREAD_COUNT` / `HAMMER_ITERATIONS_WHILE_PARKED` - 8 threads
-  and 20,000 loop iterations, sized only to make the race below
+- Every test above finishes with `pool.assert_frame_accounting()` (or
+  `reopened.assert_frame_accounting()` for the read-modify-write test,
+  since `pool` itself is dropped before the reopen) - `buffer::BufferPool`'s
+  general-purpose page-table/`frame_page`/`free_list`/`owned` consistency
+  check (`buffer.MD`, renamed from `assert_invariants` and extended with
+  the free-list and owned-frame cross-checks when
+  `docs/adr/0010-buffer-pool-waits-for-a-frame.md` landed), cheap enough
+  to run unconditionally alongside whatever content-level assertions
+  each test already makes.
+- `HAMMER_THREAD_COUNT` / `HAMMER_ITERATIONS_WHILE_PARKED` /
+  `HAMMER_FRAME_WAIT_TIMEOUT` - 8 threads, 2,000 loop iterations, and a
+  2ms per-attempt frame-wait timeout, sized only to make the race below
   overwhelmingly likely to manifest within one run rather than to model
-  anything about real workloads.
+  anything about real workloads. The pool below is built with
+  `.with_frame_wait_timeout(HAMMER_FRAME_WAIT_TIMEOUT)` specifically so a
+  hammer thread's failed attempt returns quickly instead of blocking up
+  to the 30s default (`docs/adr/0010-buffer-pool-waits-for-a-frame.md`) -
+  without this override, this test's hammer loop would take far too long
+  to accumulate `HAMMER_ITERATIONS_WHILE_PARKED` passes, since most
+  attempts while the installer holds the pool's one frame are expected
+  to fail. `HAMMER_ITERATIONS_WHILE_PARKED` dropped from an earlier
+  20,000 (tuned when a failed attempt returned near-instantly, before
+  waiting existed) to 2,000 to match: each attempt now costs up to the
+  2ms timeout rather than a handful of instructions.
 - `an_owned_frame_is_never_resurrected_by_a_racing_unpin` - a targeted,
   hook-driven reproduction of
   `docs/adr/0009-buffer-pool-frame-ownership.md`'s bug, rather than
@@ -156,7 +197,7 @@ that isolation will eventually sit on top of.
   the low-core CI scheduling that originally exposed the bug) for both
   the pre-fix and post-fix code before this test was committed. After
   releasing the installer and joining every hammer thread, asserts
-  `pool.assert_invariants()`, that `p_new` resolves to exactly one
+  `pool.assert_frame_accounting()`, that `p_new` resolves to exactly one
   frame, and that `p_old` resolves to none.
 
 ## Usage Example

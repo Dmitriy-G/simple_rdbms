@@ -43,7 +43,19 @@ had to change, from stringifying to matching.
   - `DoubleWriteRestoreFailed` -> `IO_ERROR` (58030), Fatal. A torn page's
     own repair copy didn't survive being written either.
   - `BufferPoolExhausted` -> `OUT_OF_MEMORY` (53200), Error. Every frame
-    is pinned; the statement fails, the session doesn't.
+    is pinned by the *calling* thread itself, a guaranteed self-deadlock
+    waiting can never resolve, so the statement fails immediately rather
+    than waiting out `BufferPoolWaitTimedOut`'s timeout first.
+  - `BufferPoolWaitTimedOut` -> `OUT_OF_MEMORY` (53200), Error. The pool
+    had no free frame for the whole configured wait (default 30s) even
+    though some other thread could in principle have released one -
+    `storage::buffer::BufferPool` waits on a frame becoming available
+    before failing (`docs/adr/0010-buffer-pool-waits-for-a-frame.md`);
+    this is what a caller sees once that wait genuinely times out. Same
+    SQLSTATE as `BufferPoolExhausted` since both mean "this pool is too
+    small for this workload" to a client, but a distinct variant so a
+    test or an operator can tell "rejected instantly" from "starved for
+    30 seconds" apart.
   - `TupleTooLarge` -> `PROGRAM_LIMIT_EXCEEDED` (54000), Error.
   - `KeyTooLarge` -> `PROGRAM_LIMIT_EXCEEDED` (54000), Error. An index key's
     encoded bytes are larger than a single B+tree node

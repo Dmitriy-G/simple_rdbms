@@ -7,8 +7,9 @@ and `catalog`/`txn`/`executor` each convert it into their own local error
 type at their boundary (see `common::Error`, which every variant here maps
 onto by hand - `ChecksumMismatch`/`CorruptPage`/`CorruptLogHeader`/
 `TruncatedFile`/`PageNotFound` all become a data-corruption `common::Error`
-variant, `BufferPoolExhausted`/`TupleTooLarge`/`KeyTooLarge`/
-`DoubleWriteRestoreFailed`/`InvalidDwbCapacity` each become their own,
+variant, `BufferPoolExhausted`/`BufferPoolWaitTimedOut`/`TupleTooLarge`/
+`KeyTooLarge`/`DoubleWriteRestoreFailed`/`InvalidDwbCapacity` each become
+their own,
 `UnorderableKey` becomes `common::Error::DatatypeMismatch` (the closest
 existing condition - this crate has no index-specific `common::Error`
 variant of its own to map onto), `InPlaceUpdateOutOfBounds` becomes
@@ -20,8 +21,13 @@ bookkeeping could violate, never something a caller's input could trigger)
 
 - `StorageError` - the enum. `Io` wraps a filesystem/OS-level I/O failure,
   converting automatically via `#[from] std::io::Error`.
-  `BufferPoolExhausted` means every resident frame is pinned when a new
-  page must be brought in. `CorruptPage { page_id, reason }` is a
+  `BufferPoolExhausted` means the calling thread itself already holds
+  every frame pinned when a new page must be brought in - a guaranteed
+  self-deadlock, raised immediately instead of waiting
+  (`buffer.MD`'s waiting rule). `BufferPoolWaitTimedOut { waited_ms }`
+  means `BufferPool::acquire_free_frame` waited its full configured
+  timeout for some *other* thread to free a frame and none did -
+  `docs/adr/0010-buffer-pool-waits-for-a-frame.md`. `CorruptPage { page_id, reason }` is a
   structural sanity-check failure (bad magic, truncated slot array, etc.)
   - not a checksum mismatch, which has its own variant. `PageNotFound`
     names a page id that doesn't exist in the file. `TruncatedFile {

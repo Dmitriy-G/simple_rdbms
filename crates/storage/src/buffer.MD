@@ -17,14 +17,19 @@ lock, so that a page's own bytes are never blocked on bookkeeping for a
 *different* page:
 
 1. **`Mutex<PoolIndex>`** (`index`) - the page table (`PageId -> FrameId`),
-   its reverse mapping (`frame_page`), the free list, the replacer, and
+   its reverse mapping (`frame_page`), the free list, the replacer,
    `owned` (a `Vec<bool>` marking which frames are currently reserved by
    an in-flight `acquire_free_frame`/`try_install` pair, per
-   `docs/adr/0009-buffer-pool-frame-ownership.md`), held together in one
-   struct since every mutation to one of them (installing a page,
+   `docs/adr/0009-buffer-pool-frame-ownership.md`), and `loading` (a
+   `HashSet<PageId>` of pages a miss is currently reading from disk for,
+   per `docs/adr/0010-buffer-pool-waits-for-a-frame.md`), held together in
+   one struct since every mutation to one of them (installing a page,
    evicting a victim) always needs to update the others atomically with
    it. Held only for lookups and frame bookkeeping - **never** across a
-   frame latch acquisition or disk I/O.
+   frame latch acquisition or disk I/O; the two `Condvar`s below (paired
+   with this same mutex) are the one exception that's expected to block
+   while holding it, since `Condvar::wait`/`wait_timeout` release the
+   mutex for the duration of the wait by construction.
 2. **Per frame** (`Frame`, private) - `page: RwLock<Page>` for the page's
    own bytes (readers and a lone writer coexist per the RwLock's usual
    rules; see `PageReadGuard`/`PageWriteGuard` below), `pin_count:
@@ -105,6 +110,38 @@ created, never inserts one, since a frame absent from the replacer is by
 definition either owned or free, and marking it evictable in either case
 would be wrong (`replacer.MD`).
 
+**The waiting rule - read this before touching `acquire_free_frame` or
+`fetch_frame`'s miss path:** `acquire_free_frame` no longer fails the
+instant nothing is free; it loops, waiting on `frame_available` (a
+`Condvar` paired with `index`'s mutex, bounded by `frame_wait_timeout`,
+default `DEFAULT_FRAME_WAIT_TIMEOUT` = 30s) until `unpin_frame` or
+`try_install`'s losing branch notifies it that a frame became available,
+retrying the free-list/eviction check on every wake. A timeout returns
+`StorageError::BufferPoolWaitTimedOut`; the one case waiting can never fix
+- every frame already pinned by the *calling* thread - is detected
+immediately instead, via a `#[cfg(debug_assertions)]` thread-local pin
+count (`PINNED_FRAME_COUNTS`, incremented by `pin_locked` and decremented
+by `unpin_frame`, mirroring `HELD_WRITE_GUARD_FRAMES` below), and returns
+`StorageError::BufferPoolExhausted` without waiting
+(`docs/adr/0010-buffer-pool-waits-for-a-frame.md`).
+
+Real waiting turned a second, previously-safe-by-narrow-timing property
+into a bug: `fetch_frame`'s miss path used to let every thread racing a
+miss on the same page independently read it from disk, trusting
+`try_install`'s double-checked page-table insert to discard every loser's
+copy. That trust assumed the gap between a miss and its `try_install`
+call stayed a few instructions wide; once `acquire_free_frame` can wait
+for real time, a loser's stale disk read can outlive an entire
+write-then-evict cycle for the winner's copy and overwrite it. `loading`
+closes this: a missing thread claims `page_id` in `loading` before doing
+any I/O; a thread that finds it already claimed waits on `page_installed`
+(the second `Condvar` on `index`'s mutex) instead of reading disk itself,
+rechecking the page table on every wake. Only the claimant reads disk and
+calls `try_install`; the claim is released and every waiter woken
+(`notify_all`, since more than one page id's misses can be waiting)
+on every exit from the load, success or failure alike - see
+`fetch_frame`'s closure below for why that matters.
+
 `PageReadGuard`/`PageWriteGuard` (`page.rs`) hold the frame's `RwLock`
 guard (wrapped in `ManuallyDrop`, so `Drop` can release it explicitly)
 plus the pin; `Drop` releases the latch first (`ManuallyDrop::drop`),
@@ -171,22 +208,44 @@ same thread.
 - `BufferPool` - `disk_manager`, `dwb`, and `log_manager` need no
   external lock of their own (each is internally synchronized - see
   `disk.MD`, `dwb.MD`, `wal.MD`); `frames` and `index` are described
-  above. `install_hook` (test/`test-util`-only) holds the optional
-  `InstallHook` closure `call_install_hook` invokes.
+  above. `frame_available`/`page_installed` are the two `Condvar`s the
+  waiting rule above describes, both paired with `index`'s mutex.
+  `frame_wait_timeout` bounds every wait either one performs, set from
+  `DEFAULT_FRAME_WAIT_TIMEOUT` in `new` and overridable via
+  `with_frame_wait_timeout`. `install_hook` (test/`test-util`-only) holds
+  the optional `InstallHook` closure `call_install_hook` invokes.
 - `WriteObservation` - test/`test-util`-only. One observed disk write, for
   the WAL-ordering invariant test: at the moment `page_id` was written to
   disk, its `page_lsn` and the log's `durable_lsn` at that instant. The
   write-ahead rule requires `durable_lsn >= page_lsn` for every entry.
+- `BufferPool::DEFAULT_FRAME_WAIT_TIMEOUT` - `Duration::from_secs(30)`,
+  the default bound `acquire_free_frame` and `fetch_frame`'s `loading`
+  wait use before giving up with `StorageError::BufferPoolWaitTimedOut`.
 - `BufferPool::new(disk_manager, dwb, log_manager, pool_size, replacer)` -
   creates a buffer pool of `pool_size` frames, using `replacer` to choose
   eviction victims, logging every page mutation through `log_manager`
   before it is applied, and protecting every flush against a torn write
-  through `dwb` (see `flush_pages`).
+  through `dwb` (see `flush_pages`). Starts with `frame_wait_timeout` set
+  to `DEFAULT_FRAME_WAIT_TIMEOUT`.
+- `BufferPool::with_frame_wait_timeout(self, timeout) -> Self` - builder
+  method overriding `frame_wait_timeout`; takes `self` by value rather
+  than `&self` since every existing call site constructs a pool and
+  wraps it in `Arc` in the same expression (`Arc::new(BufferPool::new(...)
+  .with_frame_wait_timeout(t))`), so a consuming builder needs no new
+  interior mutability and costs the ~25 existing `BufferPool::new` call
+  sites nothing to leave unchanged.
 - `BufferPool::fetch_count`/`reset_fetch_count`/`write_observations` -
   test/`test-util`-only introspection: the number of `fetch_page`/
   `fetch_page_read` calls made so far (for tests asserting an operation
   touched only the pages it needed), and every disk write `flush_pages`
   has performed, in order.
+- `BufferPool::frame_wait_count(&self) -> usize` - test/`test-util`-only
+  introspection: how many times `acquire_free_frame` has actually waited
+  on `frame_available` so far, mirroring the `buffer_pool_frame_waits_total`
+  metric counter without needing a metrics recorder installed in a test
+  process. A concurrency test driving a pool smaller than its thread
+  count should see this go non-zero - if it doesn't, the test isn't
+  exercising the waiting path it's meant to.
 - `BufferPool::frame_count_for(&self, page_id) -> usize` -
   test/`test-util`-only introspection: how many frames currently list
   `page_id` in `frame_page`. Always `0` or `1` once `try_install`'s
@@ -207,12 +266,18 @@ same thread.
   a no-op with no lock contention on the hot path when no hook is
   installed (the common case even under `test-util`, since only tests
   that specifically call `set_install_hook` pay for it).
-- `BufferPool::assert_invariants(&self)` - test/`test-util`-only. Walks
-  `page_table` and asserts, for every entry, that `frame_page` at that
-  frame agrees on the page id and that no frame id is visited twice -
-  the two ways `docs/adr/0009-buffer-pool-frame-ownership.md`'s bug (and
-  the M10.1 double-fetch race before it) showed up as corrupted pool
-  state. Intended to run at the end of any test that drives the pool
+- `BufferPool::assert_frame_accounting(&self)` - test/`test-util`-only.
+  Walks `page_table` and asserts, for every entry, that `frame_page` at
+  that frame agrees on the page id and that no frame id is visited twice;
+  then asserts every frame in `free_list` has no `frame_page` entry and
+  is not `owned`; then asserts every `owned` frame is absent from both
+  `page_table` and `free_list` - the full set of cross-invariants
+  `PoolIndex`'s four collections (`page_table`, `frame_page`, `free_list`,
+  `owned`) must maintain together, and the ways
+  `docs/adr/0009-buffer-pool-frame-ownership.md`'s and
+  `docs/adr/0010-buffer-pool-waits-for-a-frame.md`'s bugs (and the M10.1
+  double-fetch race before them) showed up as corrupted pool state.
+  Intended to run at the end of any test that drives the pool
   concurrently, alongside whatever content-level assertions that test
   already makes.
 - `BufferPool::fetch_page(&self, page_id) -> Result<PageWriteGuard<'_>, StorageError>` -
@@ -236,18 +301,26 @@ same thread.
 - `BufferPool::fetch_frame(&self, page_id) -> Result<FrameId, StorageError>` -
   private. The fetch/pin/evict/install logic shared by `fetch_page` and
   `fetch_page_read`; the two public methods differ only in which kind of
-  guard they wrap the resulting `FrameId` in. On a miss, calls
-  `call_install_hook` right after `acquire_free_frame` returns (the frame
-  is `owned` at that point - see the ownership rule above), then reads
-  the page into a fresh, not-yet-pinned buffer with no lock held across
-  the read, then hands it to `try_install` to publish - which is exactly
-  the window where two threads can miss on the same `page_id` at once;
-  `try_install`, not exclusion here, is what makes that safe. Carries a
-  `TODO(M10.2)` noting that both threads still pay for the disk read in
-  that case - only the wasted *frame* is reclaimed, not the wasted read;
-  avoiding the read too needs a per-page "loading" placeholder the losing
-  thread could wait on instead, which is worth building once real
-  contention justifies it.
+  guard they wrap the resulting `FrameId` in. On a miss, claims `page_id`
+  in `loading` (waiting on `page_installed` first if another thread
+  already claimed it - the waiting rule above), then runs the actual
+  load - `call_install_hook`, `acquire_free_frame`, the disk read, and
+  `try_install` - inside a closure so every exit path, including
+  `acquire_free_frame`'s own `?`, still reaches the code after it that
+  clears `loading` and calls `notify_all`; an early return straight out
+  of `fetch_frame` would leave `page_id` claimed forever, hanging every
+  future fetch of it. A disk-read failure additionally calls
+  `release_owned_frame` before propagating the error, since
+  `acquire_free_frame` already marked the frame `owned` and nothing else
+  will release it.
+- `BufferPool::release_owned_frame(&self, frame_id)` - private. Clears
+  `owned[frame_id]`, pushes it onto the free list, and notifies
+  `frame_available` - the cleanup a caller that acquired a frame via
+  `acquire_free_frame` but then failed before reaching `try_install` must
+  run, or the frame leaks as permanently `owned` (a slow pool death, not
+  corruption, since `try_install`/`acquire_free_frame`'s `debug_assert!`s
+  only catch a frame reused while still `owned`, not one abandoned and
+  never reused at all).
 - `BufferPool::new_page(&self, txn_id) -> Result<(PageId, PageWriteGuard<'_>), StorageError>` -
   allocates a brand-new page via the disk manager and pins it in the
   pool, returning a write guard to it. Logs an `AllocPage` record on
@@ -313,16 +386,22 @@ same thread.
   up.
 - `BufferPool::acquire_free_frame(&self) -> Result<FrameId, StorageError>` -
   private. Finds a frame to hold a newly-fetched or newly-allocated page:
-  reuses a never-used frame if one is free, otherwise asks the replacer
-  for an evictable victim under `index`'s mutex, removes the victim's old
-  mapping, marks the chosen frame `owned` (the ownership rule above,
-  behind a `debug_assert!` that it was not already owned), *releases the
-  mutex*, and only then flushes the victim if it was dirty (the
-  latch-ordering rule above). Emits a `trace!` naming the
-  evicted page when a victim is chosen (incrementing
-  `buffer_pool_evictions_total` alongside it), and a `warn!` (every frame
-  pinned - eviction pressure an operator should know about) right before
-  returning `StorageError::BufferPoolExhausted`.
+  loops trying the free list, then the replacer for an evictable victim,
+  under `index`'s mutex; if neither has anything, checks (debug builds
+  only) whether the calling thread itself already holds every frame
+  pinned - a guaranteed self-deadlock, returning
+  `StorageError::BufferPoolExhausted` immediately - and otherwise waits
+  on `frame_available` up to the remaining `frame_wait_timeout` before
+  retrying the loop, or returns `StorageError::BufferPoolWaitTimedOut`
+  once the deadline passes (the waiting rule above). Once a frame is
+  found, removes the victim's old mapping if evicting, marks the chosen
+  frame `owned` (the ownership rule above, behind a `debug_assert!` that
+  it was not already owned), *releases the mutex*, and only then flushes
+  the victim if it was dirty (the latch-ordering rule above). Emits a
+  `trace!` naming the evicted page when a victim is chosen (incrementing
+  `buffer_pool_evictions_total` alongside it), and increments
+  `buffer_pool_frame_waits_total`/`frame_wait_count` and records
+  `buffer_pool_frame_wait_seconds` around each wait.
 - `BufferPool::try_install(&self, frame_id, page_id, page, dirty_since_lsn) -> FrameId` -
   private. The double-checked publish step both `fetch_frame` and
   `new_page` funnel through: under `index`'s mutex (behind a
@@ -332,10 +411,16 @@ same thread.
   `try_install` for the same page won the race first - `frame_id`'s
   `owned` flag is cleared, `frame_id` (the caller's freshly-read-into but
   never-published frame) is pushed back onto the free list unpinned, the
-  winner's frame is pinned in its place, and the winner's `FrameId` is
-  returned; the caller's own read was wasted work but leaves nothing to
-  clean up, since `frame_id` was never recorded in `page_table` or
-  `frame_page` and its bytes were never touched. Otherwise this thread has
+  winner's frame is pinned in its place, `frame_available.notify_one()`
+  runs (a frame just returned to the free list), and the winner's
+  `FrameId` is returned; the caller's own read was wasted work but leaves
+  nothing to clean up, since `frame_id` was never recorded in `page_table`
+  or `frame_page` and its bytes were never touched. `fetch_frame`'s
+  `loading` claim (the waiting rule above) means this branch is no longer
+  reachable from an ordinary miss - only one thread ever loads a given
+  page at a time now - but it stays as the correct, defensive behavior for
+  any caller that reaches `try_install` outside that protection.
+  Otherwise this thread has
   won: it stores `page` into `frame_id`'s `RwLock`, sets
   `dirty_since_lsn` (`Some(lsn)` for a brand-new page dirtied by its own
   `AllocPage` record, `None` for a page freshly read from disk), records
@@ -380,8 +465,10 @@ same thread.
   and is now `owned` by someone else's in-flight install
   (`docs/adr/0009-buffer-pool-frame-ownership.md`) - which is why the
   full condition also requires `!owned[idx]` before calling
-  `set_evictable(frame_id, true)`. Moves the `buffer_pool_pinned_frames`
-  gauge down.
+  `set_evictable(frame_id, true)`, immediately followed by
+  `frame_available.notify_one()` - the waiting rule above's other wakeup
+  source, alongside `try_install`'s losing branch. Moves the
+  `buffer_pool_pinned_frames` gauge down.
 - `BufferPool::flush_pages(&self, pages) -> Result<(), StorageError>` -
   private. Emits a `trace!` naming the batch size before doing anything,
   and increments `dwb_batches_written_total` once the batch's double-write

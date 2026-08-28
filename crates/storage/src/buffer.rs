@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Condvar, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 use common::sync::recover_lock;
 use common::{FrameId, Lsn, PageId, TxnId};
@@ -20,6 +21,33 @@ use std::sync::atomic::AtomicUsize;
 thread_local! {
     static HELD_WRITE_GUARD_FRAMES: std::cell::RefCell<std::collections::HashSet<FrameId>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
+    static PINNED_FRAME_COUNTS: std::cell::RefCell<std::collections::HashMap<FrameId, u32>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(debug_assertions)]
+fn note_pin(frame_id: FrameId) {
+    PINNED_FRAME_COUNTS.with(|counts| {
+        *counts.borrow_mut().entry(frame_id).or_insert(0) += 1;
+    });
+}
+
+#[cfg(debug_assertions)]
+fn note_unpin(frame_id: FrameId) {
+    PINNED_FRAME_COUNTS.with(|counts| {
+        let mut counts = counts.borrow_mut();
+        if let Some(count) = counts.get_mut(&frame_id) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&frame_id);
+            }
+        }
+    });
+}
+
+#[cfg(debug_assertions)]
+fn calling_thread_holds_every_frame(pool_size: usize) -> bool {
+    PINNED_FRAME_COUNTS.with(|counts| counts.borrow().len() >= pool_size)
 }
 
 struct Frame {
@@ -34,6 +62,7 @@ struct PoolIndex {
     free_list: Vec<FrameId>,
     replacer: Box<dyn Replacer>,
     owned: Vec<bool>,
+    loading: std::collections::HashSet<PageId>,
 }
 
 #[cfg(any(test, feature = "test-util"))]
@@ -45,12 +74,17 @@ pub struct BufferPool {
     log_manager: LogManager,
     frames: Box<[Frame]>,
     index: Mutex<PoolIndex>,
+    frame_available: Condvar,
+    page_installed: Condvar,
+    frame_wait_timeout: Duration,
     #[cfg(any(test, feature = "test-util"))]
     fetch_count: AtomicUsize,
     #[cfg(any(test, feature = "test-util"))]
     write_observations: Mutex<Vec<WriteObservation>>,
     #[cfg(any(test, feature = "test-util"))]
     install_hook: Mutex<Option<Box<InstallHook>>>,
+    #[cfg(any(test, feature = "test-util"))]
+    frame_wait_count: AtomicUsize,
 }
 
 #[cfg(any(test, feature = "test-util"))]
@@ -62,6 +96,8 @@ pub struct WriteObservation {
 }
 
 impl BufferPool {
+    pub const DEFAULT_FRAME_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+
     pub fn new(
         disk_manager: DiskManager,
         dwb: DoubleWriteBuffer,
@@ -91,14 +127,25 @@ impl BufferPool {
                 free_list,
                 replacer,
                 owned,
+                loading: std::collections::HashSet::new(),
             }),
+            frame_available: Condvar::new(),
+            page_installed: Condvar::new(),
+            frame_wait_timeout: Self::DEFAULT_FRAME_WAIT_TIMEOUT,
             #[cfg(any(test, feature = "test-util"))]
             fetch_count: AtomicUsize::new(0),
             #[cfg(any(test, feature = "test-util"))]
             write_observations: Mutex::new(Vec::new()),
             #[cfg(any(test, feature = "test-util"))]
             install_hook: Mutex::new(None),
+            #[cfg(any(test, feature = "test-util"))]
+            frame_wait_count: AtomicUsize::new(0),
         }
+    }
+
+    pub fn with_frame_wait_timeout(mut self, timeout: Duration) -> Self {
+        self.frame_wait_timeout = timeout;
+        self
     }
 
     #[cfg(any(test, feature = "test-util"))]
@@ -109,6 +156,11 @@ impl BufferPool {
     #[cfg(any(test, feature = "test-util"))]
     pub fn reset_fetch_count(&self) {
         self.fetch_count.store(0, Ordering::Relaxed);
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn frame_wait_count(&self) -> usize {
+        self.frame_wait_count.load(Ordering::Relaxed)
     }
 
     #[cfg(any(test, feature = "test-util"))]
@@ -144,12 +196,13 @@ impl BufferPool {
     }
 
     #[cfg(any(test, feature = "test-util"))]
-    pub fn assert_invariants(&self) {
+    pub fn assert_frame_accounting(&self) {
         let index = recover_lock(self.index.lock(), "BufferPool.index");
-        let mut seen_frames = std::collections::HashSet::new();
+
+        let mut mapped_frames = std::collections::HashSet::new();
         for (&page_id, &frame_id) in index.page_table.iter() {
             assert!(
-                seen_frames.insert(frame_id),
+                mapped_frames.insert(frame_id),
                 "frame {frame_id:?} is mapped from more than one page id in the page table"
             );
             assert_eq!(
@@ -157,6 +210,36 @@ impl BufferPool {
                 Some(page_id),
                 "page table maps {page_id:?} -> {frame_id:?}, but frame_page[{frame_id:?}] \
                  disagrees"
+            );
+        }
+
+        let free_frames: std::collections::HashSet<FrameId> =
+            index.free_list.iter().copied().collect();
+        for &frame_id in &free_frames {
+            let idx = frame_id.0 as usize;
+            assert_eq!(
+                index.frame_page[idx], None,
+                "frame {frame_id:?} is in the free list but frame_page[{frame_id:?}] is {:?}",
+                index.frame_page[idx]
+            );
+            assert!(
+                !index.owned[idx],
+                "frame {frame_id:?} is in the free list but also marked owned"
+            );
+        }
+
+        for (idx, &owned) in index.owned.iter().enumerate() {
+            if !owned {
+                continue;
+            }
+            let frame_id = FrameId(idx as u32);
+            assert!(
+                !mapped_frames.contains(&frame_id),
+                "frame {frame_id:?} is marked owned but still mapped in the page table"
+            );
+            assert!(
+                !free_frames.contains(&frame_id),
+                "frame {frame_id:?} is marked owned but also in the free list"
             );
         }
     }
@@ -181,18 +264,69 @@ impl BufferPool {
             return Ok(frame_id);
         }
 
-        metrics::counter!("buffer_pool_misses_total").increment(1);
-        let frame_id = self.acquire_free_frame()?;
-        #[cfg(any(test, feature = "test-util"))]
-        self.call_install_hook(frame_id);
-        let mut page = Page::new(page_id);
-        self.disk_manager.read_page(page_id, &mut page)?;
-        // TODO(M10.2): two threads missing on the same page each still pay for
-        // this read - try_install below discards the loser's copy rather than
-        // avoiding the second read. Avoiding it needs a per-page "loading"
-        // placeholder other threads wait on; worth adding once there's
-        // contention to measure.
-        Ok(self.try_install(frame_id, page_id, page, None))
+        let deadline = Instant::now() + self.frame_wait_timeout;
+        {
+            let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+            loop {
+                if let Some(&frame_id) = index.page_table.get(&page_id) {
+                    self.pin_locked(&mut index, frame_id);
+                    metrics::counter!("buffer_pool_hits_total").increment(1);
+                    return Ok(frame_id);
+                }
+                if index.loading.insert(page_id) {
+                    break;
+                }
+                let now = Instant::now();
+                if now >= deadline {
+                    let waited_ms = self.frame_wait_timeout.as_millis() as u64;
+                    tracing::warn!(
+                        page_id = page_id.0,
+                        waited_ms,
+                        "timed out waiting for another thread's load of this page"
+                    );
+                    return Err(StorageError::BufferPoolWaitTimedOut { waited_ms });
+                }
+                index = recover_lock(
+                    self.page_installed
+                        .wait_timeout(index, deadline.saturating_duration_since(now)),
+                    "BufferPool.page_installed",
+                )
+                .0;
+            }
+        }
+
+        let result = (|| {
+            metrics::counter!("buffer_pool_misses_total").increment(1);
+            let frame_id = self.acquire_free_frame()?;
+            #[cfg(any(test, feature = "test-util"))]
+            self.call_install_hook(frame_id);
+            let mut page = Page::new(page_id);
+            match self.disk_manager.read_page(page_id, &mut page) {
+                Ok(()) => Ok(self.try_install(frame_id, page_id, page, None)),
+                Err(err) => {
+                    self.release_owned_frame(frame_id);
+                    Err(err)
+                }
+            }
+        })();
+
+        {
+            let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+            index.loading.remove(&page_id);
+        }
+        self.page_installed.notify_all();
+
+        result
+    }
+
+    fn release_owned_frame(&self, frame_id: FrameId) {
+        let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+        let idx = frame_id.0 as usize;
+        debug_assert!(index.owned[idx], "frame {frame_id:?} not marked owned when released");
+        index.owned[idx] = false;
+        index.free_list.push(frame_id);
+        drop(index);
+        self.frame_available.notify_one();
     }
 
     pub fn new_page(&self, txn_id: TxnId) -> Result<(PageId, PageWriteGuard<'_>), StorageError> {
@@ -297,33 +431,66 @@ impl BufferPool {
         metrics::gauge!("buffer_pool_pinned_frames").increment(1.0);
         index.replacer.record_access(frame_id);
         index.replacer.set_evictable(frame_id, false);
+        #[cfg(debug_assertions)]
+        note_pin(frame_id);
     }
 
     fn acquire_free_frame(&self) -> Result<FrameId, StorageError> {
-        let (frame_id, victim_page_id) = {
-            let mut index = recover_lock(self.index.lock(), "BufferPool.index");
-            let (frame_id, victim_page_id) = if let Some(frame_id) = index.free_list.pop() {
-                (frame_id, None)
-            } else {
-                let Some(frame_id) = index.replacer.evict() else {
-                    tracing::warn!(
-                        pool_size = self.frames.len(),
-                        "buffer pool exhausted: every frame is pinned"
-                    );
-                    return Err(StorageError::BufferPoolExhausted);
-                };
+        let started = Instant::now();
+        let deadline = started + self.frame_wait_timeout;
+        let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+
+        let (frame_id, victim_page_id) = loop {
+            if let Some(frame_id) = index.free_list.pop() {
+                break (frame_id, None);
+            }
+            if let Some(frame_id) = index.replacer.evict() {
                 let idx = frame_id.0 as usize;
                 let victim_page_id = index.frame_page[idx].take();
                 if let Some(victim_page_id) = victim_page_id {
                     index.page_table.remove(&victim_page_id);
                 }
-                (frame_id, victim_page_id)
-            };
-            let idx = frame_id.0 as usize;
-            debug_assert!(!index.owned[idx], "frame {frame_id:?} already owned when acquired");
-            index.owned[idx] = true;
-            (frame_id, victim_page_id)
+                break (frame_id, victim_page_id);
+            }
+
+            #[cfg(debug_assertions)]
+            if calling_thread_holds_every_frame(self.frames.len()) {
+                tracing::warn!(
+                    pool_size = self.frames.len(),
+                    "buffer pool exhausted: every frame is pinned by the calling thread; \
+                     waiting would self-deadlock"
+                );
+                return Err(StorageError::BufferPoolExhausted);
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                let waited_ms = started.elapsed().as_millis() as u64;
+                tracing::warn!(
+                    pool_size = self.frames.len(),
+                    waited_ms,
+                    "timed out waiting for a free buffer pool frame"
+                );
+                return Err(StorageError::BufferPoolWaitTimedOut { waited_ms });
+            }
+
+            metrics::counter!("buffer_pool_frame_waits_total").increment(1);
+            #[cfg(any(test, feature = "test-util"))]
+            self.frame_wait_count.fetch_add(1, Ordering::Relaxed);
+            let wait_start = Instant::now();
+            let (guard, _timed_out) = recover_lock(
+                self.frame_available.wait_timeout(index, deadline.saturating_duration_since(now)),
+                "BufferPool.frame_available",
+            );
+            index = guard;
+            metrics::histogram!("buffer_pool_frame_wait_seconds")
+                .record(wait_start.elapsed().as_secs_f64());
         };
+
+        let idx = frame_id.0 as usize;
+        debug_assert!(!index.owned[idx], "frame {frame_id:?} already owned when acquired");
+        index.owned[idx] = true;
+        drop(index);
 
         if let Some(victim_page_id) = victim_page_id {
             tracing::trace!(page_id = victim_page_id.0, frame_id = frame_id.0, "evict");
@@ -349,6 +516,7 @@ impl BufferPool {
             index.owned[idx] = false;
             index.free_list.push(frame_id);
             self.pin_locked(&mut index, winner);
+            self.frame_available.notify_one();
             return winner;
         }
 
@@ -393,12 +561,15 @@ impl BufferPool {
         if current == 0 {
             return;
         }
+        #[cfg(debug_assertions)]
+        note_unpin(frame_id);
         let remaining = pin_count.fetch_sub(1, Ordering::AcqRel) - 1;
         metrics::gauge!("buffer_pool_pinned_frames").decrement(1.0);
         if remaining == 0 {
             let mut index = recover_lock(self.index.lock(), "BufferPool.index");
             if pin_count.load(Ordering::Acquire) == 0 && !index.owned[idx] {
                 index.replacer.set_evictable(frame_id, true);
+                self.frame_available.notify_one();
             }
         }
     }

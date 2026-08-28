@@ -8,6 +8,9 @@ pub enum StorageError {
     #[error("buffer pool exhausted: no evictable frame available")]
     BufferPoolExhausted,
 
+    #[error("timed out after waiting {waited_ms}ms for a free buffer pool frame")]
+    BufferPoolWaitTimedOut { waited_ms: u64 },
+
     #[error("corrupt page {page_id}: {reason}")]
     CorruptPage { page_id: u32, reason: String },
 
@@ -63,6 +66,9 @@ impl From<StorageError> for common::Error {
         match err {
             StorageError::Io(err) => common::Error::Io(err),
             StorageError::BufferPoolExhausted => common::Error::BufferPoolExhausted,
+            StorageError::BufferPoolWaitTimedOut { waited_ms } => {
+                common::Error::BufferPoolWaitTimedOut { waited_ms }
+            }
             StorageError::CorruptPage { page_id, reason } => {
                 common::Error::CorruptPage { page_id, reason }
             }
