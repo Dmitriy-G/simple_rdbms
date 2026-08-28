@@ -27,6 +27,7 @@ what closes each of those gaps and in what order.
 - [Commands](#commands)
 - [Dependency-edge rules](#dependency-edge-rules)
 - [Documentation](#documentation)
+- [Lint suppressions](#lint-suppressions)
 - [Error handling](#error-handling)
 - [Logging](#logging)
 - [Commit and branch conventions](#commit-and-branch-conventions)
@@ -80,11 +81,17 @@ mistake at review time.
   self-deadlocks. Use `fetch_page_read` for a second, read-only view.
   Debug builds detect the mistake and panic instead of hanging
   (`docs/adr/0008-write-guard-reentrancy.md`).
-- **All-zero pages are valid.** `heap::NO_NEXT_PAGE` is `PageId(0)` and a
-  slotted page's used-space count is computed so it reads as zero on an
-  untouched page, specifically so a freshly allocated page — all zero
-  bytes, never explicitly initialized — decodes as a valid, empty page
-  rather than a corrupt one. Any new on-disk struct must preserve this:
+- **All-zero pages are valid.** The `NO_NEXT_PAGE` constant in
+  `crates/storage/src/heap.rs` is `PageId(0)`, and a slotted page's
+  used-space count is computed so it reads as zero on an untouched page,
+  specifically so a freshly allocated page — all zero bytes, never
+  explicitly initialized — decodes as a valid, empty page rather than a
+  corrupt one. This came from a real bug: a page allocated but never
+  flushed read back as all zeros, its zero `next_page_id` was taken for a
+  real page id, the heap scan followed it to page 0, and the file
+  header's magic bytes were read as a slot count of 17734, walking off
+  the end of the page. See `heap.MD`'s `NO_NEXT_PAGE` entry for the fix
+  this motivated. Any new on-disk struct must preserve the same property:
   pick encodings where all-zeros is a legal, safe state.
 - **The page-0 header is versioned and logged.** Its format version is
   checked on open (`disk::header::VERSION_RANGE`) and every mutation to
@@ -240,6 +247,33 @@ siblings, missing `.rs` siblings, a missing `## Key Components` or
 public item undocumented in its sibling `.MD`, a crate missing its
 `README.md`, or a disallowed comment all fail the build.
 
+## Lint suppressions
+
+Lint suppressions live in configuration, not in source. A lint that needs
+disabling is disabled in the workspace `Cargo.toml`'s
+`[workspace.lints.clippy]`, in a crate's own `[lints.clippy]` table, or in
+`clippy.toml` — never as an `#[allow]` or `#[expect]` attribute in a `.rs`
+file. This follows from the no-comments convention above: code stays
+clean and the prose explaining a suppression lives elsewhere, not next to
+it.
+
+The current exceptions are a known, closed set - six `#[allow(dead_code)]`
+attributes across four files, none of them expressible in configuration
+since each silences one specific field or item rather than a lint
+crate-wide:
+
+- `crates/txn/src/lock_manager.rs`'s `LockManager::holders` and
+  `crates/executor/src/operators/nested_loop_join.rs`'s
+  `NestedLoopJoinExecutor::{left, right, predicate}` mark work that
+  belongs to a milestone not yet built (M10's lock manager, M11's join
+  executor, `docs/ROADMAP.md`) and should disappear when that milestone
+  lands and starts reading them.
+- `crates/storage/src/disk.rs`'s `DiskManager::path` and
+  `crates/storage/src/replacer.rs`'s `LruKReplacer::capacity` are fields
+  kept for future use that nothing reads yet.
+
+Do not add a seventh without updating this list.
+
 ## Error handling
 
 `common::Error` is the one error type every layer converges on; every
@@ -360,7 +394,8 @@ The crash-injection harness (`crates/engine/tests/crash_injection.rs`,
 primary correctness gate for durability, and sweeps every write point
 across several workloads under four durability models
 (`DurabilityModel::write_is_durable`/`requires_sync`/`torn_write`/
-`torn_write_requires_sync`, `storage::block_device.rs`), asserting the
+`torn_write_requires_sync`, `crates/storage/src/block_device.rs`),
+asserting the
 state recovered after a crash at that point matches a safely committed
 prefix. Any change to storage, the WAL, recovery, or the double-write
 buffer must run both of these before it is considered done, and a change
