@@ -33,7 +33,11 @@ struct PoolIndex {
     frame_page: Vec<Option<PageId>>,
     free_list: Vec<FrameId>,
     replacer: Box<dyn Replacer>,
+    owned: Vec<bool>,
 }
+
+#[cfg(any(test, feature = "test-util"))]
+type InstallHook = dyn Fn(FrameId) + Send + Sync;
 
 pub struct BufferPool {
     disk_manager: DiskManager,
@@ -45,6 +49,8 @@ pub struct BufferPool {
     fetch_count: AtomicUsize,
     #[cfg(any(test, feature = "test-util"))]
     write_observations: Mutex<Vec<WriteObservation>>,
+    #[cfg(any(test, feature = "test-util"))]
+    install_hook: Mutex<Option<Box<InstallHook>>>,
 }
 
 #[cfg(any(test, feature = "test-util"))]
@@ -72,6 +78,7 @@ impl BufferPool {
             .collect();
         let frame_page = vec![None; pool_size];
         let free_list = (0..pool_size as u32).map(FrameId).collect();
+        let owned = vec![false; pool_size];
 
         Self {
             disk_manager,
@@ -83,11 +90,14 @@ impl BufferPool {
                 frame_page,
                 free_list,
                 replacer,
+                owned,
             }),
             #[cfg(any(test, feature = "test-util"))]
             fetch_count: AtomicUsize::new(0),
             #[cfg(any(test, feature = "test-util"))]
             write_observations: Mutex::new(Vec::new()),
+            #[cfg(any(test, feature = "test-util"))]
+            install_hook: Mutex::new(None),
         }
     }
 
@@ -115,6 +125,42 @@ impl BufferPool {
             .count()
     }
 
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn set_install_hook(&self, hook: impl Fn(FrameId) + Send + Sync + 'static) {
+        *recover_lock(self.install_hook.lock(), "BufferPool.install_hook") = Some(Box::new(hook));
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn clear_install_hook(&self) {
+        *recover_lock(self.install_hook.lock(), "BufferPool.install_hook") = None;
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn call_install_hook(&self, frame_id: FrameId) {
+        let hook = recover_lock(self.install_hook.lock(), "BufferPool.install_hook");
+        if let Some(hook) = hook.as_deref() {
+            hook(frame_id);
+        }
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn assert_invariants(&self) {
+        let index = recover_lock(self.index.lock(), "BufferPool.index");
+        let mut seen_frames = std::collections::HashSet::new();
+        for (&page_id, &frame_id) in index.page_table.iter() {
+            assert!(
+                seen_frames.insert(frame_id),
+                "frame {frame_id:?} is mapped from more than one page id in the page table"
+            );
+            assert_eq!(
+                index.frame_page[frame_id.0 as usize],
+                Some(page_id),
+                "page table maps {page_id:?} -> {frame_id:?}, but frame_page[{frame_id:?}] \
+                 disagrees"
+            );
+        }
+    }
+
     pub fn fetch_page(&self, page_id: PageId) -> Result<PageWriteGuard<'_>, StorageError> {
         let frame_id = self.fetch_frame(page_id)?;
         Ok(self.write_guard(page_id, frame_id))
@@ -137,6 +183,8 @@ impl BufferPool {
 
         metrics::counter!("buffer_pool_misses_total").increment(1);
         let frame_id = self.acquire_free_frame()?;
+        #[cfg(any(test, feature = "test-util"))]
+        self.call_install_hook(frame_id);
         let mut page = Page::new(page_id);
         self.disk_manager.read_page(page_id, &mut page)?;
         // TODO(M10.2): two threads missing on the same page each still pay for
@@ -151,6 +199,8 @@ impl BufferPool {
         let page_id = self.disk_manager.allocate_page()?;
         let lsn = self.append_log(txn_id, LogRecordKind::AllocPage { page_id })?;
         let frame_id = self.acquire_free_frame()?;
+        #[cfg(any(test, feature = "test-util"))]
+        self.call_install_hook(frame_id);
         let frame_id = self.try_install(frame_id, page_id, Page::new(page_id), Some(lsn));
         Ok((page_id, self.write_guard(page_id, frame_id)))
     }
@@ -252,7 +302,7 @@ impl BufferPool {
     fn acquire_free_frame(&self) -> Result<FrameId, StorageError> {
         let (frame_id, victim_page_id) = {
             let mut index = recover_lock(self.index.lock(), "BufferPool.index");
-            if let Some(frame_id) = index.free_list.pop() {
+            let (frame_id, victim_page_id) = if let Some(frame_id) = index.free_list.pop() {
                 (frame_id, None)
             } else {
                 let Some(frame_id) = index.replacer.evict() else {
@@ -268,7 +318,11 @@ impl BufferPool {
                     index.page_table.remove(&victim_page_id);
                 }
                 (frame_id, victim_page_id)
-            }
+            };
+            let idx = frame_id.0 as usize;
+            debug_assert!(!index.owned[idx], "frame {frame_id:?} already owned when acquired");
+            index.owned[idx] = true;
+            (frame_id, victim_page_id)
         };
 
         if let Some(victim_page_id) = victim_page_id {
@@ -289,19 +343,22 @@ impl BufferPool {
         dirty_since_lsn: Option<Lsn>,
     ) -> FrameId {
         let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+        let idx = frame_id.0 as usize;
+        debug_assert!(index.owned[idx], "frame {frame_id:?} not marked owned in try_install");
         if let Some(&winner) = index.page_table.get(&page_id) {
+            index.owned[idx] = false;
             index.free_list.push(frame_id);
             self.pin_locked(&mut index, winner);
             return winner;
         }
 
-        let idx = frame_id.0 as usize;
         *recover_lock(self.frames[idx].page.write(), "BufferPool.frame.page") = page;
         self.frames[idx]
             .dirty_since_lsn
             .store(dirty_since_lsn.map_or(0, |lsn| lsn.0), Ordering::Release);
         index.page_table.insert(page_id, frame_id);
         index.frame_page[idx] = Some(page_id);
+        index.owned[idx] = false;
         self.pin_locked(&mut index, frame_id);
         frame_id
     }
@@ -340,7 +397,7 @@ impl BufferPool {
         metrics::gauge!("buffer_pool_pinned_frames").decrement(1.0);
         if remaining == 0 {
             let mut index = recover_lock(self.index.lock(), "BufferPool.index");
-            if pin_count.load(Ordering::Acquire) == 0 {
+            if pin_count.load(Ordering::Acquire) == 0 && !index.owned[idx] {
                 index.replacer.set_evictable(frame_id, true);
             }
         }

@@ -1,5 +1,6 @@
 use std::error::Error;
-use std::sync::{Arc, Barrier};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Barrier, Mutex, mpsc};
 use std::thread;
 
 use common::TxnId;
@@ -85,6 +86,7 @@ fn eight_threads_fetching_reading_and_releasing_never_see_torn_or_wrong_page_con
     for handle in handles {
         handle.join().expect("worker thread panicked")?;
     }
+    pool.assert_invariants();
     Ok(())
 }
 
@@ -147,6 +149,7 @@ fn concurrent_read_modify_write_cycles_never_lose_an_update() -> Result<(), Box<
         }
     }
 
+    pool.assert_invariants();
     pool.flush_all()?;
     drop(pool);
 
@@ -165,6 +168,7 @@ fn concurrent_read_modify_write_cycles_never_lose_an_update() -> Result<(), Box<
             expected[slot]
         );
     }
+    reopened.assert_invariants();
     Ok(())
 }
 
@@ -214,5 +218,108 @@ fn two_threads_racing_a_cold_page_install_yields_exactly_one_frame() -> Result<(
             "page {page_id:?}: expected exactly one resident frame after the race"
         );
     }
+    pool.assert_invariants();
+    Ok(())
+}
+
+const HAMMER_THREAD_COUNT: usize = 8;
+const HAMMER_ITERATIONS_WHILE_PARKED: u64 = 20_000;
+
+#[test]
+fn an_owned_frame_is_never_resurrected_by_a_racing_unpin() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
+    let dwb = DoubleWriteBuffer::open(
+        dir.path().join("test.db.dwb"),
+        DoubleWriteBuffer::DEFAULT_CAPACITY,
+    )?;
+    let log = LogManager::open(dir.path().join("test.db.wal"))?;
+    let replacer = Box::new(LruKReplacer::new(1, 2));
+    let pool = Arc::new(BufferPool::new(disk, dwb, log, 1, replacer));
+
+    let (p_old, guard) = pool.new_page(TxnId(0))?;
+    drop(guard);
+    let (p_new, guard) = pool.new_page(TxnId(0))?;
+    drop(guard);
+    pool.flush_all()?;
+    drop(pool.fetch_page_read(p_old)?);
+
+    let hook_fired = Arc::new(AtomicBool::new(false));
+    let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
+    let release_rx = Mutex::new(Some(release_rx));
+    {
+        let hook_fired = Arc::clone(&hook_fired);
+        pool.set_install_hook(move |_frame_id| {
+            if hook_fired.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            if let Some(rx) = release_rx.lock().expect("install_hook mutex poisoned").take() {
+                rx.recv().ok();
+            }
+        });
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let iterations = Arc::new(AtomicU64::new(0));
+    let hammer_handles: Vec<_> = (0..HAMMER_THREAD_COUNT)
+        .map(|_| {
+            let pool = Arc::clone(&pool);
+            let stop = Arc::clone(&stop);
+            let iterations = Arc::clone(&iterations);
+            thread::spawn(move || {
+                while !stop.load(Ordering::Relaxed) {
+                    if let Ok(guard) = pool.fetch_page_read(p_old) {
+                        drop(guard);
+                    }
+                    iterations.fetch_add(1, Ordering::Relaxed);
+                }
+            })
+        })
+        .collect();
+
+    let installed = Arc::new(AtomicBool::new(false));
+    let installer = {
+        let pool = Arc::clone(&pool);
+        let installed = Arc::clone(&installed);
+        thread::spawn(move || {
+            loop {
+                if let Ok(guard) = pool.fetch_page_read(p_new) {
+                    drop(guard);
+                    installed.store(true, Ordering::Release);
+                    break;
+                }
+            }
+        })
+    };
+
+    while !hook_fired.load(Ordering::Relaxed) {
+        std::hint::spin_loop();
+    }
+    let target = iterations.load(Ordering::Relaxed) + HAMMER_ITERATIONS_WHILE_PARKED;
+    while iterations.load(Ordering::Relaxed) < target {
+        std::hint::spin_loop();
+    }
+
+    stop.store(true, Ordering::Relaxed);
+    for handle in hammer_handles {
+        handle.join().expect("hammer thread panicked");
+    }
+    release_tx.send(()).ok();
+
+    installer.join().expect("installer thread panicked");
+    pool.clear_install_hook();
+    assert!(installed.load(Ordering::Acquire), "installer never brought {p_new:?} in");
+
+    pool.assert_invariants();
+    assert_eq!(
+        pool.frame_count_for(p_new),
+        1,
+        "page {p_new:?}: expected exactly one resident frame after the race"
+    );
+    assert_eq!(
+        pool.frame_count_for(p_old),
+        0,
+        "page {p_old:?}: should have been evicted to make room for {p_new:?}"
+    );
     Ok(())
 }

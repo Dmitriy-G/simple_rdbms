@@ -12,7 +12,12 @@ new page must be brought into memory and no frame is free, and
   that `frame_id` was just accessed, for recency/frequency bookkeeping.
   `set_evictable(&mut self, frame_id, evictable)` marks `frame_id` as
   evictable (pin count dropped to zero) or not (pin count rose above
-  zero). `evict(&mut self) -> Option<FrameId>` picks a victim frame to
+  zero); it only ever modifies an entry that `record_access` has already
+  created and is a no-op on any `frame_id` the replacer isn't tracking -
+  a frame the replacer doesn't know about is either still owned by
+  whichever caller is installing it, or sitting in the buffer pool's free
+  list, and in both cases the replacer treating it as evictable would be
+  wrong (`docs/adr/0009-buffer-pool-frame-ownership.md`). `evict(&mut self) -> Option<FrameId>` picks a victim frame to
   evict according to the replacement policy, and stops tracking it;
   returns `None` if no frame is evictable. `remove(&mut self, frame_id)`
   removes a frame from tracking entirely, e.g. because its page was

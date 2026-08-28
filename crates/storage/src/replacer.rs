@@ -50,8 +50,6 @@ impl Replacer for LruKReplacer {
     fn set_evictable(&mut self, frame_id: FrameId, evictable: bool) {
         if let Some(entry) = self.frames.get_mut(&frame_id) {
             entry.evictable = evictable;
-        } else if evictable {
-            self.frames.insert(frame_id, FrameEntry { history: VecDeque::new(), evictable: true });
         }
     }
 

@@ -6,11 +6,14 @@ real, simultaneous access - not the type-level `Send + Sync` proof
 stress test of `BufferPool::fetch_page_read`/pin/eviction, and (M10.2)
 of the double-checked install (`buffer::BufferPool::try_install`,
 `buffer.MD`) that closes the double-fetch race two threads missing on
-the same page at once used to hit. Deliberately does not exercise
-transaction isolation, which M10.1 does not add (see `buffer.MD`'s
-latch-ordering rule); it only exercises the frame-level `RwLock`,
-pin-count bookkeeping, and page-table publication that isolation will
-eventually sit on top of.
+the same page at once used to hit, and (`docs/adr/0009-buffer-pool-frame-ownership.md`)
+of the frame-ownership flag that closes a second, rarer race in the same
+neighborhood - a stale `unpin_frame` re-check resurrecting a frame
+another thread had already evicted and was still installing into.
+Deliberately does not exercise transaction isolation, which M10.1 does
+not add (see `buffer.MD`'s latch-ordering rule); it only exercises the
+frame-level `RwLock`, pin-count bookkeeping, and page-table publication
+that isolation will eventually sit on top of.
 
 ## Key Components
 
@@ -112,6 +115,49 @@ eventually sit on top of.
   fail; it directly checks the invariant `try_install` exists to
   maintain (one page, one frame) without waiting for a lost update to
   manifest as a wrong number somewhere downstream.
+- Every test above finishes with `pool.assert_invariants()` (or
+  `reopened.assert_invariants()` for the read-modify-write test, since
+  `pool` itself is dropped before the reopen) - `buffer::BufferPool`'s
+  general-purpose page-table/`frame_page` consistency check
+  (`buffer.MD`), cheap enough to run unconditionally alongside whatever
+  content-level assertions each test already makes.
+- `HAMMER_THREAD_COUNT` / `HAMMER_ITERATIONS_WHILE_PARKED` - 8 threads
+  and 20,000 loop iterations, sized only to make the race below
+  overwhelmingly likely to manifest within one run rather than to model
+  anything about real workloads.
+- `an_owned_frame_is_never_resurrected_by_a_racing_unpin` - a targeted,
+  hook-driven reproduction of
+  `docs/adr/0009-buffer-pool-frame-ownership.md`'s bug, rather than
+  hoping a `Barrier` lands on the same nanosecond-scale window CI got
+  unlucky in. Uses a single-frame pool holding one page (`p_old`) and
+  installs `BufferPool::set_install_hook` to block the *first* thread
+  that wins ownership of that one frame - an "installer" thread
+  repeatedly calling `fetch_page_read` on a second, pre-allocated page
+  (`p_new`) until its `acquire_free_frame` succeeds - right after it
+  evicts `p_old`'s frame, before `try_install` publishes `p_new` into it.
+  While the installer sits parked there, `HAMMER_THREAD_COUNT` threads
+  hammer `fetch_page_read(p_old)` in a tight loop: early on this pins and
+  unpins the still-resident `p_old`, and once the installer's eviction
+  removes `p_old` from the page table, every further hammer attempt
+  itself races to evict the installer's now-`owned` frame - exactly the
+  two actions (\"an unpin and an eviction of the same frame\") the bug
+  needed a stale, in-flight thread to perform while the frame's first
+  owner was still mid-install. `stop` and `iterations` (both atomics)
+  let the test wait for `HAMMER_ITERATIONS_WHILE_PARKED` more hammer
+  passes to complete *after* the hook fires before releasing the
+  installer, turning what was originally a race with a vanishingly small
+  window into one with tens of thousands of chances to land per run.
+  Against the pre-fix code (`unpin_frame` without the `!owned[idx]`
+  check, `LruKReplacer::set_evictable` without its insert-if-absent
+  guard removed) this reliably trips the `debug_assert!` in
+  `acquire_free_frame` - a hammer thread successfully re-acquiring a
+  frame the installer still owns - well within the iteration budget,
+  confirmed by running it under a two-CPU affinity constraint (mirroring
+  the low-core CI scheduling that originally exposed the bug) for both
+  the pre-fix and post-fix code before this test was committed. After
+  releasing the installer and joining every hammer thread, asserts
+  `pool.assert_invariants()`, that `p_new` resolves to exactly one
+  frame, and that `p_old` resolves to none.
 
 ## Usage Example
 
@@ -148,9 +194,10 @@ the dedicated CI step `.github/workflows/ci.yml` adds specifically for
 this file - every test in it makes an assertion about real threads racing
 each other, which starving them of real cores by running them alongside
 every other test binary's own parallelism would make slower to fail and
-easier to falsely pass. All three tests are timing-dependent by nature
-(a `Barrier` maximizes the odds of hitting each race window, but cannot
-guarantee it on every single run the way a deterministic test would);
-before trusting a change to this file or to `buffer::BufferPool`, run
-this binary in a loop (at least 50 times, per `task.MD`'s M10.2 entry)
-rather than accepting one green run as proof.
+easier to falsely pass. All four tests are timing-dependent by nature
+(a `Barrier` or, for the frame-ownership test, a widened hook-held
+window maximizes the odds of hitting each race, but cannot guarantee it
+on every single run the way a fully deterministic test would); before
+trusting a change to this file or to `buffer::BufferPool`, run this
+binary in a loop (at least 50 times, per `task.MD`'s M10.2 entry) rather
+than accepting one green run as proof.
