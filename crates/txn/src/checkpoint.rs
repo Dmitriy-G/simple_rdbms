@@ -14,12 +14,19 @@ pub fn write_checkpoint(
     let begin_lsn = pool.append_log(CHECKPOINT_TXN, LogRecordKind::CheckpointBegin)?;
     let att = txn_manager.active_snapshot(pool);
     let dpt = pool.dirty_page_table();
+    let dpt_min = dpt.iter().map(|(_, lsn)| lsn.0).min();
     pool.append_log(CHECKPOINT_TXN, LogRecordKind::CheckpointEnd { att, dpt })?;
     pool.flush_log_all()?;
 
     let header_txn = txn_manager.begin(pool, IsolationLevel::ReadCommitted)?;
     pool.set_last_checkpoint_lsn(header_txn, begin_lsn)?;
     txn_manager.commit(header_txn, pool)?;
+
+    let att_min = txn_manager.earliest_active_begin_lsn().map(|lsn| lsn.0);
+    let truncate_bound = [dpt_min, att_min, Some(begin_lsn.0)].into_iter().flatten().min();
+    if let Some(truncate_bound) = truncate_bound {
+        pool.truncate_log_below(Lsn(truncate_bound))?;
+    }
 
     metrics::histogram!("checkpoint_duration_seconds")
         .record(checkpoint_start.elapsed().as_secs_f64());

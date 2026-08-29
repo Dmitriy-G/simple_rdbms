@@ -1,5 +1,5 @@
 use catalog::{Catalog, Column, Schema};
-use common::{TableId, TxnId};
+use common::{Lsn, TableId, TxnId};
 use executor::{Executor, ExecutorContext, SeqScanExecutor};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
@@ -57,7 +57,7 @@ fn scan_spanning_pages_preserves_insertion_order() {
     let mut catalog = Catalog::new();
     let (table_id, expected) = seed_table(&pool, &mut catalog, 800);
 
-    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted);
+    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0));
     let mut ctx = ExecutorContext::new(&catalog, &pool, &txn);
     let mut scan = SeqScanExecutor::new(table_id);
     scan.init(&mut ctx).expect("init");
@@ -75,7 +75,7 @@ fn pulling_one_tuple_never_fetches_pages_beyond_the_first() {
     let mut catalog = Catalog::new();
     let (table_id, _expected) = seed_table(&pool, &mut catalog, 800);
 
-    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted);
+    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0));
     let mut ctx = ExecutorContext::new(&catalog, &pool, &txn);
     let mut scan = SeqScanExecutor::new(table_id);
     scan.init(&mut ctx).expect("init");
@@ -96,7 +96,7 @@ fn interleaved_scans_over_the_same_table_each_yield_the_full_result() {
     let mut catalog = Catalog::new();
     let (table_id, expected) = seed_table(&pool, &mut catalog, 800);
 
-    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted);
+    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0));
     let mut ctx = ExecutorContext::new(&catalog, &pool, &txn);
 
     let mut scan_a = SeqScanExecutor::new(table_id);

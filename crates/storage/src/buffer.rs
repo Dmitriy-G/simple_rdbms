@@ -705,6 +705,10 @@ impl BufferPool {
         self.log_manager.iter_from(from)
     }
 
+    pub fn truncate_log_below(&self, bound: Lsn) -> Result<(), StorageError> {
+        self.log_manager.truncate_below(bound)
+    }
+
     pub fn read_log_at(&self, lsn: Lsn) -> Result<Option<crate::wal::LoggedRecord>, StorageError> {
         self.log_manager.read_at(lsn)
     }

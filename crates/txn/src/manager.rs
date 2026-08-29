@@ -36,8 +36,8 @@ impl TransactionManager {
             self.active.keys().collect::<Vec<_>>()
         );
         self.next_txn_id += 1;
-        pool.append_log(txn_id, LogRecordKind::Begin)?;
-        self.active.insert(txn_id, Transaction::new(txn_id, isolation_level));
+        let begin_lsn = pool.append_log(txn_id, LogRecordKind::Begin)?;
+        self.active.insert(txn_id, Transaction::new(txn_id, isolation_level, begin_lsn));
         Ok(txn_id)
     }
 
@@ -73,5 +73,9 @@ impl TransactionManager {
             .keys()
             .filter_map(|&txn_id| pool.last_lsn(txn_id).map(|lsn| (txn_id, lsn)))
             .collect()
+    }
+
+    pub fn earliest_active_begin_lsn(&self) -> Option<Lsn> {
+        self.active.values().map(|txn| txn.begin_lsn).min()
     }
 }

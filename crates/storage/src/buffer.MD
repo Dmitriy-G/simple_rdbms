@@ -586,6 +586,12 @@ same thread.
 - `BufferPool::log_iter_from(&self, from) -> Result<LogIterator, StorageError>` -
   forward iterator over every durable write-ahead log record with LSN
   `>= from`. Used by `storage::recovery` to scan the log.
+- `BufferPool::truncate_log_below(&self, bound) -> Result<(), StorageError>` -
+  wraps `LogManager::truncate_below`: deletes every whole write-ahead log
+  segment strictly below `bound`. `txn::write_checkpoint` is the only
+  caller, using a bound computed so nothing undo or redo can still reach
+  is ever deleted (`wal.MD`'s truncation invariant,
+  `docs/adr/0011-segmented-write-ahead-log.md`).
 - `BufferPool::read_log_at(&self, lsn) -> Result<Option<LoggedRecord>, StorageError>` -
   reads and decodes exactly one write-ahead log record by its LSN,
   without scanning the rest of the log. Used by `recovery::undo_transaction`

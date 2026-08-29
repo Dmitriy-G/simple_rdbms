@@ -79,12 +79,12 @@ record of *what* a write changed, which any undo (M8) or redo-after-crash
 **Solution:** a write-ahead log: every page mutation is described by a log
 record appended (and synced) before the page itself is allowed to reach
 disk, plus periodic checkpointing so recovery after a crash only has to
-scan back to the last checkpoint instead of the log's entire history.
-Checkpointing bounds recovery *time*, not the log file's size: no record
-is ever truncated or archived (`storage::wal::LogManager` only ever
-appends), so the WAL file itself keeps growing for as long as the
-database stays open — a real, still-open limitation, not one this
-milestone actually closes.
+scan back to the last checkpoint instead of the log's entire history. The
+log is a family of numbered segment files, not one ever-growing file
+(`docs/adr/0011-segmented-write-ahead-log.md`): `write_checkpoint` deletes
+every sealed segment nothing undo or redo can still reach, so the log's
+on-disk size and a reopen's startup cost both stay bounded by activity
+since the last checkpoint rather than by the database's total lifetime.
 
 ## M7 — Recovering from a crash ✅ Done
 **Problem:** the WAL (M6) only helps if something replays it. On restart

@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs::OpenOptions;
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use common::crc::crc32;
 use common::sync::recover_lock;
@@ -13,9 +13,13 @@ use crate::error::StorageError;
 
 pub const CHECKPOINT_TXN: TxnId = TxnId(u64::MAX);
 
-const MAGIC: &[u8; 8] = b"FDBWAL01";
+const SEGMENT_MAGIC: &[u8; 8] = b"FDBWAL01";
 
-pub const HEADER_LEN: u64 = MAGIC.len() as u64;
+const SEGMENT_HEADER_LEN: u64 = 16;
+
+pub const HEADER_LEN: u64 = SEGMENT_HEADER_LEN;
+
+pub const DEFAULT_SEGMENT_SIZE: u64 = 16 * 1024 * 1024;
 
 const MIN_RECORD_LEN: usize = 4 + 8 + 8 + 8 + 1 + 4 + 4;
 
@@ -236,12 +240,187 @@ fn decode_record(bytes: &[u8], pos: usize) -> Option<(LoggedRecord, usize)> {
     Some((LoggedRecord { lsn, prev_lsn, txn_id, kind }, total_len))
 }
 
+pub trait SegmentStore: Send + Sync {
+    fn existing_segments(&self) -> Result<Vec<u64>, StorageError>;
+
+    fn open(&self, id: u64) -> Result<Box<dyn BlockDevice>, StorageError>;
+
+    fn remove(&self, id: u64) -> Result<(), StorageError>;
+}
+
+pub fn segment_path(base: &Path, id: u64) -> PathBuf {
+    let mut name = base.as_os_str().to_owned();
+    name.push(format!(".{id:06}"));
+    PathBuf::from(name)
+}
+
+pub struct FileSegmentStore {
+    base: PathBuf,
+}
+
+impl FileSegmentStore {
+    pub fn new(base: impl Into<PathBuf>) -> Self {
+        Self { base: base.into() }
+    }
+}
+
+impl SegmentStore for FileSegmentStore {
+    fn existing_segments(&self) -> Result<Vec<u64>, StorageError> {
+        let dir = self.base.parent().filter(|p| !p.as_os_str().is_empty());
+        let dir = dir.unwrap_or_else(|| Path::new("."));
+        let Some(file_name) = self.base.file_name().and_then(|n| n.to_str()) else {
+            return Ok(Vec::new());
+        };
+        let prefix = format!("{file_name}.");
+
+        let mut ids = Vec::new();
+        match std::fs::read_dir(dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry?;
+                    let name = entry.file_name();
+                    let Some(name) = name.to_str() else { continue };
+                    let Some(suffix) = name.strip_prefix(&prefix) else { continue };
+                    if suffix.len() == 6
+                        && !suffix.is_empty()
+                        && suffix.bytes().all(|b| b.is_ascii_digit())
+                        && let Ok(id) = suffix.parse::<u64>()
+                    {
+                        ids.push(id);
+                    }
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+        ids.sort_unstable();
+        Ok(ids)
+    }
+
+    fn open(&self, id: u64) -> Result<Box<dyn BlockDevice>, StorageError> {
+        let path = segment_path(&self.base, id);
+        let file =
+            OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
+        Ok(Box::new(FileDevice::new(file)))
+    }
+
+    fn remove(&self, id: u64) -> Result<(), StorageError> {
+        let path = segment_path(&self.base, id);
+        match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+}
+
+struct NoSegmentStore;
+
+impl SegmentStore for NoSegmentStore {
+    fn existing_segments(&self) -> Result<Vec<u64>, StorageError> {
+        Ok(Vec::new())
+    }
+
+    fn open(&self, _id: u64) -> Result<Box<dyn BlockDevice>, StorageError> {
+        Err(StorageError::CorruptLogHeader {
+            reason: "a log opened from a single device has no segment store to roll to".to_string(),
+        })
+    }
+
+    fn remove(&self, _id: u64) -> Result<(), StorageError> {
+        Ok(())
+    }
+}
+
+fn write_segment_header(device: &dyn BlockDevice, start_lsn: u64) -> Result<(), StorageError> {
+    let mut buf = [0u8; SEGMENT_HEADER_LEN as usize];
+    buf[0..8].copy_from_slice(SEGMENT_MAGIC);
+    buf[8..16].copy_from_slice(&start_lsn.to_le_bytes());
+    device.set_len(0)?;
+    device.write_at(0, &buf)?;
+    Ok(())
+}
+
+fn read_segment_header(device: &dyn BlockDevice) -> Result<u64, StorageError> {
+    let mut buf = [0u8; SEGMENT_HEADER_LEN as usize];
+    device.read_at(0, &mut buf)?;
+    if buf[0..8] != SEGMENT_MAGIC[..] {
+        return Err(StorageError::CorruptLogHeader {
+            reason: "bad magic in write-ahead log segment header".to_string(),
+        });
+    }
+    Ok(u64::from_le_bytes([buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]]))
+}
+
+fn scan_segment(
+    device: &dyn BlockDevice,
+    start_lsn: u64,
+) -> Result<(u64, HashMap<TxnId, u64>), StorageError> {
+    let device_len = device.size()?;
+    let mut bytes = vec![0u8; device_len as usize];
+    device.read_at(0, &mut bytes)?;
+
+    let mut pos = SEGMENT_HEADER_LEN as usize;
+    let mut last_lsn_by_txn = HashMap::new();
+    while let Some((record, len)) = decode_record(&bytes, pos) {
+        last_lsn_by_txn.insert(record.txn_id, record.lsn.0);
+        pos += len;
+    }
+    device.set_len(pos as u64)?;
+
+    let next_lsn = start_lsn + (pos as u64 - SEGMENT_HEADER_LEN);
+    Ok((next_lsn, last_lsn_by_txn))
+}
+
+fn read_record_at(
+    device: &dyn BlockDevice,
+    offset: u64,
+) -> Result<Option<LoggedRecord>, StorageError> {
+    let device_len = device.size()?;
+    if offset + 4 > device_len {
+        return Ok(None);
+    }
+    let mut len_buf = [0u8; 4];
+    device.read_at(offset, &mut len_buf)?;
+    let total_len = u32::from_le_bytes(len_buf) as u64;
+    if (total_len as usize) < MIN_RECORD_LEN || offset + total_len > device_len {
+        return Ok(None);
+    }
+    let mut record_buf = vec![0u8; total_len as usize];
+    device.read_at(offset, &mut record_buf)?;
+    Ok(decode_record(&record_buf, 0).map(|(record, _)| record))
+}
+
+struct SegmentMeta {
+    id: u64,
+    start_lsn: u64,
+}
+
 struct LogBufferInner {
-    device: Box<dyn BlockDevice>,
+    store: Arc<dyn SegmentStore>,
+    target_segment_size: u64,
+    sealed: Vec<SegmentMeta>,
+    active_id: u64,
+    active_start_lsn: u64,
+    active_device: Box<dyn BlockDevice>,
     buffer: Vec<u8>,
     next_lsn: u64,
     last_lsn_by_txn: HashMap<TxnId, u64>,
     bytes_appended: u64,
+}
+
+impl LogBufferInner {
+    fn roll_segment(&mut self) -> Result<(), StorageError> {
+        self.sealed.push(SegmentMeta { id: self.active_id, start_lsn: self.active_start_lsn });
+        let new_id = self.active_id + 1;
+        let new_start_lsn = self.next_lsn;
+        let device = self.store.open(new_id)?;
+        write_segment_header(device.as_ref(), new_start_lsn)?;
+        self.active_device = device;
+        self.active_id = new_id;
+        self.active_start_lsn = new_start_lsn;
+        Ok(())
+    }
 }
 
 pub struct LogManager {
@@ -251,57 +430,96 @@ pub struct LogManager {
 
 impl LogManager {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StorageError> {
-        let path = path.into();
-        let file =
-            OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
-        Self::open_with_device(Box::new(FileDevice::new(file)))
+        let store: Arc<dyn SegmentStore> = Arc::new(FileSegmentStore::new(path.into()));
+        Self::open_with_store(store, DEFAULT_SEGMENT_SIZE)
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn open_with_segment_size(
+        path: impl Into<PathBuf>,
+        target_segment_size: u64,
+    ) -> Result<Self, StorageError> {
+        let store: Arc<dyn SegmentStore> = Arc::new(FileSegmentStore::new(path.into()));
+        Self::open_with_store(store, target_segment_size)
     }
 
     pub fn open_with_device(device: Box<dyn BlockDevice>) -> Result<Self, StorageError> {
-        let device_len = device.size()?;
+        let store: Arc<dyn SegmentStore> = Arc::new(NoSegmentStore);
+        Self::bootstrap(store, u64::MAX, 0, device, Vec::new())
+    }
 
-        if device_len < HEADER_LEN {
-            device.set_len(0)?;
-            device.write_at(0, MAGIC)?;
-            return Ok(Self {
-                inner: Mutex::new(LogBufferInner {
-                    device,
-                    buffer: Vec::new(),
-                    next_lsn: HEADER_LEN,
-                    last_lsn_by_txn: HashMap::new(),
-                    bytes_appended: 0,
-                }),
-                durable_lsn: AtomicU64::new(HEADER_LEN),
-            });
-        }
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn open_with_segment_store(
+        store: Arc<dyn SegmentStore>,
+        target_segment_size: u64,
+    ) -> Result<Self, StorageError> {
+        Self::open_with_store(store, target_segment_size)
+    }
 
-        let mut bytes = vec![0u8; device_len as usize];
-        device.read_at(0, &mut bytes)?;
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn segment_ids(&self) -> Vec<u64> {
+        let inner = recover_lock(self.inner.lock(), "LogManager.inner");
+        let mut ids: Vec<u64> = inner.sealed.iter().map(|s| s.id).collect();
+        ids.push(inner.active_id);
+        ids
+    }
 
-        if &bytes[0..HEADER_LEN as usize] != MAGIC.as_slice() {
-            return Err(StorageError::CorruptLogHeader {
-                reason: "bad magic in write-ahead log header".to_string(),
-            });
-        }
+    fn open_with_store(
+        store: Arc<dyn SegmentStore>,
+        target_segment_size: u64,
+    ) -> Result<Self, StorageError> {
+        let ids = store.existing_segments()?;
+        let (active_id, active_device, sealed_ids) = match ids.split_last() {
+            Some((&active_id, sealed_ids)) => {
+                (active_id, store.open(active_id)?, sealed_ids.to_vec())
+            }
+            None => (0, store.open(0)?, Vec::new()),
+        };
+        Self::bootstrap(store, target_segment_size, active_id, active_device, sealed_ids)
+    }
 
-        let mut pos = HEADER_LEN as usize;
+    fn bootstrap(
+        store: Arc<dyn SegmentStore>,
+        target_segment_size: u64,
+        active_id: u64,
+        active_device: Box<dyn BlockDevice>,
+        sealed_ids: Vec<u64>,
+    ) -> Result<Self, StorageError> {
+        let mut sealed = Vec::with_capacity(sealed_ids.len());
         let mut last_lsn_by_txn = HashMap::new();
-        while let Some((record, len)) = decode_record(&bytes, pos) {
-            last_lsn_by_txn.insert(record.txn_id, record.lsn.0);
-            pos += len;
+        for id in sealed_ids {
+            let device = store.open(id)?;
+            let start_lsn = read_segment_header(device.as_ref())?;
+            let (_, contributions) = scan_segment(device.as_ref(), start_lsn)?;
+            last_lsn_by_txn.extend(contributions);
+            sealed.push(SegmentMeta { id, start_lsn });
         }
-        device.set_len(pos as u64)?;
 
-        let boundary = pos as u64;
+        let active_device_len = active_device.size()?;
+        let (active_start_lsn, next_lsn) = if active_device_len < SEGMENT_HEADER_LEN {
+            write_segment_header(active_device.as_ref(), HEADER_LEN)?;
+            (HEADER_LEN, HEADER_LEN)
+        } else {
+            let start_lsn = read_segment_header(active_device.as_ref())?;
+            let (next_lsn, contributions) = scan_segment(active_device.as_ref(), start_lsn)?;
+            last_lsn_by_txn.extend(contributions);
+            (start_lsn, next_lsn)
+        };
+
         Ok(Self {
             inner: Mutex::new(LogBufferInner {
-                device,
+                store,
+                target_segment_size,
+                sealed,
+                active_id,
+                active_start_lsn,
+                active_device,
                 buffer: Vec::new(),
-                next_lsn: boundary,
+                next_lsn,
                 last_lsn_by_txn,
                 bytes_appended: 0,
             }),
-            durable_lsn: AtomicU64::new(boundary),
+            durable_lsn: AtomicU64::new(next_lsn),
         })
     }
 
@@ -324,15 +542,20 @@ impl LogManager {
             return Ok(());
         }
         let mut inner = recover_lock(self.inner.lock(), "LogManager.inner");
-        let offset = inner.device.size()?;
-        inner.device.write_at(offset, &inner.buffer)?;
+        let offset = inner.active_device.size()?;
+        inner.active_device.write_at(offset, &inner.buffer)?;
         let fsync_start = std::time::Instant::now();
-        inner.device.sync_all()?;
+        inner.active_device.sync_all()?;
         metrics::counter!("wal_fsync_total").increment(1);
         metrics::histogram!("wal_fsync_duration_seconds")
             .record(fsync_start.elapsed().as_secs_f64());
         inner.buffer.clear();
         self.durable_lsn.store(inner.next_lsn, Ordering::Release);
+
+        let active_len = inner.active_device.size()?;
+        if active_len.saturating_sub(SEGMENT_HEADER_LEN) >= inner.target_segment_size {
+            inner.roll_segment()?;
+        }
         Ok(())
     }
 
@@ -372,20 +595,55 @@ impl LogManager {
             .copied()
     }
 
-    pub fn iter_from(&self, from: Lsn) -> Result<LogIterator, StorageError> {
-        let start = from.0.max(HEADER_LEN);
-        let inner = recover_lock(self.inner.lock(), "LogManager.inner");
-        let device_len = inner.device.size()?;
-        let bytes = if start < device_len {
-            let mut buf = vec![0u8; (device_len - start) as usize];
-            inner.device.read_at(start, &mut buf)?;
-            buf.extend_from_slice(&inner.buffer);
-            buf
-        } else {
-            let buf_offset = (start - device_len) as usize;
-            inner.buffer.get(buf_offset..).unwrap_or(&[]).to_vec()
+    pub fn truncate_below(&self, bound: Lsn) -> Result<(), StorageError> {
+        let (store, to_remove) = {
+            let mut inner = recover_lock(self.inner.lock(), "LogManager.inner");
+            let mut keep_from = 0;
+            for i in 0..inner.sealed.len() {
+                let segment_end =
+                    inner.sealed.get(i + 1).map_or(inner.active_start_lsn, |s| s.start_lsn);
+                if segment_end <= bound.0 {
+                    keep_from = i + 1;
+                } else {
+                    break;
+                }
+            }
+            if keep_from == 0 {
+                return Ok(());
+            }
+            let removed: Vec<u64> = inner.sealed.drain(..keep_from).map(|s| s.id).collect();
+            (inner.store.clone(), removed)
         };
-        Ok(LogIterator { bytes, pos: 0, from: Lsn(start) })
+        for id in to_remove {
+            store.remove(id)?;
+        }
+        Ok(())
+    }
+
+    pub fn iter_from(&self, from: Lsn) -> Result<LogIterator, StorageError> {
+        let from = Lsn(from.0.max(HEADER_LEN));
+        let inner = recover_lock(self.inner.lock(), "LogManager.inner");
+
+        let start_index = inner.sealed.iter().rposition(|s| s.start_lsn <= from.0);
+        let pending_segments: VecDeque<u64> = match start_index {
+            Some(i) => inner.sealed[i..].iter().map(|s| s.id).collect(),
+            None => VecDeque::new(),
+        };
+
+        let active_len = inner.active_device.size()?;
+        let durable_part = (active_len - SEGMENT_HEADER_LEN) as usize;
+        let mut tail = vec![0u8; durable_part + inner.buffer.len()];
+        inner.active_device.read_at(SEGMENT_HEADER_LEN, &mut tail[..durable_part])?;
+        tail[durable_part..].copy_from_slice(&inner.buffer);
+
+        Ok(LogIterator {
+            store: inner.store.clone(),
+            pending_segments,
+            tail: Some(tail),
+            current: Vec::new(),
+            pos: 0,
+            from,
+        })
     }
 
     pub fn read_at(&self, lsn: Lsn) -> Result<Option<LoggedRecord>, StorageError> {
@@ -395,25 +653,28 @@ impl LogManager {
         }
         let inner = recover_lock(self.inner.lock(), "LogManager.inner");
         let durable_lsn = self.durable_lsn.load(Ordering::Acquire);
-        if offset < durable_lsn {
-            let mut len_buf = [0u8; 4];
-            inner.device.read_at(offset, &mut len_buf)?;
-            let total_len = u32::from_le_bytes(len_buf) as u64;
-            if total_len < MIN_RECORD_LEN as u64 || offset + total_len > durable_lsn {
-                return Ok(None);
-            }
-            let mut record_buf = vec![0u8; total_len as usize];
-            inner.device.read_at(offset, &mut record_buf)?;
-            Ok(decode_record(&record_buf, 0).map(|(record, _)| record))
-        } else {
+        if offset >= durable_lsn {
             let buf_offset = (offset - durable_lsn) as usize;
-            Ok(decode_record(&inner.buffer, buf_offset).map(|(record, _)| record))
+            return Ok(decode_record(&inner.buffer, buf_offset).map(|(record, _)| record));
         }
+        if offset >= inner.active_start_lsn {
+            let local = SEGMENT_HEADER_LEN + (offset - inner.active_start_lsn);
+            return read_record_at(inner.active_device.as_ref(), local);
+        }
+        let Some(meta) = inner.sealed.iter().rev().find(|s| s.start_lsn <= offset) else {
+            return Ok(None);
+        };
+        let local = SEGMENT_HEADER_LEN + (offset - meta.start_lsn);
+        let device = inner.store.open(meta.id)?;
+        read_record_at(device.as_ref(), local)
     }
 }
 
 pub struct LogIterator {
-    bytes: Vec<u8>,
+    store: Arc<dyn SegmentStore>,
+    pending_segments: VecDeque<u64>,
+    tail: Option<Vec<u8>>,
+    current: Vec<u8>,
     pos: usize,
     from: Lsn,
 }
@@ -423,10 +684,23 @@ impl Iterator for LogIterator {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let (record, len) = decode_record(&self.bytes, self.pos)?;
-            self.pos += len;
-            if record.lsn >= self.from {
-                return Some(record);
+            if let Some((record, len)) = decode_record(&self.current, self.pos) {
+                self.pos += len;
+                if record.lsn >= self.from {
+                    return Some(record);
+                }
+                continue;
+            }
+            if let Some(id) = self.pending_segments.pop_front() {
+                let device = self.store.open(id).ok()?;
+                let len = device.size().ok()?;
+                let mut buf = vec![0u8; len as usize];
+                device.read_at(0, &mut buf).ok()?;
+                self.current = buf;
+                self.pos = SEGMENT_HEADER_LEN as usize;
+            } else {
+                self.current = self.tail.take()?;
+                self.pos = 0;
             }
         }
     }

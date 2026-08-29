@@ -12,7 +12,7 @@ use crate::page::{self, CHECKSUM_RANGE, Page};
 
 const MAGIC: &[u8; 8] = b"FERRODB\0";
 
-const HEADER_VERSION: u32 = 9;
+const HEADER_VERSION: u32 = 10;
 
 pub(crate) mod header {
     pub const MAGIC_RANGE: std::ops::Range<usize> = 12..20;

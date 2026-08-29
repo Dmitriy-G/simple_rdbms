@@ -54,6 +54,15 @@ transaction had already written.
 - `TransactionManager::active_snapshot(&self, pool) -> Vec<(TxnId, Lsn)>` -
   every currently active transaction's id and most recent LSN, for a
   checkpoint's Active Transaction Table snapshot.
+- `TransactionManager::earliest_active_begin_lsn(&self) -> Option<Lsn>` -
+  the smallest `begin_lsn` among every currently active transaction, or
+  `None` if none are active. Deliberately each transaction's *first* LSN,
+  not its most recent one the way `active_snapshot` reports - `write_checkpoint`
+  uses this (not `active_snapshot`) to bound how far back the write-ahead
+  log can safely be truncated, since undo needs every record from a
+  transaction's `Begin` onward, and this engine's buffer pool can flush an
+  active transaction's early writes to disk well before it commits or
+  aborts (`docs/adr/0011-segmented-write-ahead-log.md`).
 
 ## Usage Example
 

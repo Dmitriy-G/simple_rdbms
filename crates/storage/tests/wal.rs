@@ -7,7 +7,7 @@ use storage::dwb::DoubleWriteBuffer;
 use storage::heap::TableHeap;
 use storage::page::PAGE_SIZE;
 use storage::replacer::LruKReplacer;
-use storage::wal::{HEADER_LEN, LogManager, LogRecord, LogRecordKind};
+use storage::wal::{HEADER_LEN, LogManager, LogRecord, LogRecordKind, segment_path};
 
 #[test]
 fn round_trip_mixed_record_kinds_survives_reopen() -> Result<(), Box<dyn Error>> {
@@ -73,8 +73,9 @@ fn truncated_mid_record_iterates_cleanly_up_to_last_intact_record() -> Result<()
     let commit_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
     log.flush(commit_lsn)?;
 
-    let file_len = std::fs::metadata(&path)?.len();
-    let file = std::fs::OpenOptions::new().write(true).open(&path)?;
+    let segment_file = segment_path(&path, 0);
+    let file_len = std::fs::metadata(&segment_file)?.len();
+    let file = std::fs::OpenOptions::new().write(true).open(&segment_file)?;
     file.set_len(file_len - 3)?;
     drop(file);
 
@@ -104,7 +105,8 @@ fn flipped_byte_fails_crc_at_exactly_that_record_and_stops() -> Result<(), Box<d
     let commit_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
     log.flush(commit_lsn)?;
 
-    let mut bytes = std::fs::read(&path)?;
+    let segment_file = segment_path(&path, 0);
+    let mut bytes = std::fs::read(&segment_file)?;
     let header_len = HEADER_LEN as usize;
     let first_record_len = u32::from_le_bytes([
         bytes[header_len],
@@ -114,7 +116,7 @@ fn flipped_byte_fails_crc_at_exactly_that_record_and_stops() -> Result<(), Box<d
     ]) as usize;
     let flip_at = header_len + first_record_len + 5;
     bytes[flip_at] ^= 0xFF;
-    std::fs::write(&path, &bytes)?;
+    std::fs::write(&segment_file, &bytes)?;
 
     let read_back: Vec<_> = log.iter_from(Lsn(0))?.collect();
     assert_eq!(read_back.len(), 1, "only the untouched first record should be yielded");
@@ -161,11 +163,14 @@ fn offset_lsns_survive_reopen() -> Result<(), Box<dyn Error>> {
         log.flush(lsn)?;
     }
 
-    let file_len = std::fs::metadata(&path)?.len();
+    let file_len = std::fs::metadata(segment_path(&path, 0))?.len();
 
     let log = LogManager::open(path)?;
     let next_lsn = log.append(LogRecord { txn_id: TxnId(1), kind: LogRecordKind::Commit })?;
-    assert_eq!(next_lsn.0, file_len, "the next assigned LSN must equal the file length on reopen");
+    assert_eq!(
+        next_lsn.0, file_len,
+        "the next assigned LSN must equal the active segment's file length on reopen"
+    );
 
     Ok(())
 }

@@ -1,7 +1,7 @@
 mod support;
 
 use catalog::{Catalog, Column, Schema};
-use common::{IndexId, TableId, TxnId};
+use common::{IndexId, Lsn, TableId, TxnId};
 use executor::{IndexScanExecutor, InsertExecutor};
 use storage::buffer::BufferPool;
 use support::{encoded, row};
@@ -20,7 +20,7 @@ fn seed(pool: &BufferPool, count: i32) -> (Catalog, TableId, IndexId) {
 
     let rows = (0..count).map(|i| row(vec![Value::Integer(i)])).collect();
     let mut insert = InsertExecutor::new(table_id, rows);
-    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted);
+    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0));
     support::run_to_completion(pool, &catalog, &txn, &mut insert);
     (catalog, table_id, index_id)
 }
@@ -34,7 +34,7 @@ fn scan_values(
     start: Option<Vec<u8>>,
     end: Option<Vec<u8>>,
 ) -> Vec<i32> {
-    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted);
+    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0));
     let mut scan = IndexScanExecutor::new(index_id, table_id, start, end);
     let tuples = support::run_to_completion(pool, catalog, &txn, &mut scan);
     tuples
@@ -77,7 +77,7 @@ fn index_scan_returns_every_duplicate_key() {
 
     let rows = (0..5).map(|_| row(vec![Value::Integer(7)])).collect();
     let mut insert = InsertExecutor::new(table_id, rows);
-    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted);
+    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0));
     support::run_to_completion(&pool, &catalog, &txn, &mut insert);
 
     let values = scan_values(&pool, &catalog, index_id, table_id, None, None);

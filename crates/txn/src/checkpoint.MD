@@ -5,7 +5,11 @@ Transaction Table and Dirty Page Table snapshots, and a `CheckpointEnd`
 record carrying both. Records the `CheckpointBegin` LSN in the database
 header so a future recovery knows where to start scanning. Deliberately
 does *not* flush data pages or block any other activity — a fuzzy
-checkpoint is exactly "log a snapshot," not a quiesce point.
+checkpoint is exactly "log a snapshot," not a quiesce point. Also the only
+call site that ever shrinks the write-ahead log: once the checkpoint
+records are durable, it computes how far back the log can safely be
+truncated and calls `BufferPool::truncate_log_below`
+(`docs/adr/0011-segmented-write-ahead-log.md`).
 
 Lives in `txn` rather than `storage` because it is the lowest crate
 allowed to see both an Active Transaction Table (owned by
@@ -30,7 +34,18 @@ rules.
   always reads the most recent value rather than accumulating) - see
   `docs/ROADMAP.md`'s M13 entry - then emits an `info!` naming `lsn` right
   before returning; checkpoint completion is one of the events CLAUDE.md's
-  logging section calls out at `info` by name.
+  logging section calls out at `info` by name. Finally computes
+  `min(the lowest recLSN in the Dirty Page Table, `txn_manager`'s
+  `earliest_active_begin_lsn`, this checkpoint's own `begin_lsn`)` -
+  whichever of those exist, since an empty Dirty Page Table or no active
+  transactions simply drop out of the `min` - and calls
+  `pool.truncate_log_below` with it. Using each active transaction's
+  *earliest* LSN rather than its most recently appended one (the value
+  `active_snapshot` reports, used only for the `CheckpointEnd` record
+  itself) is deliberate: `wal.MD`'s truncation invariant is that nothing
+  undo or redo can still reach may be deleted, and an active transaction's
+  undo chain can reach all the way back to its own `Begin` record
+  regardless of how many of its pages have since been flushed to disk.
 
 ## Usage Example
 

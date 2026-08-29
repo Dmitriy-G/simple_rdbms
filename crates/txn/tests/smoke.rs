@@ -1,9 +1,9 @@
-use common::TxnId;
+use common::{Lsn, TxnId};
 use txn::{IsolationLevel, LockManager, Transaction, TransactionManager, TransactionState};
 
 #[test]
 fn transaction_constructs_growing() {
-    let txn = Transaction::new(TxnId(1), IsolationLevel::SnapshotIsolation);
+    let txn = Transaction::new(TxnId(1), IsolationLevel::SnapshotIsolation, Lsn(8));
     assert_eq!(txn.state, TransactionState::Growing);
 }
 
