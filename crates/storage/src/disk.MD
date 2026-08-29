@@ -70,9 +70,20 @@ touching the file directly.
   `&File` - see `block_device.MD`), so the only state `DiskManager` itself
   needs to synchronize is page-id allocation and file growth, not the
   device. `DiskManager::open(path, page_size)` opens (creating if
-  necessary) the database file at `path`. `DiskManager::open_with_device(device,
-  page_size, path)` opens a database file backed by an arbitrary
-  `BlockDevice`, for tests and crash-injection fault wrapping. A
+  necessary) the database file at `path`, then takes an exclusive
+  advisory lock on it (`block_device::lock_exclusive`) before reading the
+  header - held for the `DiskManager`'s whole lifetime, since the lock
+  lives on the open file description and is released only when the
+  underlying `File` (owned by the `FileDevice` this constructs) is
+  dropped. Returns `StorageError::DatabaseLocked` if another process (or
+  another `DiskManager::open` call in this one - a second `open()` of the
+  same path is a distinct open file description with its own lock state,
+  which is what makes this testable within one process) already holds it.
+  `DiskManager::open_with_device(device, page_size, path)` opens a
+  database file backed by an arbitrary `BlockDevice`, for tests and
+  crash-injection fault wrapping, and takes **no** lock at all - the
+  crash and in-memory device tests that call it construct devices
+  directly and must not need a real file to lock. A
   brand-new (zero-length) device gets a fresh page-0 header written to
   it; an existing one has its header validated (magic and version) and
   `next_page_id` derived from the device's own length - `device_len /

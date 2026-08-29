@@ -15,7 +15,9 @@ existing condition - this crate has no index-specific `common::Error`
 variant of its own to map onto), `InPlaceUpdateOutOfBounds` and
 `NodeOverflow` both become `common::Error::Internal` (an invariant only a
 bug in this engine's own bookkeeping could violate, never something a
-caller's input could trigger) - see `common`'s `error.MD` for which).
+caller's input could trigger), and `DatabaseLocked` becomes
+`common::Error::DatabaseLocked` directly - see `common`'s `error.MD` for
+which).
 
 ## Key Components
 
@@ -87,7 +89,13 @@ caller's input could trigger) - see `common`'s `error.MD` for which).
   computing a split that is supposed to fit both halves in one page each,
   so this is always a logic bug in the split arithmetic upstream, never a
   condition a caller's input can trigger on its own (see `btree.MD`'s
-  "Splitting" section).
+  "Splitting" section). `DatabaseLocked { path }` means
+  `DiskManager::open` could not take the exclusive advisory lock on
+  `path` - another process (or another `DiskManager::open` call in this
+  one) already holds it (`block_device.MD`'s `lock_exclusive`). Never
+  raised by `DiskManager::open_with_device`, which takes no lock at all,
+  since the crash and in-memory device tests construct devices directly
+  and must not need a real file to lock.
 - `impl From<StorageError> for common::Error` - matches each `StorageError`
   variant to the `common::Error` variant naming the same condition,
   preserving its structured fields rather than collapsing them into a

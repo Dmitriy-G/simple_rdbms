@@ -62,6 +62,7 @@ correct, standard-sanctioned choice rather than inventing a Postgres-style
   | `UNIQUE_VIOLATION` | `23505` | 23 - integrity constraint violation |
   | `NO_ACTIVE_SQL_TRANSACTION` | `25P01` | 25 - invalid transaction state |
   | `IN_FAILED_SQL_TRANSACTION` | `25P02` | 25 - invalid transaction state |
+  | `LOCK_NOT_AVAILABLE` | `55P03` | 55 - object not in prerequisite state |
   | `SERIALIZATION_FAILURE` | `40001` | 40 - transaction rollback |
   | `STATEMENT_COMPLETION_UNKNOWN` | `40003` | 40 - transaction rollback |
   | `SYNTAX_ERROR` | `42601` | 42 - syntax error or access rule violation |

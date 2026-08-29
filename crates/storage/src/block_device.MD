@@ -43,6 +43,35 @@ workload without actually killing a process.
   `FileDevice::new(file)` wraps an already-open file. `set_len`/`sync_all`/
   `size` delegate straight to `std::fs::File`'s own methods, which are
   already `&self` (positioned I/O needs no exclusivity there either).
+- `lock_exclusive(file: &File) -> io::Result<()>` - `pub(crate)`,
+  platform-specific, next to `file_read_at`/`file_write_at` for the same
+  reason: developed on Windows, tested in CI on Linux, both must actually
+  work. Takes a non-blocking exclusive advisory lock on the whole of
+  `file`, returning an OS error immediately if another open file
+  description already holds it rather than blocking - a database process
+  should refuse to start against a locked file, not hang waiting for one
+  that may never unlock. On Unix, `flock(fd, LOCK_EX | LOCK_NB)`; the lock
+  belongs to the *open file description* the syscall was issued against
+  (not the process or the file itself), so a second, independent `open()`
+  of the same path - even from the same process - creates a new open file
+  description with its own lock state and correctly conflicts, which is
+  what makes `DiskManager::open`'s "second open refused" behavior
+  testable in a single process at all. On Windows, `LockFileEx` with
+  `LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY` locking the whole
+  file (`u32::MAX` bytes in both the low and high halves of the range),
+  which needs the `OVERLAPPED` structure the Win32 API always requires
+  for this call even though nothing here is actually asynchronous - a
+  zeroed one with a null event handle is the ordinary synchronous-call
+  idiom. Both platforms release the lock automatically when the last
+  handle/descriptor referencing that open file description closes - there
+  is no corresponding `unlock` function, since dropping the `File` (owned
+  by the `FileDevice` `DiskManager` holds for its own lifetime) is always
+  what releases it. Declared via manual `unsafe extern` blocks rather than
+  pulling in `libc`/a Windows-API crate for one function each - this
+  crate's only two other pieces of platform-specific I/O
+  (`file_read_at`/`file_write_at`) already go straight to raw OS calls
+  through `std`, and a lock taken once per `DiskManager::open` is not a
+  hot path an extra dependency would meaningfully simplify.
 - `DurabilityModel` - how `FaultyDevice` treats a completed
   `write_at`/`set_len` call: does it land on the wrapped device
   immediately, or does it only become durable once a later `sync_all`

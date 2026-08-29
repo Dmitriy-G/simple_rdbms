@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use common::PageId;
 use common::sync::recover_lock;
 
-use crate::block_device::{BlockDevice, FileDevice};
+use crate::block_device::{BlockDevice, FileDevice, lock_exclusive};
 use crate::error::StorageError;
 use crate::page::{self, CHECKSUM_RANGE, Page};
 
@@ -37,6 +37,8 @@ impl DiskManager {
         let path = path.into();
         let file =
             OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&path)?;
+        lock_exclusive(&file)
+            .map_err(|_| StorageError::DatabaseLocked { path: path.display().to_string() })?;
         Self::open_with_device(Box::new(FileDevice::new(file)), page_size, Some(path))
     }
 

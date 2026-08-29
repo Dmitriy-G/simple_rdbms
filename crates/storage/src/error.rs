@@ -64,6 +64,9 @@ pub enum StorageError {
          has {capacity}; rebuild refused rather than overflow the page"
     )]
     NodeOverflow { page_id: u32, required: usize, capacity: usize },
+
+    #[error("another process has this database open: {path}")]
+    DatabaseLocked { path: String },
 }
 
 impl From<StorageError> for common::Error {
@@ -99,6 +102,7 @@ impl From<StorageError> for common::Error {
                 common::Error::Internal { detail: message }
             }
             StorageError::NodeOverflow { .. } => common::Error::Internal { detail: message },
+            StorageError::DatabaseLocked { path } => common::Error::DatabaseLocked { path },
         }
     }
 }

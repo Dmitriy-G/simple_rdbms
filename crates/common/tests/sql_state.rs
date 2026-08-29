@@ -35,6 +35,7 @@ fn sample_errors() -> Vec<Error> {
         Error::NoActiveTransaction { statement: "COMMIT".to_string() },
         Error::TransactionAborted,
         Error::NotSupported("arithmetic".to_string()),
+        Error::DatabaseLocked { path: "test.db".to_string() },
     ]
 }
 
@@ -69,6 +70,7 @@ fn expected_sql_state(err: &Error) -> SqlState {
         Error::NoActiveTransaction { .. } => SqlState::NO_ACTIVE_SQL_TRANSACTION,
         Error::TransactionAborted => SqlState::IN_FAILED_SQL_TRANSACTION,
         Error::NotSupported(_) => SqlState::FEATURE_NOT_SUPPORTED,
+        Error::DatabaseLocked { .. } => SqlState::LOCK_NOT_AVAILABLE,
     }
 }
 

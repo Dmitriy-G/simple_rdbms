@@ -115,6 +115,12 @@ had to change, from stringifying to matching.
     well-formed request for functionality that doesn't exist yet - kept
     distinct so callers (and tests) can assert "not implemented" without
     it being confused for a real failure.
+  - `DatabaseLocked` -> `LOCK_NOT_AVAILABLE` (55P03), Fatal. From
+    `storage::StorageError::DatabaseLocked`: another process (or another
+    `DiskManager::open` in this one) already holds the exclusive advisory
+    lock `DiskManager::open` takes on the database file before it reads
+    the header (`block_device.MD`). Fatal because there is no session to
+    continue - the connection never actually opened.
 - `Error::sql_state(&self) -> SqlState` - the exhaustive match described
   above: every variant maps to exactly one `SqlState` constant, and a new
   variant fails to compile here until it's given one.

@@ -103,6 +103,9 @@ pub enum Error {
 
     #[error("not supported: {0}")]
     NotSupported(String),
+
+    #[error("another process has this database open: {path}")]
+    DatabaseLocked { path: String },
 }
 
 impl Error {
@@ -137,6 +140,7 @@ impl Error {
             Error::NoActiveTransaction { .. } => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             Error::TransactionAborted => SqlState::IN_FAILED_SQL_TRANSACTION,
             Error::NotSupported(_) => SqlState::FEATURE_NOT_SUPPORTED,
+            Error::DatabaseLocked { .. } => SqlState::LOCK_NOT_AVAILABLE,
         }
     }
 
@@ -151,7 +155,8 @@ impl Error {
             | Error::DoubleWriteRestoreFailed { .. }
             | Error::InvalidConfiguration { .. }
             | Error::DataCorrupted { .. }
-            | Error::Internal { .. } => Severity::Fatal,
+            | Error::Internal { .. }
+            | Error::DatabaseLocked { .. } => Severity::Fatal,
 
             Error::BufferPoolExhausted
             | Error::BufferPoolWaitTimedOut { .. }
@@ -209,7 +214,8 @@ impl Error {
             | Error::NestedTransaction
             | Error::NoActiveTransaction { .. }
             | Error::TransactionAborted
-            | Error::NotSupported(_) => self.to_string(),
+            | Error::NotSupported(_)
+            | Error::DatabaseLocked { .. } => self.to_string(),
 
             Error::Syntax { offset, .. } => format!("syntax error at offset {offset}: ?"),
 

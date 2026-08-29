@@ -77,6 +77,85 @@ fn file_write_at(file: &File, offset: u64, mut buf: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+pub(crate) fn lock_exclusive(file: &File) -> io::Result<()> {
+    use std::os::unix::io::AsRawFd;
+
+    unsafe extern "C" {
+        fn flock(fd: i32, operation: i32) -> i32;
+    }
+
+    const LOCK_EX: i32 = 2;
+    const LOCK_NB: i32 = 4;
+
+    // SAFETY: `file` owns a valid, open file descriptor for the duration of
+    // this call; `flock` only consults and mutates the kernel's per-open-file
+    // lock table for that descriptor and cannot invalidate Rust's view of
+    // `file`.
+    let result = unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+pub(crate) fn lock_exclusive(file: &File) -> io::Result<()> {
+    use std::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct Overlapped {
+        internal: usize,
+        internal_high: usize,
+        offset: u32,
+        offset_high: u32,
+        h_event: *mut c_void,
+    }
+
+    unsafe extern "system" {
+        fn LockFileEx(
+            file: *mut c_void,
+            flags: u32,
+            reserved: u32,
+            bytes_low: u32,
+            bytes_high: u32,
+            overlapped: *mut Overlapped,
+        ) -> i32;
+    }
+
+    const LOCKFILE_FAIL_IMMEDIATELY: u32 = 0x0000_0001;
+    const LOCKFILE_EXCLUSIVE_LOCK: u32 = 0x0000_0002;
+
+    let mut overlapped = Overlapped {
+        internal: 0,
+        internal_high: 0,
+        offset: 0,
+        offset_high: 0,
+        h_event: std::ptr::null_mut(),
+    };
+
+    // SAFETY: `file`'s raw handle is valid for the duration of this call;
+    // `overlapped` is a validly initialized structure owned exclusively by
+    // this call and not read after it returns; locking the whole byte range
+    // (`u32::MAX` in both halves) touches only the OS lock table for this
+    // handle and cannot invalidate Rust's view of `file`.
+    let result = unsafe {
+        LockFileEx(
+            file.as_raw_handle(),
+            LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+            0,
+            u32::MAX,
+            u32::MAX,
+            &mut overlapped,
+        )
+    };
+    if result == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 pub struct FileDevice(File);
 
 impl FileDevice {
