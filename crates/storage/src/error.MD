@@ -12,10 +12,10 @@ variant, `BufferPoolExhausted`/`BufferPoolWaitTimedOut`/`TupleTooLarge`/
 their own,
 `UnorderableKey` becomes `common::Error::DatatypeMismatch` (the closest
 existing condition - this crate has no index-specific `common::Error`
-variant of its own to map onto), `InPlaceUpdateOutOfBounds` becomes
-`common::Error::Internal` (an invariant only a bug in this engine's own
-bookkeeping could violate, never something a caller's input could trigger)
-- see `common`'s `error.MD` for which).
+variant of its own to map onto), `InPlaceUpdateOutOfBounds` and
+`NodeOverflow` both become `common::Error::Internal` (an invariant only a
+bug in this engine's own bookkeeping could violate, never something a
+caller's input could trigger) - see `common`'s `error.MD` for which).
 
 ## Key Components
 
@@ -79,7 +79,15 @@ bookkeeping could violate, never something a caller's input could trigger)
   tuple's bytes when `offset + patch_len` would run past the slot's
   existing `tuple_len` - an in-place update is only ever meant to overwrite
   a fixed-width sub-range of an already-encoded tuple, never to grow or
-  shrink it (see `heap.MD`).
+  shrink it (see `heap.MD`). `NodeOverflow { page_id, required, capacity }`
+  is `btree::Node::rebuild`'s capacity precondition: raised instead of
+  writing a slot array and entry payloads that would overlap, when the
+  entries a caller hands it would need more than the `capacity` bytes the
+  node's body actually has. A caller reaches `rebuild` only after
+  computing a split that is supposed to fit both halves in one page each,
+  so this is always a logic bug in the split arithmetic upstream, never a
+  condition a caller's input can trigger on its own (see `btree.MD`'s
+  "Splitting" section).
 - `impl From<StorageError> for common::Error` - matches each `StorageError`
   variant to the `common::Error` variant naming the same condition,
   preserving its structured fields rather than collapsing them into a

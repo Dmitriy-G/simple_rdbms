@@ -87,6 +87,44 @@ slot sub-array right of the insertion point in one write, write the new
 payload, write the new slot, update the header - three writes, no loop),
 and only falls back to a split when `will_fit` says no.
 
+### Ordering: leaf entries are sorted by `(key, rid)`, not `key` alone
+
+Every leaf entry's *sort key* is `leaf_sort_key(payload)`: the bare key
+bytes with the entry's own 6-byte `Rid` trailer appended, taken as one
+contiguous slice (the leaf payload is already `key_len | key | page_id |
+slot`, so `key` and `rid` sit next to each other with nothing to strip
+out). Leaf entries are kept in strictly increasing order by this sort
+key, never by the bare key alone, which is what makes every key -
+including a key repeated far more times than one leaf can hold - unique
+in sort-key terms: two entries can never tie, so a split can land at
+*any* boundary without ever separating two byte-identical entries.
+Internal nodes are unaffected by this - their own comparison key
+(`entry_key`) already holds whatever bytes were pushed up to them as a
+separator, and a leaf-split separator is now itself a sort key (see
+"Leaf split" below), so `entry_key` on an internal payload already reads
+as a sort key with no separate concept needed.
+
+A probe key with no `rid` suffix (an ordinary lookup or a bare key
+argument during descent) is always a byte-wise proper prefix of any
+separator that shares its key part, and a proper prefix always compares
+less than the longer string it prefixes. That means a bare probe key `k`
+never equals a separator `k ++ rid` and always routes to the child
+*before* that separator - the leftmost child that could hold `k`. This
+is deliberate, not a rounding error: with duplicates now able to span a
+split at any point (not just a "clean" boundary), a run of entries
+sharing `k` can begin partway through the left child too, so landing on
+the left child and then following the leaf sibling chain (`get`) or the
+range-scan cursor (`BTreeRangeIterator`) forward is the only way to be
+sure every instance of `k` is found regardless of which physical leaf it
+ended up in. `BTreeIndex::insert`, by contrast, must not use this
+leftmost-routing behavior for its own descent: a new entry has to land
+in whichever leaf its *own* sort key (`key ++ rid`, not the bare key)
+actually belongs in, which may be a leaf several splits to the right of
+the very first one that ever held `key` - so `insert` descends with
+`leaf_sort_key(&leaf_payload)`, not the bare key, precisely so a new
+duplicate finds the current tail of its own run instead of always
+piling into the oldest leaf that ever held that key.
+
 ### Choosing the split point
 
 `byte_balanced_split_point` walks the full, already-sorted `n + 1`-entry
@@ -101,25 +139,20 @@ split by size regardless of where in sorted order the overflowing entry
 landed, so ascending and descending insertion split exactly as well as a
 random one does (`ascending_insert_of_ten_thousand_keys_...` and
 `descending_insert_of_ten_thousand_keys_...` in `tests/btree.rs` both
-exercise this).
-
-A leaf split must additionally never land in the middle of a run of
-duplicate keys. The pushed-up separator is a copy of the new right leaf's
-first key (see below); if the chosen split point fell between two entries
-that share a key, the separator would equal a key still present in the
-*left* node too, violating "every key in child `i` is `< separator i`".
-`nearest_clean_boundary` searches outward from the byte-balanced target,
-in both directions, for the nearest index where the key changes (index
-`0` always qualifies, so the search always terminates), and
-`leaf_split_point` uses that adjusted index. `internal_split_point` does
-not need this adjustment for the entry it pushes up, since internal
-separators are copied from clean leaf-level boundaries in the first
-place - but see "Known limitation" below for the one case where a
-duplicate separator can still arise.
+exercise this). `leaf_split_point` is exactly this index, nudged one
+slot to the right and clamped to leave at least one entry on each side
+(`byte_balanced_split_point(entries).saturating_add(1).clamp(1, entries.len()
+- 1)`) - no further adjustment is needed, because sort-key uniqueness
+(above) means every boundary is already a legal one to split on.
+`internal_split_point` needs its own, separate clamp (`entries.len() -
+2`, not `- 1`) because an internal split additionally *removes* the
+pushed entry from both halves - see "Internal split" below - but no
+duplicate-avoidance logic of its own, for the same reason.
 
 ### Leaf split
 
-Given the merged `n + 1` entries and a clean split index `mid`:
+Given the merged `n + 1` entries and a split index `mid` (any index now
+works - see "Ordering" above):
 
 - **Left** (the original page, unchanged `PageId`) keeps entries
   `[0, mid)`.
@@ -128,10 +161,12 @@ Given the merged `n + 1` entries and a clean split index `mid`:
 - `right.tail` becomes whatever `left.tail` was *before* the split (the
   original next-sibling pointer) - the right leaf inherits the left
   leaf's old place in the sibling chain.
-- The separator copied up to the parent is `entry_key` of `right`'s first
-  entry. The key **stays in the leaf** - unlike the internal case below,
-  nothing is removed, because leaves must hold every key for `get`/
-  `range_scan` to find it without consulting internal nodes at all.
+- The separator copied up to the parent is `leaf_sort_key` of `right`'s
+  first entry - the bare key *plus* that entry's `Rid` trailer, not just
+  the bare key. The entry itself **stays in the leaf** - unlike the
+  internal case below, nothing is removed, because leaves must hold
+  every key for `get`/`range_scan` to find it without consulting internal
+  nodes at all; only a copy of its sort key travels up.
 
 ### Internal split
 
@@ -209,31 +244,42 @@ are assembled into one in-memory buffer first and written as a whole.
 the same rule at smaller scale - the whole shifted sub-array moves in one
 write, never one write per slot.
 
-### Known limitation: a single key duplicated far beyond one leaf's capacity
+### The `rebuild` capacity guard
 
-`nearest_clean_boundary` keeps a *leaf* split from ever separating two
-entries that share a key. It does not fully rule out two *internal*
-entries in the same node ending up with equal keys: if one external key
-value is duplicated enough times to overflow a leaf on its own (not just
-span a single split, but force a second, third, ... split of leaves that
-are *entirely* copies of that one key), each such split pushes the same
-key up as a separator again, and nothing currently coalesces those
-repeated pushes into one entry. `tests/btree.rs`'s duplicate-key test
-stays well under this threshold (its overflowing leaf mixes duplicates
-with distinct neighboring keys, matching the realistic "duplicates span a
-split" scenario `check_invariants` is written to accept); reaching the
-pathological case would need a single key repeated on the order of a
-leaf's whole capacity. Fixing it properly - most likely by ordering
-physical leaf entries as `(key, Rid)` rather than `key` alone, so no two
-entries are ever byte-identical - is left for whichever future milestone
-first needs an index on a low-cardinality column at that scale.
+Every caller of `Node::rebuild` computes a split point *before* calling
+it and is trusted to have gotten the arithmetic right - `rebuild` used to
+write the slot array and entry bytes it was handed with no check that
+they actually fit the page, so a wrong split point silently overwrote
+entry data with the slot array instead of failing loudly. `rebuild` now
+computes `required = local_header_size + entries.len() * SLOT_SIZE +
+entries.iter().map(Vec::len).sum()` before writing anything and returns
+`StorageError::NodeOverflow { page_id, required, capacity }` instead of
+touching the page if `required` exceeds the body's actual capacity. This
+is a safety net, not a substitute for the split arithmetic being correct
+- it turns a bug in `leaf_split_point`/`internal_split_point` (or a
+future change to either) into an immediate, loud error instead of a
+silently corrupted page, the same way `checked_slot_count` turns a bad
+slot count into `CorruptPage` instead of an out-of-bounds read. Before
+the `(key, rid)` leaf ordering above existed, a leaf entirely full of one
+repeated key had no clean boundary to split on, `leaf_split_point` fell
+back to index `0`, and `rebuild` wrote every entry onto the "right" node
+- the exact silent corruption this guard now converts into a loud
+`NodeOverflow` instead. Now that leaf entries sort by `(key, rid)`, no
+legitimate split can ever produce a `required` larger than the page, so
+this guard should never fire in practice; it stays as the same kind of
+defense in depth `checked_slot_count` already is.
 
 ## Key Components
 
 - `MAX_KEY_SIZE` - the largest key `insert` can ever accept: one that,
   entirely alone, would still fit in a freshly created, otherwise-empty
-  leaf. Checked up front, before any page is touched, the same way
-  `heap::MAX_TUPLE_SIZE` is - see `StorageError::KeyTooLarge`.
+  leaf, *and* would still fit as a lone internal separator once that same
+  `(key, rid)` pair is later pushed up by a split - the formula subtracts
+  `CHILD_TRAILER_SIZE` on top of the leaf-only budget for exactly that
+  reason, since a separator carries the `Rid` suffix a leaf key has
+  *plus* a child pointer a leaf entry does not. Checked up front, before
+  any page is touched, the same way `heap::MAX_TUPLE_SIZE` is - see
+  `StorageError::KeyTooLarge`.
 - `BTreeIndex<'pool>` - `create(buffer_pool, txn_id)` allocates a root
   page and initializes it as an empty leaf. `open(buffer_pool,
   root_page_id)` opens an existing index whose root is already known - a
@@ -272,8 +318,11 @@ first needs an index on a low-cardinality column at that scale.
   ever holding a `BTreeIndex` alive between them. `check_invariants(&self,
   key_type: Option<types::DataType>) -> Result<(), String>` walks the
   whole tree from the root and checks, in order: every leaf is
-  at the same depth; keys within a node are strictly increasing bytewise
-  (ties allowed only in leaves); every key is within the `(low, high)`
+  at the same depth; keys within a node are strictly increasing bytewise -
+  compared as `leaf_sort_key` for a leaf's own entries and as `entry_key`
+  for an internal node's separators, so leaf ties are never allowed
+  either, matching the ordering invariant above; every key is within the
+  `(low, high)`
   bound inherited from its ancestors' separators, checked against that
   inherited bound rather than only against its immediate parent, so a
   subtree grafted at the wrong place is still caught even if it looks
@@ -301,31 +350,43 @@ first needs an index on a low-cardinality column at that scale.
 - `Node<'a, 'pool>` - private. Wraps a `&mut PageGuard` plus the `TxnId`
   writes should be logged under, and is where every mutating operation on
   a single node's bytes lives: `init` (used by `create`), `will_fit`,
-  `find_insert_index`, `insert_at` (the surgical non-split path), and
-  `rebuild` (the split/root-creation path, see "Splitting" above).
+  `find_insert_index` (dispatches to `upper_bound_leaf` or `upper_bound`
+  depending on `node_type`, so a leaf compares by sort key and an
+  internal node by its separator's own stored bytes), `insert_at` (the
+  surgical non-split path), and `rebuild` (the split/root-creation path,
+  see "Splitting" above - and "The `rebuild` capacity guard" for its
+  `NodeOverflow` precondition).
 - `NodeType` - private. `Leaf` or `Internal`, read from/written to the
   1-byte node-type header field.
 - `node_type`, `slot_count`, `data_used`, `data_start`, `tail_raw`,
   `checked_slot_count`, `slot_offset`, `slot_entry`, `entry_payload`,
-  `entry_key`, `leaf_rid`, `internal_child` - private. Read-only accessors
-  over raw page bytes, in the same style as `heap.rs`'s `slotted_*`
-  functions - `checked_slot_count` and `entry_payload` report
-  `StorageError::CorruptPage` rather than panicking or silently misreading
-  a slot count or entry range that doesn't fit the page.
+  `entry_key`, `leaf_sort_key`, `leaf_rid`, `internal_child` - private.
+  Read-only accessors over raw page bytes, in the same style as
+  `heap.rs`'s `slotted_*` functions - `checked_slot_count` and
+  `entry_payload` report `StorageError::CorruptPage` rather than
+  panicking or silently misreading a slot count or entry range that
+  doesn't fit the page. `leaf_sort_key` is `entry_key` extended to also
+  include the entry's `Rid` trailer - see "Ordering" above.
 - `build_leaf_payload`, `build_internal_payload` - private. Encode a
   `(key, Rid)` or `(key, PageId)` pair into the entry payload bytes
   described in "Node layout" above.
-- `upper_bound`, `lower_bound` - private. Binary search over a node's
-  entries by key, operating on page bytes directly (used during descent
-  and by the surgical insert path, where re-fetching a `Vec<Vec<u8>>`
-  snapshot would be wasted work). `upper_bound` returns the first slot
-  whose key is strictly greater than the target - the sorted insertion
-  point that places a new entry after any existing ties, and (via
-  `child_for_key`) the child a descent should follow. `lower_bound`
-  returns the first slot whose key is greater than or equal to the
-  target - where `get`/`range_scan` should start scanning for a match.
-- `upper_bound_in` - private. The same "first index with a strictly
-  greater key" search as `upper_bound`, but over an in-memory
+- `upper_bound`, `upper_bound_leaf`, `lower_bound_leaf` - private. Binary
+  search over a node's entries, operating on page bytes directly (used
+  during descent and by the surgical insert path, where re-fetching a
+  `Vec<Vec<u8>>` snapshot would be wasted work). `upper_bound` compares
+  by `entry_key` and is the internal-node search: it returns the first
+  slot whose separator is strictly greater than the target, i.e. (via
+  `child_for_key`) the child a descent should follow. `upper_bound_leaf`
+  is the same "first index with a strictly greater key" search but for a
+  leaf, comparing by `leaf_sort_key` against a caller-supplied sort key,
+  so ties can never stop the search early even under heavy duplication.
+  `lower_bound_leaf` returns the first leaf slot whose sort key is
+  greater than or equal to the target - where `get`/`range_scan` should
+  start scanning for a match; called with a bare key (no `rid` suffix),
+  it lands on the first of any run of duplicates, which is what both
+  callers want (see "Ordering" above).
+- `upper_bound_in`, `upper_bound_in_leaf` - private. The same two
+  searches as `upper_bound`/`upper_bound_leaf`, but over an in-memory
   `&[Vec<u8>]` snapshot (`[u8]::partition_point`) rather than page bytes -
   used once a node has already been read into memory for a split, so the
   split path never re-derives an insertion point from the page it just
@@ -334,10 +395,11 @@ first needs an index on a low-cardinality column at that scale.
   given key: the right-child pointer of the last entry whose key is
   `<= key`, or `tail` if no entry qualifies (the key is below every
   separator here). See "Node layout" above for why entries pair a key
-  with their *right* child rather than their left.
-- `byte_balanced_split_point`, `nearest_clean_boundary`,
-  `leaf_split_point`, `internal_split_point` - private. See "Choosing the
-  split point" above.
+  with their *right* child rather than their left, and "Ordering" above
+  for why a bare key always routes left of any separator sharing its key
+  part.
+- `byte_balanced_split_point`, `leaf_split_point`, `internal_split_point`
+  - private. See "Choosing the split point" above.
 
 ## Usage Example
 

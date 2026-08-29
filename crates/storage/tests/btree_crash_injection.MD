@@ -49,6 +49,17 @@ together; nothing about the catalog itself is exercised by this file.
   split (confirmed directly by `workload_keys_actually_force_a_root_split`)
   without needing hundreds of inserts, keeping the sweep - which reopens
   the database once per write point - fast.
+- `duplicate_workload_keys() -> Vec<Vec<u8>>` - the same size budget as
+  `workload_keys` (twelve ~600-byte keys total) but shaped to exercise
+  `btree.MD`'s `(key, rid)` leaf ordering instead of `workload_keys`'s
+  all-distinct case: one low-sentinel key, ten repetitions of one "hot"
+  key (enough to force a leaf split from duplication alone at this page
+  size, confirmed by `duplicate_workload_keys_actually_force_a_split_from_duplicates`),
+  then one high-sentinel key. Kept just as small as `workload_keys` for
+  the same reason - the sweep reopens the database once per write point,
+  so keeping the total insert count low keeps the whole file fast even
+  though it now sweeps two workloads under all four `DurabilityModel`s
+  instead of one.
 - `commit(pool, txn_id) -> Result<(), StorageError>` - `append_log(Commit)`,
   `flush_log` up to it, `append_log(End)`: the same sequence
   `txn::TransactionManager::commit` uses, reproduced here directly since
@@ -63,38 +74,53 @@ together; nothing about the catalog itself is exercised by this file.
   all (the fault can strike during `DiskManager`/`LogManager`/
   `DoubleWriteBuffer`'s own setup writes, before a single insert runs)
   counts as zero keys committed, not a panic.
-- `assert_workload_is_crash_safe(model) -> Result<(), Box<dyn Error>>` -
-  the sweep itself: measures the unfaulted workload's total write count,
-  then for every `fail_at` from `1` to that count, runs the workload
-  against fault-injecting devices, attempts (and discards the result of)
-  two more fault-injected reopens to prove recovery itself is resumable,
-  then reopens cleanly and checks the recovered tree. A durable root
-  pointer is only *required* to exist when at least one key was reported
-  committed - the tree's own creation can succeed and become durable on
-  its own, with every subsequent insert then failing before it commits,
-  which is why the assertion is one-directional rather than an
-  equivalence (`workload_keys_actually_force_a_root_split`'s own
-  existence as a separate check exists to keep this file honest about the
-  "root split" part of that promise instead of leaving it implicit in the
-  sweep's plumbing).
-- `workload_keys_actually_force_a_root_split` - a non-fault-injected
-  sanity check, run once: confirms `BTreeIndex::root_page_id()` actually
-  changes after inserting `workload_keys()`, and that the result passes
-  `check_invariants`. Exists so a future change to `workload_keys` that
-  accidentally stops forcing a split fails loudly here, rather than the
-  crash-sweep tests below silently degrading into testing single-leaf
-  durability instead of the split path they are named for.
+- `assert_workload_is_crash_safe(model, keys) -> Result<(), Box<dyn Error>>` -
+  the sweep itself, generic over which key sequence it drives: measures
+  the unfaulted workload's total write count, then for every `fail_at`
+  from `1` to that count, runs the workload against fault-injecting
+  devices, attempts (and discards the result of) two more fault-injected
+  reopens to prove recovery itself is resumable, then reopens cleanly and
+  checks the recovered tree. A durable root pointer is only *required* to
+  exist when at least one key was reported committed - the tree's own
+  creation can succeed and become durable on its own, with every
+  subsequent insert then failing before it commits, which is why the
+  assertion is one-directional rather than an equivalence
+  (`workload_keys_actually_force_a_root_split`'s own existence as a
+  separate check exists to keep this file honest about the "root split"
+  part of that promise instead of leaving it implicit in the sweep's
+  plumbing). Because `keys` may repeat a value (`duplicate_workload_keys`
+  does), the per-key check groups by distinct key bytes rather than by
+  index: for each distinct key, it collects the `Rid`s of every insert of
+  that key whose index is below the safe prefix, sorts both that expected
+  set and `BTreeIndex::get`'s actual result by `(page_id, slot)`, and
+  compares them - order-independent, since duplicate entries sharing a
+  key have no guaranteed relative order after a crash-and-recover cycle,
+  only the *set* of committed ones is guaranteed.
+- `workload_keys_actually_force_a_root_split`,
+  `duplicate_workload_keys_actually_force_a_split_from_duplicates` -
+  non-fault-injected sanity checks, run once each: confirm
+  `BTreeIndex::root_page_id()` actually changes after inserting
+  `workload_keys()`/`duplicate_workload_keys()` respectively, and that
+  the result passes `check_invariants` (the duplicate variant also checks
+  that all ten "hot"-key inserts are still findable by `get`). Exist so a
+  future change to either key sequence that accidentally stops forcing a
+  split fails loudly here, rather than the crash-sweep tests below
+  silently degrading into testing single-leaf durability instead of the
+  split path they are named for.
 - The four `enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write*`
-  tests each call `assert_workload_is_crash_safe` under one
-  `DurabilityModel`; names encode which.
+  tests call `assert_workload_is_crash_safe` with `workload_keys()` under
+  one `DurabilityModel` each; the four
+  `duplicate_heavy_workload_survives_a_crash_at_every_write*` tests call
+  it with `duplicate_workload_keys()` instead, same four models; names
+  encode which workload and which model.
 
 ## Usage Example
 
 ```rust
 #[test]
-fn enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write_with_torn_writes()
+fn duplicate_heavy_workload_survives_a_crash_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::torn_write())
+    assert_workload_is_crash_safe(DurabilityModel::torn_write(), &duplicate_workload_keys())
 }
 ```
 

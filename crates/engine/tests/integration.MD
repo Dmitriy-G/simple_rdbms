@@ -51,6 +51,15 @@ pipeline, against a real (tempfile-backed) database file.
 - `oversized_integer_literal_is_a_lexer_error_quoting_the_text` - a
   literal too large for any integer type is a lexer error that quotes the
   offending text.
+- `an_index_on_a_low_cardinality_column_survives_bulk_insert` - the
+  end-to-end, SQL-driven version of `storage::btree`'s duplicate-key leaf
+  split fix (`crates/storage/src/btree.MD`'s "Ordering" section): creates
+  an index on a column every row shares the same value for, inserts 1,000
+  rows, and confirms all 1,000 come back from an indexed equality lookup
+  - this is the path an ordinary `CREATE INDEX` on a low-cardinality
+  column takes through `executor::InsertExecutor`, so it is what an actual
+  user hits, not just `storage::btree::BTreeIndex::insert` called
+  directly the way `crates/storage/tests/btree.rs` exercises it.
 - `select_from_nonexistent_table_is_an_error` - `SELECT * FROM missing`
   errors rather than panicking or returning an empty result.
 - `a_parse_error_carries_sqlstate_42601_and_its_byte_offset` - a lexer

@@ -52,10 +52,28 @@ isolation, independent of that higher-layer wiring, which
   that one key to overflow that specific leaf. The overflowing leaf holds
   a mix of duplicate and non-duplicate entries, so the resulting split
   lands the duplicate run's entries on both sides of the new leaf
-  boundary - the realistic version of the scenario `btree.MD`'s "Known
-  limitation" section contrasts with the pathological one (a single key
-  repeated far beyond one leaf's capacity on its own), which this test
-  deliberately stays under.
+  boundary.
+- `a_leaf_full_of_one_repeated_key_splits_without_corruption` - the
+  pathological case the test above deliberately stays under: 1,200
+  inserts of one single key, so the *entire* overflowing leaf (and every
+  leaf it subsequently splits into) holds nothing but copies of that key.
+  Before the `(key, rid)` leaf ordering in `btree.MD`'s "Ordering"
+  section, this had no clean boundary to split on at all and corrupted
+  the page (see `btree.MD`'s "The `rebuild` capacity guard"); this test
+  is what pins the fix down. Checks invariants every 50 inserts, then
+  confirms every one of the 1,200 `Rid`s is still returned by `get`.
+- `a_long_duplicate_run_between_distinct_keys_stays_ordered` - 200
+  distinct keys, then 800 inserts of one hot key, then 200 more distinct
+  keys above it: exercises a duplicate run large enough to force several
+  splits on its own while it sits between (not at the very start or end
+  of) a range of ordinary keys, and confirms `range_scan` still yields
+  every entry - hot duplicates included - in non-decreasing key order
+  across the whole tree.
+- `a_maximum_length_key_survives_a_split` - inserts entries at exactly
+  `MAX_KEY_SIZE`, which since the "Ordering" fix must leave room for that
+  same `(key, rid)` pair to later become an internal separator (a `Rid`
+  suffix plus a child pointer, not just the bare key) without overflowing
+  a node - see `MAX_KEY_SIZE`'s entry in `btree.MD`'s "Key Components".
 - `seeded_random_permutation_of_two_thousand_keys_keeps_invariants_and_finds_every_key` -
   shuffles `0..2000` with a fixed-seed `proptest::test_runner::TestRng`
   (reproducible across runs, unlike ambient entropy), checks

@@ -20,8 +20,12 @@ const KEY_LEN_PREFIX: usize = 2;
 const RID_TRAILER_SIZE: usize = 6;
 const CHILD_TRAILER_SIZE: usize = 4;
 
-pub const MAX_KEY_SIZE: usize =
-    crate::page::PAGE_SIZE - HEADER_SIZE - SLOT_SIZE - KEY_LEN_PREFIX - RID_TRAILER_SIZE;
+pub const MAX_KEY_SIZE: usize = crate::page::PAGE_SIZE
+    - HEADER_SIZE
+    - SLOT_SIZE
+    - KEY_LEN_PREFIX
+    - RID_TRAILER_SIZE
+    - CHILD_TRAILER_SIZE;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NodeType {
@@ -117,6 +121,11 @@ fn entry_key(payload: &[u8]) -> &[u8] {
     payload.get(KEY_LEN_PREFIX..KEY_LEN_PREFIX + key_len).unwrap_or(&[])
 }
 
+fn leaf_sort_key(payload: &[u8]) -> &[u8] {
+    let key_len = payload.get(0..2).map_or(0, |b| u16::from_le_bytes([b[0], b[1]])) as usize;
+    payload.get(KEY_LEN_PREFIX..KEY_LEN_PREFIX + key_len + RID_TRAILER_SIZE).unwrap_or(&[])
+}
+
 fn leaf_rid(payload: &[u8]) -> Rid {
     let key_len = read_u16(payload, 0) as usize;
     let at = KEY_LEN_PREFIX + key_len;
@@ -158,13 +167,25 @@ fn upper_bound(bytes: &[u8], key: &[u8], page_id: PageId) -> Result<u16, Storage
     Ok(lo)
 }
 
-fn lower_bound(bytes: &[u8], key: &[u8], page_id: PageId) -> Result<u16, StorageError> {
+fn upper_bound_leaf(bytes: &[u8], sort_key: &[u8], page_id: PageId) -> Result<u16, StorageError> {
     let count = checked_slot_count(bytes, page_id)?;
     let mut lo = 0u16;
     let mut hi = count;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        let mid_key = entry_key(entry_payload(bytes, mid, page_id)?);
+        let mid_key = leaf_sort_key(entry_payload(bytes, mid, page_id)?);
+        if mid_key <= sort_key { lo = mid + 1 } else { hi = mid }
+    }
+    Ok(lo)
+}
+
+fn lower_bound_leaf(bytes: &[u8], key: &[u8], page_id: PageId) -> Result<u16, StorageError> {
+    let count = checked_slot_count(bytes, page_id)?;
+    let mut lo = 0u16;
+    let mut hi = count;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let mid_key = leaf_sort_key(entry_payload(bytes, mid, page_id)?);
         if mid_key < key { lo = mid + 1 } else { hi = mid }
     }
     Ok(lo)
@@ -172,6 +193,10 @@ fn lower_bound(bytes: &[u8], key: &[u8], page_id: PageId) -> Result<u16, Storage
 
 fn upper_bound_in(payloads: &[Vec<u8>], key: &[u8]) -> usize {
     payloads.partition_point(|p| entry_key(p) <= key)
+}
+
+fn upper_bound_in_leaf(payloads: &[Vec<u8>], sort_key: &[u8]) -> usize {
+    payloads.partition_point(|p| leaf_sort_key(p) <= sort_key)
 }
 
 fn child_for_key(bytes: &[u8], key: &[u8], page_id: PageId) -> Result<PageId, StorageError> {
@@ -199,35 +224,8 @@ fn byte_balanced_split_point(entries: &[Vec<u8>]) -> usize {
     entries.len() - 1
 }
 
-fn nearest_clean_boundary(entries: &[Vec<u8>], target: usize) -> usize {
-    let is_clean =
-        |idx: usize| idx == 0 || entry_key(&entries[idx - 1]) != entry_key(&entries[idx]);
-    if is_clean(target) {
-        return target;
-    }
-    let mut lo = target;
-    let mut hi = target;
-    loop {
-        if lo > 0 {
-            lo -= 1;
-            if is_clean(lo) {
-                return lo;
-            }
-        }
-        if hi < entries.len() - 1 {
-            hi += 1;
-            if is_clean(hi) {
-                return hi;
-            }
-        } else if lo == 0 {
-            return 0;
-        }
-    }
-}
-
 fn leaf_split_point(entries: &[Vec<u8>]) -> usize {
-    let target = (byte_balanced_split_point(entries) + 1).clamp(1, entries.len() - 1);
-    nearest_clean_boundary(entries, target)
+    byte_balanced_split_point(entries).saturating_add(1).clamp(1, entries.len() - 1)
 }
 
 fn internal_split_point(entries: &[Vec<u8>]) -> usize {
@@ -257,8 +255,12 @@ impl<'a, 'pool> Node<'a, 'pool> {
         slot_count(self.data())
     }
 
-    fn find_insert_index(&self, key: &[u8]) -> Result<u16, StorageError> {
-        upper_bound(self.data(), key, self.page_id())
+    fn find_insert_index(&self, sort_key: &[u8]) -> Result<u16, StorageError> {
+        let bytes = self.data();
+        match node_type(bytes) {
+            NodeType::Leaf => upper_bound_leaf(bytes, sort_key, self.page_id()),
+            NodeType::Internal => upper_bound(bytes, sort_key, self.page_id()),
+        }
     }
 
     fn will_fit(&self, payload_len: usize) -> bool {
@@ -303,14 +305,23 @@ impl<'a, 'pool> Node<'a, 'pool> {
     ) -> Result<(), StorageError> {
         let body_start = NODE_TYPE_RANGE.start;
         let current = self.data()[body_start..].to_vec();
+        let local_header_size = HEADER_SIZE - body_start;
+        let total_len: usize = entries.iter().map(Vec::len).sum();
+        let required = local_header_size + entries.len() * SLOT_SIZE + total_len;
+        if required > current.len() {
+            return Err(StorageError::NodeOverflow {
+                page_id: self.page_id().0,
+                required,
+                capacity: current.len(),
+            });
+        }
+
         let mut body = current.clone();
         body[0] = if kind == NodeType::Internal { INTERNAL_TAG } else { LEAF_TAG };
         body[1..3].copy_from_slice(&(entries.len() as u16).to_le_bytes());
-        let total_len: usize = entries.iter().map(Vec::len).sum();
         body[3..5].copy_from_slice(&(total_len as u16).to_le_bytes());
         body[5..9].copy_from_slice(&tail.map_or(0, |p| p.0).to_le_bytes());
 
-        let local_header_size = HEADER_SIZE - body_start;
         let mut data_end = body.len();
         for (i, entry) in entries.iter().enumerate() {
             data_end -= entry.len();
@@ -442,10 +453,9 @@ impl<'pool> BTreeIndex<'pool> {
             let guard = self.buffer_pool.fetch_page_read(current)?;
             let bytes = guard.page().data();
             let count = checked_slot_count(bytes, current)?;
-            let mut idx = if first_leaf { lower_bound(bytes, key, current)? } else { 0 };
+            let mut idx = if first_leaf { lower_bound_leaf(bytes, key, current)? } else { 0 };
             first_leaf = false;
 
-            let mut exhausted_matching = false;
             while idx < count {
                 let payload = entry_payload(bytes, idx, current)?;
                 if entry_key(payload) != key {
@@ -453,12 +463,12 @@ impl<'pool> BTreeIndex<'pool> {
                 }
                 results.push(leaf_rid(payload));
                 idx += 1;
-                exhausted_matching = idx == count;
             }
+            let ran_off_the_end = idx == count;
             let next = tail_raw(bytes);
             drop(guard);
 
-            if exhausted_matching {
+            if ran_off_the_end {
                 if let Some(next) = next {
                     current = next;
                     continue;
@@ -486,7 +496,7 @@ impl<'pool> BTreeIndex<'pool> {
             Some(key) => {
                 let (leaf, _path) = self.descend_to_leaf(key)?;
                 let guard = self.buffer_pool.fetch_page_read(leaf)?;
-                let slot = lower_bound(guard.page().data(), key, leaf)?;
+                let slot = lower_bound_leaf(guard.page().data(), key, leaf)?;
                 Ok((leaf, slot))
             }
             None => Ok((self.leftmost_leaf()?, 0)),
@@ -517,21 +527,21 @@ impl<'pool> BTreeIndex<'pool> {
             return Err(StorageError::KeyTooLarge { size: key.len(), max: MAX_KEY_SIZE });
         }
 
-        let (leaf_page_id, mut path) = self.descend_to_leaf(key)?;
         let leaf_payload = build_leaf_payload(key, rid);
+        let (leaf_page_id, mut path) = self.descend_to_leaf(leaf_sort_key(&leaf_payload))?;
 
         {
             let mut guard = self.buffer_pool.fetch_page(leaf_page_id)?;
             let mut node = Node::new(&mut guard, txn_id);
             if node.will_fit(leaf_payload.len()) {
-                let idx = node.find_insert_index(key)?;
+                let idx = node.find_insert_index(leaf_sort_key(&leaf_payload))?;
                 node.insert_at(idx, &leaf_payload)?;
                 return Ok(());
             }
         }
 
         let (old_tail, mut payloads) = self.read_node_snapshot(leaf_page_id)?;
-        let insert_at = upper_bound_in(&payloads, key);
+        let insert_at = upper_bound_in_leaf(&payloads, leaf_sort_key(&leaf_payload));
         payloads.insert(insert_at, leaf_payload);
         let mid = leaf_split_point(&payloads);
         let right_payloads = payloads.split_off(mid);
@@ -550,7 +560,7 @@ impl<'pool> BTreeIndex<'pool> {
         }
 
         let mut left_page_id = leaf_page_id;
-        let mut pushed_key = entry_key(&right_payloads[0]).to_vec();
+        let mut pushed_key = leaf_sort_key(&right_payloads[0]).to_vec();
         let mut pushed_right = right_page_id;
 
         while let Some(parent_page_id) = path.pop() {
@@ -665,6 +675,7 @@ impl<'pool> BTreeIndex<'pool> {
         let count =
             checked_slot_count(bytes, page_id).map_err(|e| format!("page {}: {e}", page_id.0))?;
 
+        let is_leaf = node_type(bytes) == NodeType::Leaf;
         let slots_end = slot_offset(count);
         let mut total_payload = 0usize;
         let mut keys: Vec<Vec<u8>> = Vec::with_capacity(count as usize);
@@ -681,7 +692,7 @@ impl<'pool> BTreeIndex<'pool> {
             total_payload += len as usize;
             let payload =
                 entry_payload(bytes, i, page_id).map_err(|e| format!("page {}: {e}", page_id.0))?;
-            keys.push(entry_key(payload).to_vec());
+            keys.push(if is_leaf { leaf_sort_key(payload) } else { entry_key(payload) }.to_vec());
         }
         if total_payload != data_used(bytes) as usize {
             return Err(format!(
@@ -691,14 +702,8 @@ impl<'pool> BTreeIndex<'pool> {
             ));
         }
 
-        let is_leaf = node_type(bytes) == NodeType::Leaf;
         for w in keys.windows(2) {
-            let ordered = match w[0].cmp(&w[1]) {
-                std::cmp::Ordering::Less => true,
-                std::cmp::Ordering::Equal => is_leaf,
-                std::cmp::Ordering::Greater => false,
-            };
-            if !ordered {
+            if w[0].cmp(&w[1]) != std::cmp::Ordering::Less {
                 return Err(format!(
                     "page {}: keys are not strictly increasing bytewise ({} then {})",
                     page_id.0,

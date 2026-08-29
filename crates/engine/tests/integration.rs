@@ -208,6 +208,21 @@ fn oversized_integer_literal_is_a_lexer_error_quoting_the_text() {
 }
 
 #[test]
+fn an_index_on_a_low_cardinality_column_survives_bulk_insert() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE orders (id INTEGER, status INTEGER)").expect("create table");
+    db.execute("CREATE INDEX idx_status ON orders (status)").expect("create index");
+    for id in 0..1_000 {
+        db.execute(&format!("INSERT INTO orders VALUES ({id}, 1)")).expect("insert");
+    }
+
+    let (_, rows) = rows_of(db.execute("SELECT id FROM orders WHERE status = 1").expect("select"));
+    assert_eq!(rows.len(), 1_000);
+}
+
+#[test]
 fn select_from_nonexistent_table_is_an_error() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let mut db = open(&dir);

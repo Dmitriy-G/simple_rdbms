@@ -291,3 +291,71 @@ fn scan_leaf_and_leaf_for_start_cross_a_leaf_boundary_like_range_scan_does()
     assert_eq!(key, key_of(100), "leaf_for_start must land exactly on the requested key");
     Ok(())
 }
+
+#[test]
+fn a_leaf_full_of_one_repeated_key_splits_without_corruption() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path(), 64)?;
+    let mut index = BTreeIndex::create(&pool, TXN)?;
+
+    let key = key_of(42);
+    let mut expected = Vec::new();
+    for i in 0..1_200u16 {
+        let rid = Rid::new(PageId(1), i);
+        index.insert(TXN, &key, rid)?;
+        expected.push(rid);
+        if i % 50 == 0 {
+            index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
+        }
+    }
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+    let mut found = index.get(&key)?;
+    found.sort_by_key(|rid| (rid.page_id, rid.slot));
+    expected.sort_by_key(|rid| (rid.page_id, rid.slot));
+    assert_eq!(found, expected);
+    Ok(())
+}
+
+#[test]
+fn a_long_duplicate_run_between_distinct_keys_stays_ordered() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path(), 64)?;
+    let mut index = BTreeIndex::create(&pool, TXN)?;
+
+    for i in 0..200i32 {
+        index.insert(TXN, &key_of(i), Rid::new(PageId(9), i as u16))?;
+    }
+    let hot = key_of(100);
+    for i in 0..800u16 {
+        index.insert(TXN, &hot, Rid::new(PageId(1), i))?;
+    }
+    for i in 200..400i32 {
+        index.insert(TXN, &key_of(i), Rid::new(PageId(9), i as u16))?;
+    }
+
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
+    assert_eq!(index.get(&hot)?.len(), 801);
+    assert_eq!(index.get(&key_of(399))?.len(), 1);
+
+    let scanned: Result<Vec<_>, _> = index.range_scan(None, None).collect();
+    let scanned = scanned?;
+    assert_eq!(scanned.len(), 1_200);
+    assert!(scanned.windows(2).all(|w| w[0].0 <= w[1].0));
+    Ok(())
+}
+
+#[test]
+fn a_maximum_length_key_survives_a_split() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path(), 64)?;
+    let mut index = BTreeIndex::create(&pool, TXN)?;
+
+    for i in 0..8u8 {
+        let mut key = vec![i; MAX_KEY_SIZE];
+        key[MAX_KEY_SIZE - 1] = i;
+        index.insert(TXN, &key, Rid::new(PageId(1), i as u16))?;
+    }
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
+    Ok(())
+}

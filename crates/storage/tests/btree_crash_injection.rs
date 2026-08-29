@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs::OpenOptions;
 use std::path::Path;
@@ -77,6 +78,20 @@ fn workload_keys() -> Vec<Vec<u8>> {
         .collect()
 }
 
+fn duplicate_workload_keys() -> Vec<Vec<u8>> {
+    let mut low = b"000low".to_vec();
+    low.resize(600, b'a');
+    let mut hot = b"hot".to_vec();
+    hot.resize(600, b'h');
+    let mut high = b"999high".to_vec();
+    high.resize(600, b'z');
+
+    let mut keys = vec![low];
+    keys.extend((0..10).map(|_| hot.clone()));
+    keys.push(high);
+    keys
+}
+
 fn commit(pool: &BufferPool, txn_id: TxnId) -> Result<(), StorageError> {
     let commit_lsn = pool.append_log(txn_id, LogRecordKind::Commit)?;
     pool.flush_log(commit_lsn)?;
@@ -126,14 +141,15 @@ fn run_until_crash(
     committed
 }
 
-fn assert_workload_is_crash_safe(model: DurabilityModel) -> Result<(), Box<dyn Error>> {
-    let keys = workload_keys();
-
+fn assert_workload_is_crash_safe(
+    model: DurabilityModel,
+    keys: &[Vec<u8>],
+) -> Result<(), Box<dyn Error>> {
     let total_writes = {
         let dir = tempfile::tempdir()?;
         let counter = Arc::new(AtomicU64::new(0));
         let (db, wal, dwb) = faulty_devices(dir.path(), &counter, u64::MAX, model)?;
-        let committed = run_until_crash(db, wal, dwb, &keys);
+        let committed = run_until_crash(db, wal, dwb, keys);
         assert_eq!(committed, keys.len(), "an unfaulted run must commit every key");
         counter.load(Ordering::Relaxed)
     };
@@ -146,7 +162,7 @@ fn assert_workload_is_crash_safe(model: DurabilityModel) -> Result<(), Box<dyn E
         let safe_prefix = {
             let counter = Arc::new(AtomicU64::new(0));
             let (db, wal, dwb) = faulty_devices(db_path_dir, &counter, fail_at, model)?;
-            run_until_crash(db, wal, dwb, &keys)
+            run_until_crash(db, wal, dwb, keys)
         };
 
         for recovery_fail_at in [1u64, 2] {
@@ -182,25 +198,28 @@ fn assert_workload_is_crash_safe(model: DurabilityModel) -> Result<(), Box<dyn E
             .into()
         })?;
 
-        for (i, key) in keys.iter().enumerate() {
-            let rids = index.get(key)?;
-            if i < safe_prefix {
-                assert_eq!(
-                    rids,
-                    vec![Rid::new(PageId(1), i as u16)],
-                    "model={model:?}, fail_at={fail_at}, safe_prefix={safe_prefix}/{}: key {i} \
-                     is in the committed prefix and must survive recovery",
-                    keys.len()
-                );
-            } else {
-                assert_eq!(
-                    rids,
-                    Vec::new(),
-                    "model={model:?}, fail_at={fail_at}, safe_prefix={safe_prefix}/{}: key {i} \
-                     was never committed and must not appear after recovery",
-                    keys.len()
-                );
+        let mut checked_keys: HashSet<&[u8]> = HashSet::new();
+        for key in keys {
+            if !checked_keys.insert(key.as_slice()) {
+                continue;
             }
+            let mut expected: Vec<Rid> = keys
+                .iter()
+                .enumerate()
+                .filter(|(i, k)| *k == key && *i < safe_prefix)
+                .map(|(i, _)| Rid::new(PageId(1), i as u16))
+                .collect();
+            let mut rids = index.get(key)?;
+            expected.sort_by_key(|rid| (rid.page_id, rid.slot));
+            rids.sort_by_key(|rid| (rid.page_id, rid.slot));
+            assert_eq!(
+                rids,
+                expected,
+                "model={model:?}, fail_at={fail_at}, safe_prefix={safe_prefix}/{}: recovered \
+                 rids for a key must be exactly those whose insert transaction committed \
+                 before the crash",
+                keys.len()
+            );
         }
     }
     Ok(())
@@ -228,25 +247,78 @@ fn workload_keys_actually_force_a_root_split() -> Result<(), Box<dyn Error>> {
 }
 
 #[test]
+fn duplicate_workload_keys_actually_force_a_split_from_duplicates() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let counter = Arc::new(AtomicU64::new(0));
+    let (db, wal, dwb) =
+        faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
+    let pool = open_recovered_pool(db, wal, dwb)?;
+    let original_root = BTreeIndex::create(&pool, TxnId(0))?.root_page_id();
+
+    let mut index = BTreeIndex::open(&pool, original_root);
+    let keys = duplicate_workload_keys();
+    for (i, key) in keys.iter().enumerate() {
+        index.insert(TxnId(i as u64 + 1), key, Rid::new(PageId(1), i as u16))?;
+    }
+    assert_ne!(
+        index.root_page_id(),
+        original_root,
+        "the duplicate-heavy workload must be large enough to force at least one split"
+    );
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+    let mut hot = b"hot".to_vec();
+    hot.resize(600, b'h');
+    assert_eq!(index.get(&hot)?.len(), 10, "all ten hot-key inserts must be findable");
+    Ok(())
+}
+
+#[test]
 fn enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::write_is_durable())
+    assert_workload_is_crash_safe(DurabilityModel::write_is_durable(), &workload_keys())
 }
 
 #[test]
 fn enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::requires_sync())
+    assert_workload_is_crash_safe(DurabilityModel::requires_sync(), &workload_keys())
 }
 
 #[test]
 fn enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::torn_write())
+    assert_workload_is_crash_safe(DurabilityModel::torn_write(), &workload_keys())
 }
 
 #[test]
 fn enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write_with_torn_and_unsynced_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::torn_write_requires_sync())
+    assert_workload_is_crash_safe(DurabilityModel::torn_write_requires_sync(), &workload_keys())
+}
+
+#[test]
+fn duplicate_heavy_workload_survives_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(DurabilityModel::write_is_durable(), &duplicate_workload_keys())
+}
+
+#[test]
+fn duplicate_heavy_workload_survives_a_crash_at_every_write_with_unsynced_writes_lost()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(DurabilityModel::requires_sync(), &duplicate_workload_keys())
+}
+
+#[test]
+fn duplicate_heavy_workload_survives_a_crash_at_every_write_with_torn_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(DurabilityModel::torn_write(), &duplicate_workload_keys())
+}
+
+#[test]
+fn duplicate_heavy_workload_survives_a_crash_at_every_write_with_torn_and_unsynced_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        DurabilityModel::torn_write_requires_sync(),
+        &duplicate_workload_keys(),
+    )
 }

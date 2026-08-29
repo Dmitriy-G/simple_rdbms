@@ -58,6 +58,12 @@ pub enum StorageError {
         offset: usize,
         patch_len: usize,
     },
+
+    #[error(
+        "index node {page_id} would need {required} bytes to hold its rebuilt entries but only \
+         has {capacity}; rebuild refused rather than overflow the page"
+    )]
+    NodeOverflow { page_id: u32, required: usize, capacity: usize },
 }
 
 impl From<StorageError> for common::Error {
@@ -92,6 +98,7 @@ impl From<StorageError> for common::Error {
             StorageError::InPlaceUpdateOutOfBounds { .. } => {
                 common::Error::Internal { detail: message }
             }
+            StorageError::NodeOverflow { .. } => common::Error::Internal { detail: message },
         }
     }
 }
