@@ -20,10 +20,12 @@ lock, so that a page's own bytes are never blocked on bookkeeping for a
    its reverse mapping (`frame_page`), the free list, the replacer,
    `owned` (a `Vec<bool>` marking which frames are currently reserved by
    an in-flight `acquire_free_frame`/`try_install` pair, per
-   `docs/adr/0009-buffer-pool-frame-ownership.md`), and `loading` (a
+   `docs/adr/0009-buffer-pool-frame-ownership.md`), `loading` (a
    `HashSet<PageId>` of pages a miss is currently reading from disk for,
-   per `docs/adr/0010-buffer-pool-waits-for-a-frame.md`), held together in
-   one struct since every mutation to one of them (installing a page,
+   per `docs/adr/0010-buffer-pool-waits-for-a-frame.md`), and `evicting` (a
+   `HashSet<PageId>` of pages currently being written out by an in-flight
+   eviction, the eviction-visibility rule below), held together in one
+   struct since every mutation to one of them (installing a page,
    evicting a victim) always needs to update the others atomically with
    it. Held only for lookups and frame bookkeeping - **never** across a
    frame latch acquisition or disk I/O; the two `Condvar`s below (paired
@@ -59,9 +61,11 @@ lock, so that a page's own bytes are never blocked on bookkeeping for a
 
 Never hold `index`'s mutex while taking a frame's `RwLock` or performing
 disk I/O - `acquire_free_frame` selects and reserves a victim frame under
-the mutex, then releases it *before* flushing that victim if it was
-dirty (`flush_pages` takes each frame's `RwLock` for a read-only
-snapshot, never the pool mutex). This is the rule M10.2's lock manager
+the mutex, marking its page id `evicting` rather than removing it from
+`page_table` (the eviction-visibility rule below), then releases the
+mutex *before* flushing that victim if it was dirty (`flush_pages` takes
+each frame's `RwLock` for a read-only snapshot, never the pool mutex).
+This is the rule M10.2's lock manager
 will be tempted to violate by taking a shortcut that holds the pool
 mutex "just for this one flush" - don't. `fetch_frame` returns a bare
 `FrameId` and never takes a frame latch itself - `fetch_page`/
@@ -141,6 +145,36 @@ calls `try_install`; the claim is released and every waiter woken
 (`notify_all`, since more than one page id's misses can be waiting)
 on every exit from the load, success or failure alike - see
 `fetch_frame`'s closure below for why that matters.
+
+**The eviction-visibility rule - read this before touching
+`acquire_free_frame`, `pin_if_cached`, or `fetch_frame`'s hit path:**
+a victim page's `page_table`/`frame_page` entries stay in place for the
+*entire* duration of its eviction flush, not just until the mutex is
+released. `acquire_free_frame` records the victim's page id in
+`evicting` instead of removing it; `pin_if_cached` and the mutex-held
+loop in `fetch_frame` both check `evicting` before trusting a
+`page_table` hit, falling through to wait on `page_installed` (the same
+condvar and pattern `loading` uses) if the page they want is mid-flush,
+rather than pinning a frame about to be repurposed for someone else's
+page. This closes a real bug: the previous code removed the victim's
+mapping *before* flushing it, so a concurrent fetch for that same page
+saw a miss, read the stale on-disk copy (the flush hadn't reached disk
+yet), and installed a second, older copy of the page into a different
+frame - whichever frame's writer ran last would silently win, and the
+loser's writes vanished. `acquire_free_frame` resolves `evicting` one of
+two ways once the flush attempt finishes: `complete_eviction` (the flush
+succeeded, or the victim was never dirty) removes the now-stale
+`page_table`/`frame_page` entries and clears `evicting`, so the next
+waiter's re-check misses and does a fresh disk read - one that now finds
+the just-flushed content; `abort_eviction` (the flush failed) instead
+restores the frame to an ordinary, evictable, `owned = false` resident
+frame with its mapping untouched - as if the eviction attempt never
+started - and re-`record_access`es it with the replacer, whose `evict`
+removed its entry entirely rather than merely marking it unevictable.
+Both paths call `page_installed.notify_all()` so every waiter re-checks;
+`abort_eviction` additionally calls `frame_available.notify_one()`,
+since a frame just became evictable again for any thread still waiting
+on a free frame.
 
 `PageReadGuard`/`PageWriteGuard` (`page.rs`) hold the frame's `RwLock`
 guard (wrapped in `ManuallyDrop`, so `Drop` can release it explicitly)
@@ -378,7 +412,9 @@ same thread.
   durable LSN.
 - `BufferPool::pin_if_cached(&self, page_id) -> Option<FrameId>` -
   private. The page-table-hit half of `fetch_frame`: under `index`'s
-  mutex, looks up `page_id` and pins its frame in place if found.
+  mutex, returns `None` immediately if `page_id` is in `evicting` (the
+  eviction-visibility rule above), otherwise looks up `page_id` and pins
+  its frame in place if found.
 - `BufferPool::pin_locked(&self, index, frame_id)` - private. Assumes
   `index`'s mutex is already held by the caller (`pin_if_cached` or
   `install`); increments the frame's pin count and tells the replacer
@@ -394,14 +430,36 @@ same thread.
   on `frame_available` up to the remaining `frame_wait_timeout` before
   retrying the loop, or returns `StorageError::BufferPoolWaitTimedOut`
   once the deadline passes (the waiting rule above). Once a frame is
-  found, removes the victim's old mapping if evicting, marks the chosen
-  frame `owned` (the ownership rule above, behind a `debug_assert!` that
-  it was not already owned), *releases the mutex*, and only then flushes
-  the victim if it was dirty (the latch-ordering rule above). Emits a
-  `trace!` naming the evicted page when a victim is chosen (incrementing
-  `buffer_pool_evictions_total` alongside it), and increments
-  `buffer_pool_frame_waits_total`/`frame_wait_count` and records
-  `buffer_pool_frame_wait_seconds` around each wait.
+  found, marks the victim's page id `evicting` *without* touching
+  `page_table`/`frame_page` yet (the eviction-visibility rule above), and
+  marks the chosen frame `owned` (the ownership rule above, behind a
+  `debug_assert!` that it was not already owned); *releases the mutex*,
+  and only then flushes the victim if it was dirty (the latch-ordering
+  rule above). A flush failure calls `abort_eviction` and propagates the
+  error rather than leaving the frame `owned` forever with no mapping
+  restored - the fix for a real frame leak, since every failed eviction
+  flush used to cost the pool a frame permanently. A flush success (or a
+  victim that was never dirty) calls `complete_eviction` to finally
+  retire the victim's mapping. Emits a `trace!` naming the evicted page
+  when a victim is chosen (incrementing `buffer_pool_evictions_total`
+  alongside it), and increments `buffer_pool_frame_waits_total`/
+  `frame_wait_count` and records `buffer_pool_frame_wait_seconds` around
+  each wait.
+- `BufferPool::abort_eviction(&self, frame_id, victim_page_id)`/
+  `complete_eviction(&self, frame_id, victim_page_id)` - private. The two
+  ways `acquire_free_frame` resolves an in-flight eviction (the
+  eviction-visibility rule above); both clear `evicting` and
+  `notify_all` on `page_installed` so any thread waiting on
+  `victim_page_id` re-checks. `abort_eviction` additionally clears
+  `owned`, re-inserts the frame into the replacer as evictable (`evict`
+  removed its entry outright, unlike `set_evictable(false)`, so a plain
+  `set_evictable(true)` alone would be a no-op), and calls
+  `frame_available.notify_one()`, leaving the frame exactly as it was
+  before the eviction attempt - still mapped, still resident, just
+  available again. `complete_eviction` instead removes the victim's
+  `page_table`/`frame_page` entries now that its content is safely on
+  disk (or was never dirty), finally freeing the frame to be repurposed
+  by the caller's own subsequent `try_install`.
 - `BufferPool::try_install(&self, frame_id, page_id, page, dirty_since_lsn) -> FrameId` -
   private. The double-checked publish step both `fetch_frame` and
   `new_page` funnel through: under `index`'s mutex (behind a
@@ -492,6 +550,26 @@ same thread.
   this batch, or a torn real page with an intact `dwb` copy
   `recovery::recover_double_write` can restore from - never a torn real
   page with no way back.
+
+  Clearing `dirty_since_lsn` at the end is conditional, not unconditional:
+  for each page, it re-takes the frame's `RwLock` (write half, so it is
+  serialized against any `PageWriteGuard::write` in progress on that
+  frame) and only clears the flag if the frame's *current* `page_lsn`
+  still matches the snapshot's - i.e. nothing wrote to this page between
+  the snapshot clone at the top of this function and now. `dirty_since_lsn`
+  itself can't answer that question: `PageWriteGuard::write` only sets it
+  when it was previously zero, so a page that was already dirty gets no
+  new mark from a second write, and comparing the captured
+  `dirty_since_lsn` before and after a flush would look unchanged either
+  way. `page_lsn`, stamped on *every* write, is what actually moves - this
+  is the fix for a real data-loss bug: the old unconditional clear
+  erased a concurrent writer's change from the dirty page table with no
+  record it was ever unflushed, so a later checkpoint's DPT would omit
+  the page entirely and recovery would never redo it. Re-taking the write
+  lock (rather than a lock-free compare-and-swap on a second atomic) is
+  what makes the check-then-clear atomic with respect to a racing
+  `PageWriteGuard::write`, which needs the same lock to mutate `page_lsn`
+  in the first place.
 - `BufferPool::frame_of(&self, page_id) -> Result<FrameId, StorageError>` -
   private.
 - `BufferPool::dirty_page_table(&self) -> Vec<(PageId, Lsn)>` - the Dirty

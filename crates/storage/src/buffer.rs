@@ -63,6 +63,7 @@ struct PoolIndex {
     replacer: Box<dyn Replacer>,
     owned: Vec<bool>,
     loading: std::collections::HashSet<PageId>,
+    evicting: std::collections::HashSet<PageId>,
 }
 
 #[cfg(any(test, feature = "test-util"))]
@@ -128,6 +129,7 @@ impl BufferPool {
                 replacer,
                 owned,
                 loading: std::collections::HashSet::new(),
+                evicting: std::collections::HashSet::new(),
             }),
             frame_available: Condvar::new(),
             page_installed: Condvar::new(),
@@ -268,13 +270,16 @@ impl BufferPool {
         {
             let mut index = recover_lock(self.index.lock(), "BufferPool.index");
             loop {
-                if let Some(&frame_id) = index.page_table.get(&page_id) {
-                    self.pin_locked(&mut index, frame_id);
-                    metrics::counter!("buffer_pool_hits_total").increment(1);
-                    return Ok(frame_id);
-                }
-                if index.loading.insert(page_id) {
-                    break;
+                let being_evicted = index.evicting.contains(&page_id);
+                if !being_evicted {
+                    if let Some(&frame_id) = index.page_table.get(&page_id) {
+                        self.pin_locked(&mut index, frame_id);
+                        metrics::counter!("buffer_pool_hits_total").increment(1);
+                        return Ok(frame_id);
+                    }
+                    if index.loading.insert(page_id) {
+                        break;
+                    }
                 }
                 let now = Instant::now();
                 if now >= deadline {
@@ -421,6 +426,9 @@ impl BufferPool {
 
     fn pin_if_cached(&self, page_id: PageId) -> Option<FrameId> {
         let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+        if index.evicting.contains(&page_id) {
+            return None;
+        }
         let frame_id = *index.page_table.get(&page_id)?;
         self.pin_locked(&mut index, frame_id);
         Some(frame_id)
@@ -446,9 +454,9 @@ impl BufferPool {
             }
             if let Some(frame_id) = index.replacer.evict() {
                 let idx = frame_id.0 as usize;
-                let victim_page_id = index.frame_page[idx].take();
+                let victim_page_id = index.frame_page[idx];
                 if let Some(victim_page_id) = victim_page_id {
-                    index.page_table.remove(&victim_page_id);
+                    index.evicting.insert(victim_page_id);
                 }
                 break (frame_id, victim_page_id);
             }
@@ -496,10 +504,36 @@ impl BufferPool {
             tracing::trace!(page_id = victim_page_id.0, frame_id = frame_id.0, "evict");
             metrics::counter!("buffer_pool_evictions_total").increment(1);
             if self.frames[frame_id.0 as usize].dirty_since_lsn.load(Ordering::Acquire) != 0 {
-                self.flush_pages(&[(frame_id, victim_page_id)])?;
+                if let Err(err) = self.flush_pages(&[(frame_id, victim_page_id)]) {
+                    self.abort_eviction(frame_id, victim_page_id);
+                    return Err(err);
+                }
             }
+            self.complete_eviction(frame_id, victim_page_id);
         }
         Ok(frame_id)
+    }
+
+    fn abort_eviction(&self, frame_id: FrameId, victim_page_id: PageId) {
+        let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+        let idx = frame_id.0 as usize;
+        index.owned[idx] = false;
+        index.evicting.remove(&victim_page_id);
+        index.replacer.record_access(frame_id);
+        index.replacer.set_evictable(frame_id, true);
+        drop(index);
+        self.page_installed.notify_all();
+        self.frame_available.notify_one();
+    }
+
+    fn complete_eviction(&self, frame_id: FrameId, victim_page_id: PageId) {
+        let mut index = recover_lock(self.index.lock(), "BufferPool.index");
+        let idx = frame_id.0 as usize;
+        index.page_table.remove(&victim_page_id);
+        index.frame_page[idx] = None;
+        index.evicting.remove(&victim_page_id);
+        drop(index);
+        self.page_installed.notify_all();
     }
 
     fn try_install(
@@ -624,8 +658,12 @@ impl BufferPool {
 
         self.dwb.clear_batch()?;
 
-        for &(frame_id, _) in pages {
-            self.frames[frame_id.0 as usize].dirty_since_lsn.store(0, Ordering::Release);
+        for (&(frame_id, _), snapshot_page) in pages.iter().zip(snapshot.iter()) {
+            let idx = frame_id.0 as usize;
+            let current = recover_lock(self.frames[idx].page.write(), "BufferPool.frame.page");
+            if current.page_lsn() == snapshot_page.page_lsn() {
+                self.frames[idx].dirty_since_lsn.store(0, Ordering::Release);
+            }
         }
         Ok(())
     }
