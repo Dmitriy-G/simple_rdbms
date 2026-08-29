@@ -87,6 +87,20 @@ or disk.
   the now-destroyed active segment and are expected to be gone (they were
   never durable), unlike anything a *sealed* segment still holds, which
   the round-2 bug this test targets would have silently overwritten.
+- `a_corrupt_sealed_segment_is_refused_rather_than_silently_shortened` -
+  appends 400 filler records, then flips one byte in the middle of the
+  *first* sealed segment's file directly on disk (its CRC framing makes
+  that single flip enough to fail decoding at exactly that record, well
+  before the segment's real end). Reopening must return
+  `StorageError::CorruptLogHeader`, not silently succeed - but the
+  assertion that actually matters, and the one a naive "reopen errors"
+  test would miss, is the one that comes after: the segment file's length
+  on disk must be byte-for-byte unchanged. Before `scan_sealed_segment`
+  existed, `bootstrap` ran the same trimming scan against sealed segments
+  that the active segment legitimately needs, so this exact scenario would
+  have both errored *and* already truncated the corrupted segment out from
+  under the caller - a silent, unrecoverable loss of everything after the
+  flipped byte, on a segment nothing should ever be allowed to shorten.
 
 ## Usage Example
 

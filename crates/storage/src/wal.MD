@@ -11,8 +11,8 @@ double-write buffer the way a data-file page does: `append` only
 serializes into an in-memory buffer, and nothing reaches disk until
 `flush`, so a crash mid-append leaves, at worst, an incomplete trailing
 record that `decode_record`'s own length-prefix-plus-CRC framing detects
-and `scan_segment` truncates away on the next open - never a half-written
-record mistaken for a valid one. This is what makes "steal" (evicting a
+and `scan_active_segment` truncates away on the next open - never a
+half-written record mistaken for a valid one. This is what makes "steal" (evicting a
 dirty page before its transaction commits) and "no-force" (not flushing a
 transaction's pages at commit) both safe: redo replays every logged
 `Update` regardless of commit status, and undo rolls back anything that
@@ -62,6 +62,20 @@ already deleted (`txn::write_checkpoint` flushes and syncs page 0 before
 truncating specifically to keep this from happening in practice - see
 `checkpoint.MD` - but `iter_from` does not get to assume that always
 succeeded).
+
+**A sealed segment is immutable; opening a database must not write to
+one.** `scan_active_segment` may trim a torn trailing write with `set_len`
+- that is only ever correct for the *active* segment, the one still being
+appended to, where a torn tail really is just an incomplete write from the
+last crash. `scan_sealed_segment` validates the same bytes and never
+writes: if decoding does not reach the segment's full recorded length, that
+is corruption in a file nothing should still be extending, and it returns
+`StorageError::CorruptLogHeader` naming the segment and the offset the
+decode stopped at. Before this split, `bootstrap` ran the trimming scan
+against every sealed segment too, so a corrupt byte anywhere in one of
+them silently truncated it and dropped everything after that point - and
+because `bootstrap` never kept a sealed segment's post-scan length, nothing
+noticed the resulting hole in the LSN space.
 
 ## Key Components
 
@@ -141,18 +155,37 @@ succeeded).
   power loss between `roll_segment` making a new segment active and its
   header's bytes actually landing would otherwise leave that segment
   looking headerless on the next open.
-- `scan_segment(device, start_lsn) -> Result<(u64, HashMap<TxnId, u64>), StorageError>` -
-  private. Reads one segment's entire body (bounded by that segment's own
-  size, never the whole log) into memory, decodes every complete,
-  CRC-valid record forward from `SEGMENT_HEADER_LEN`, and truncates away
-  anything past the last valid one (a torn write from a crash mid-append) -
-  the same truncate-the-tail behavior the pre-segmentation single-file
-  `open` had, now scoped to one segment. Returns the LSN one past the last
-  record found (relative to `start_lsn`) and every transaction's
-  most-recently-seen LSN *within this segment* - `bootstrap` merges these
-  contributions across every segment it scans, so a transaction whose
-  chain spans a segment boundary still ends up with its true, most recent
-  LSN once every retained segment has been folded in.
+- `scan_decoded_records(device, start_lsn) -> Result<(u64, usize, HashMap<TxnId, u64>), StorageError>` -
+  private. The shared read-and-decode walk `scan_active_segment` and
+  `scan_sealed_segment` both build on: reads one segment's entire body
+  (bounded by that segment's own size, never the whole log) into memory
+  and decodes every complete, CRC-valid record forward from
+  `SEGMENT_HEADER_LEN`. Returns the LSN one past the last record found
+  (relative to `start_lsn`), the byte offset that last record ends at, and
+  every transaction's most-recently-seen LSN *within this segment* -
+  `bootstrap` merges these contributions across every segment it scans, so
+  a transaction whose chain spans a segment boundary still ends up with
+  its true, most recent LSN once every retained segment has been folded
+  in. Never touches the device itself; deciding what a short decode
+  *means* - a normal torn tail, or corruption - is entirely the caller's
+  job, which is exactly why the two callers below exist as separate
+  functions rather than one with a boolean flag.
+- `scan_active_segment(device, start_lsn) -> Result<(u64, HashMap<TxnId, u64>), StorageError>` -
+  private. Calls `scan_decoded_records`, then truncates away anything past
+  the last valid record with `device.set_len` - a torn write from a crash
+  mid-append, the same truncate-the-tail behavior the pre-segmentation
+  single-file `open` had, now scoped to one segment. Only ever correct for
+  the segment still being appended to.
+- `scan_sealed_segment(device, start_lsn) -> Result<(u64, HashMap<TxnId, u64>), StorageError>` -
+  private. Calls `scan_decoded_records`, then *validates* rather than
+  trims: if the last decoded record's end offset does not equal the
+  segment's actual on-disk length, returns `StorageError::CorruptLogHeader`
+  naming `start_lsn` and both offsets, and never calls `device.set_len` at
+  all. A sealed segment's tail should only ever be short because the log
+  genuinely truncated it there (`truncate_below` deletes whole segments,
+  never leaves a partial one) - if it decodes short for any other reason,
+  that is corruption in a file nothing should still be extending, not a
+  normal crash artifact to clean up silently.
 - `read_record_at(device, offset) -> Result<Option<LoggedRecord>, StorageError>` -
   private. Reads exactly one record from `device` at a *local* (already
   segment-relative) byte offset: one read for its `total_len` prefix, then
@@ -302,8 +335,10 @@ succeeded).
 - `LogManager::bootstrap(store, target_segment_size, active_id, active_device, sealed_ids)` -
   private, the shared core `open_with_store` funnels through. For each
   sealed id, in ascending order: opens it, reads its header for
-  `start_lsn`, `scan_segment`s it (bounded to that one segment's size) to
-  fold its transactions' last-seen LSNs into `last_lsn_by_txn`, records its
+  `start_lsn`, `scan_sealed_segment`s it (bounded to that one segment's
+  size, and refusing rather than trimming if it does not decode cleanly to
+  its full length - the invariant above) to fold its transactions'
+  last-seen LSNs into `last_lsn_by_txn`, records its
   `SegmentMeta`, and remembers that segment's own `next_lsn` (the byte one
   past its last valid record) - overwritten on every iteration, so what
   survives the loop is the *last* sealed segment's `next_lsn`, i.e. the
@@ -324,9 +359,9 @@ succeeded).
   `start_lsn` too, a `warn!` is emitted (this only happens after an
   unclean shutdown, worth an operator's attention), and a fresh header
   carrying that `start_lsn` is written and synced before returning.
-  Otherwise (a real header already present) reads it and `scan_segment`s
-  the active segment to find the true append point and fold in its own
-  contributions. This is the one place in the module - not `iter_from`,
+  Otherwise (a real header already present) reads it and
+  `scan_active_segment`s it to find the true append point and fold in its
+  own contributions. This is the one place in the module - not `iter_from`,
   not `read_at` - that ever reads more than one segment's worth of bytes,
   and per the truncation invariant above, "every currently-retained
   segment" is bounded by how recently a checkpoint last ran, not by the

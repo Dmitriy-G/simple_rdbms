@@ -294,3 +294,47 @@ fn a_headerless_active_segment_continues_the_sealed_lsn_space() -> Result<(), Bo
 
     Ok(())
 }
+
+#[test]
+fn a_corrupt_sealed_segment_is_refused_rather_than_silently_shortened() -> Result<(), Box<dyn Error>>
+{
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.wal");
+
+    {
+        let (log, ..) = open_counting(&path, SMALL_SEGMENT)?;
+        for i in 0..400u64 {
+            filler(&log, TxnId(i % 5))?;
+        }
+    }
+
+    let store = FileSegmentStore::new(&path);
+    let ids = store.existing_segments()?;
+    assert!(ids.len() >= 3, "test needs at least two sealed segments to be meaningful");
+    let first_sealed_id = ids[0];
+    let first_sealed_path = segment_path(&path, first_sealed_id);
+
+    let original_len = std::fs::metadata(&first_sealed_path)?.len();
+    let mut bytes = std::fs::read(&first_sealed_path)?;
+    let mid = bytes.len() / 2;
+    bytes[mid] ^= 0xFF;
+    std::fs::write(&first_sealed_path, &bytes)?;
+
+    let store: Arc<dyn SegmentStore> = Arc::new(FileSegmentStore::new(&path));
+    match LogManager::open_with_segment_store(store, SMALL_SEGMENT) {
+        Ok(_) => panic!("a corrupt sealed segment must be refused, not silently opened"),
+        Err(err) => assert!(
+            matches!(err, StorageError::CorruptLogHeader { .. }),
+            "expected CorruptLogHeader, got {err:?}"
+        ),
+    }
+
+    let new_len = std::fs::metadata(&first_sealed_path)?.len();
+    assert_eq!(
+        new_len, original_len,
+        "a refused open must not have truncated the corrupt sealed segment - the pre-fix code \
+         would pass a \"reopen errors\" test while having already shortened the file"
+    );
+
+    Ok(())
+}

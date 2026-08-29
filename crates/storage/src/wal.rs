@@ -375,10 +375,10 @@ fn read_segment_header(device: &dyn BlockDevice) -> Result<u64, StorageError> {
     Ok(u64::from_le_bytes([buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14], buf[15]]))
 }
 
-fn scan_segment(
+fn scan_decoded_records(
     device: &dyn BlockDevice,
     start_lsn: u64,
-) -> Result<(u64, HashMap<TxnId, u64>), StorageError> {
+) -> Result<(u64, usize, HashMap<TxnId, u64>), StorageError> {
     let device_len = device.size()?;
     let mut bytes = vec![0u8; device_len as usize];
     device.read_at(0, &mut bytes)?;
@@ -389,9 +389,35 @@ fn scan_segment(
         last_lsn_by_txn.insert(record.txn_id, record.lsn.0);
         pos += len;
     }
-    device.set_len(pos as u64)?;
 
     let next_lsn = start_lsn + (pos as u64 - SEGMENT_HEADER_LEN);
+    Ok((next_lsn, pos, last_lsn_by_txn))
+}
+
+fn scan_active_segment(
+    device: &dyn BlockDevice,
+    start_lsn: u64,
+) -> Result<(u64, HashMap<TxnId, u64>), StorageError> {
+    let (next_lsn, pos, last_lsn_by_txn) = scan_decoded_records(device, start_lsn)?;
+    device.set_len(pos as u64)?;
+    Ok((next_lsn, last_lsn_by_txn))
+}
+
+fn scan_sealed_segment(
+    device: &dyn BlockDevice,
+    start_lsn: u64,
+) -> Result<(u64, HashMap<TxnId, u64>), StorageError> {
+    let device_len = device.size()?;
+    let (next_lsn, pos, last_lsn_by_txn) = scan_decoded_records(device, start_lsn)?;
+    if pos as u64 != device_len {
+        return Err(StorageError::CorruptLogHeader {
+            reason: format!(
+                "sealed WAL segment starting at lsn {start_lsn} does not decode to its full \
+                 recorded length: valid records end at offset {pos}, but the segment is \
+                 {device_len} bytes"
+            ),
+        });
+    }
     Ok((next_lsn, last_lsn_by_txn))
 }
 
@@ -527,7 +553,8 @@ impl LogManager {
         for id in sealed_ids {
             let device = store.open(id)?;
             let start_lsn = read_segment_header(device.as_ref())?;
-            let (segment_next_lsn, contributions) = scan_segment(device.as_ref(), start_lsn)?;
+            let (segment_next_lsn, contributions) =
+                scan_sealed_segment(device.as_ref(), start_lsn)?;
             last_lsn_by_txn.extend(contributions);
             sealed.push(SegmentMeta { id, start_lsn });
             last_sealed_next_lsn = Some(segment_next_lsn);
@@ -549,7 +576,7 @@ impl LogManager {
             (start_lsn, start_lsn)
         } else {
             let start_lsn = read_segment_header(active_device.as_ref())?;
-            let (next_lsn, contributions) = scan_segment(active_device.as_ref(), start_lsn)?;
+            let (next_lsn, contributions) = scan_active_segment(active_device.as_ref(), start_lsn)?;
             last_lsn_by_txn.extend(contributions);
             (start_lsn, next_lsn)
         };
