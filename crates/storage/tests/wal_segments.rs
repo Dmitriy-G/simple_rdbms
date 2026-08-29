@@ -12,7 +12,9 @@ use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
-use storage::wal::{FileSegmentStore, LogManager, LogRecord, LogRecordKind, SegmentStore};
+use storage::wal::{
+    FileSegmentStore, HEADER_LEN, LogManager, LogRecord, LogRecordKind, SegmentStore, segment_path,
+};
 
 mod support;
 use support::CountingDevice;
@@ -212,5 +214,83 @@ fn recovery_across_a_segment_boundary_reproduces_the_committed_prefix() -> Resul
 
     let guard = pool.fetch_page(page_id)?;
     assert_eq!(&guard.page().data()[16..31], b"after--boundary");
+    Ok(())
+}
+
+#[test]
+fn a_roll_survives_an_unclean_reopen() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.wal");
+
+    let lsns_before = {
+        let (log, ..) = open_counting(&path, SMALL_SEGMENT)?;
+        let mut lsns = Vec::new();
+        for i in 0..100u64 {
+            lsns.push(filler(&log, TxnId(i % 5))?);
+        }
+        (lsns, log.segment_ids())
+    };
+    let (lsns_before, segment_ids_before) = lsns_before;
+    assert!(
+        segment_ids_before.len() >= 2,
+        "test needs at least one roll to have happened, got segments {segment_ids_before:?}"
+    );
+
+    let (log, ..) = open_counting(&path, SMALL_SEGMENT)?;
+    let segment_ids_after = log.segment_ids();
+    assert_eq!(
+        segment_ids_after, segment_ids_before,
+        "every segment a roll sealed, including the active one's header, must survive a reopen \
+         with no clean shutdown in between"
+    );
+
+    let records: Vec<_> = log.iter_from(Lsn(HEADER_LEN))?.collect();
+    let lsns_after: Vec<Lsn> = records.iter().map(|r| r.lsn).collect();
+    assert_eq!(
+        lsns_after, lsns_before,
+        "every record, including ones appended into the newly rolled active segment, must \
+         still decode to the same LSN after an unclean reopen - a misread or corrupted header \
+         would either lose records or shift their addressing"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn a_headerless_active_segment_continues_the_sealed_lsn_space() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.wal");
+
+    {
+        let (log, ..) = open_counting(&path, SMALL_SEGMENT)?;
+        for i in 0..400u64 {
+            filler(&log, TxnId(i % 5))?;
+        }
+    }
+
+    let store = FileSegmentStore::new(&path);
+    let ids = store.existing_segments()?;
+    assert!(ids.len() >= 3, "test needs at least one sealed segment behind the active one");
+    let active_id = *ids.last().expect("at least one segment exists");
+    let active_path = segment_path(&path, active_id);
+
+    let original_active_start_lsn = {
+        let bytes = std::fs::read(&active_path)?;
+        u64::from_le_bytes(bytes[8..16].try_into()?)
+    };
+
+    let active_file = std::fs::OpenOptions::new().write(true).open(&active_path)?;
+    active_file.set_len(0)?;
+    drop(active_file);
+
+    let (log, ..) = open_counting(&path, SMALL_SEGMENT)?;
+    let next_lsn = filler(&log, TxnId(99))?;
+    assert!(
+        next_lsn.0 >= original_active_start_lsn,
+        "a record appended after reopening past a headerless active segment must not reuse LSNs \
+         already used by sealed segments: got {next_lsn:?}, sealed segments end at \
+         {original_active_start_lsn}"
+    );
+
     Ok(())
 }

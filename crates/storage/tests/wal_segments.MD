@@ -66,6 +66,27 @@ or disk.
   `storage::recovery::recover` and asserts the page holds the final,
   committed value - proving redo still finds and correctly orders records
   that live in different segment files, not just within one.
+- `a_roll_survives_an_unclean_reopen` - appends 100 filler records (forcing
+  at least one roll at `SMALL_SEGMENT`), then reopens with no clean
+  shutdown in between and asserts both `segment_ids()` and every record's
+  LSN (via `iter_from(Lsn(HEADER_LEN))`) are unchanged. A misread or
+  never-written header on the newly-rolled active segment would surface
+  here either as a hard error, a shifted LSN, or lost records - the
+  regression `write_segment_header`'s `sync_all()` exists to prevent.
+- `a_headerless_active_segment_continues_the_sealed_lsn_space` - appends
+  400 filler records, then truncates the active (highest-numbered) segment
+  file to zero bytes directly on disk, simulating a crash between
+  `roll_segment` making a segment active and its header ever reaching
+  disk. Before truncating, reads that segment's own `start_lsn` straight
+  out of its still-intact header bytes (offset 8..16) as
+  `original_active_start_lsn` - the value `bootstrap` must resume from.
+  Reopens (triggering `bootstrap`'s headerless-active-segment branch) and
+  appends one more record, asserting its LSN is `>=`
+  `original_active_start_lsn`. Deliberately does not compare against the
+  highest LSN appended before the truncation: those records lived only in
+  the now-destroyed active segment and are expected to be gone (they were
+  never durable), unlike anything a *sealed* segment still holds, which
+  the round-2 bug this test targets would have silently overwritten.
 
 ## Usage Example
 

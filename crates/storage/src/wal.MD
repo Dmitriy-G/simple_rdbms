@@ -133,7 +133,14 @@ succeeded).
   16-byte header (`SEGMENT_MAGIC` then `start_lsn`, little-endian).
   `write_segment_header` truncates the device to empty first, so it is
   always safe to call on a brand-new or freshly-reinitialized device
-  regardless of what garbage bytes it may already contain past the header.
+  regardless of what garbage bytes it may already contain past the header,
+  then ends with `device.sync_all()`: a segment header is a durability
+  boundary exactly like any record's, not a convenience, since everything
+  this module does to address a record by LSN depends on the segment that
+  holds it having a header whose `start_lsn` actually reached disk. A
+  power loss between `roll_segment` making a new segment active and its
+  header's bytes actually landing would otherwise leave that segment
+  looking headerless on the next open.
 - `scan_segment(device, start_lsn) -> Result<(u64, HashMap<TxnId, u64>), StorageError>` -
   private. Reads one segment's entire body (bounded by that segment's own
   size, never the whole log) into memory, decodes every complete,
@@ -294,21 +301,36 @@ succeeded).
   becomes a sealed candidate `bootstrap` will fold in.
 - `LogManager::bootstrap(store, target_segment_size, active_id, active_device, sealed_ids)` -
   private, the shared core `open_with_store` funnels through. For each
-  sealed id: opens it, reads its header for
+  sealed id, in ascending order: opens it, reads its header for
   `start_lsn`, `scan_segment`s it (bounded to that one segment's size) to
-  fold its transactions' last-seen LSNs into `last_lsn_by_txn`, and records
-  its `SegmentMeta`. For the active segment: if it is shorter than
-  `SEGMENT_HEADER_LEN` (a brand-new or torn-at-birth device - the same
-  "nothing could have been durably logged yet either way" reasoning the
-  pre-segmentation single-file `open` used, since a segment header is
-  written exactly once, before any record could possibly have been
-  appended to it), writes a fresh header at `HEADER_LEN` and starts
-  `next_lsn` there; otherwise reads its existing header and `scan_segment`s
-  it to find the true append point and fold in its own contributions. This
-  is the one place in the module - not `iter_from`, not `read_at` - that
-  ever reads more than one segment's worth of bytes, and per the truncation
-  invariant above, "every currently-retained segment" is bounded by how
-  recently a checkpoint last ran, not by the database's total history.
+  fold its transactions' last-seen LSNs into `last_lsn_by_txn`, records its
+  `SegmentMeta`, and remembers that segment's own `next_lsn` (the byte one
+  past its last valid record) - overwritten on every iteration, so what
+  survives the loop is the *last* sealed segment's `next_lsn`, i.e. the
+  highest one, exactly where a well-formed active segment's own
+  `start_lsn` should be. For the active segment: if it is shorter than
+  `SEGMENT_HEADER_LEN`, its header write never reached disk - torn at
+  birth, or (per `write_segment_header`'s own `sync_all`, above) a crash
+  during `roll_segment` right after the segment was made active. Which one
+  it was matters: if no sealed segment exists, this is a brand-new
+  database and nothing could have been durably logged yet either way, so
+  starting fresh at `HEADER_LEN` is correct - the pre-segmentation
+  single-file `open` used the same reasoning. If a sealed segment *does*
+  exist, starting fresh at `HEADER_LEN` would be the round-2 bug this
+  guards against: it would let a brand-new record collide with LSNs the
+  surviving sealed segments already used, corrupting every `prev_lsn`/
+  `undo_next_lsn` chain that crosses the reused range. So instead the
+  remembered last sealed `next_lsn` becomes the active segment's
+  `start_lsn` too, a `warn!` is emitted (this only happens after an
+  unclean shutdown, worth an operator's attention), and a fresh header
+  carrying that `start_lsn` is written and synced before returning.
+  Otherwise (a real header already present) reads it and `scan_segment`s
+  the active segment to find the true append point and fold in its own
+  contributions. This is the one place in the module - not `iter_from`,
+  not `read_at` - that ever reads more than one segment's worth of bytes,
+  and per the truncation invariant above, "every currently-retained
+  segment" is bounded by how recently a checkpoint last ran, not by the
+  database's total history.
 - `LogManager::append(&self, record) -> Result<Lsn, StorageError>` -
   appends `record` to the log, returning its assigned `Lsn`: its byte
   offset in the log stream, i.e. the durable file length plus the current

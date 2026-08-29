@@ -360,6 +360,7 @@ fn write_segment_header(device: &dyn BlockDevice, start_lsn: u64) -> Result<(), 
     buf[8..16].copy_from_slice(&start_lsn.to_le_bytes());
     device.set_len(0)?;
     device.write_at(0, &buf)?;
+    device.sync_all()?;
     Ok(())
 }
 
@@ -522,18 +523,30 @@ impl LogManager {
     ) -> Result<Self, StorageError> {
         let mut sealed = Vec::with_capacity(sealed_ids.len());
         let mut last_lsn_by_txn = HashMap::new();
+        let mut last_sealed_next_lsn = None;
         for id in sealed_ids {
             let device = store.open(id)?;
             let start_lsn = read_segment_header(device.as_ref())?;
-            let (_, contributions) = scan_segment(device.as_ref(), start_lsn)?;
+            let (segment_next_lsn, contributions) = scan_segment(device.as_ref(), start_lsn)?;
             last_lsn_by_txn.extend(contributions);
             sealed.push(SegmentMeta { id, start_lsn });
+            last_sealed_next_lsn = Some(segment_next_lsn);
         }
 
         let active_device_len = active_device.size()?;
         let (active_start_lsn, next_lsn) = if active_device_len < SEGMENT_HEADER_LEN {
-            write_segment_header(active_device.as_ref(), HEADER_LEN)?;
-            (HEADER_LEN, HEADER_LEN)
+            let start_lsn = last_sealed_next_lsn.unwrap_or(HEADER_LEN);
+            if last_sealed_next_lsn.is_some() {
+                tracing::warn!(
+                    active_id,
+                    start_lsn,
+                    "active WAL segment has no valid header but sealed segments exist; \
+                     continuing the LSN space from the last sealed segment rather than \
+                     restarting it - the last shutdown was likely unclean during a segment roll"
+                );
+            }
+            write_segment_header(active_device.as_ref(), start_lsn)?;
+            (start_lsn, start_lsn)
         } else {
             let start_lsn = read_segment_header(active_device.as_ref())?;
             let (next_lsn, contributions) = scan_segment(active_device.as_ref(), start_lsn)?;
