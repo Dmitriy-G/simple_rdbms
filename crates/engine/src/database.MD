@@ -64,14 +64,38 @@ those lower layers needing to know a connection or a transaction exists.
   above `storage` starts trusting them. Calls `new_connection_span` as its
   very first action, before anything that could fail, so a startup
   failure's own `error!` log (from `open`, above) still has the chance to
-  fall under it for as long as the open got.
-- `Database::open_with_devices(config, db_device, wal_device,
-  dwb_device) -> Result<Self>` - `#[cfg(any(test, feature =
-  "test-util"))]`. Opens a database backed by caller-supplied
-  `BlockDevice`s rather than real files, for the crash-injection harness:
-  wrapping a device in a `storage::block_device::FaultyDevice` lets a test
-  simulate a crash at an exact point in a workload without actually
-  killing a process. Not logged like `open` - it's test-only
+  fall under it for as long as the open got. Opens `DiskManager` - which
+  takes the database's one exclusive file lock
+  (`storage::block_device::lock_exclusive`, `disk.MD`) - *before* the
+  write-ahead log or the double-write buffer, deliberately: a second
+  process racing to open the same database must fail on the lock before
+  either of those ever touches a file. `storage::wal::LogManager::open`'s
+  own bootstrap writes (`write_segment_header`'s `set_len(0)` on a
+  headerless active segment, in particular) are exactly the kind of
+  mutation a second, doomed-to-fail process must never be allowed to make
+  against a database another process already has open. A dedicated
+  whole-database lock file, taken before any of the three managers open
+  anything, was the alternative on the table; opening `DiskManager` first
+  and letting its own lock stand in for that was chosen instead, since it
+  needs no new on-disk convention and the ordering constraint - lock
+  before any WAL or double-write-buffer file is touched - is met either
+  way.
+- `Database::open_with_devices(config, db_device, wal_store,
+  wal_segment_size, dwb_device) -> Result<Self>` - `#[cfg(any(test,
+  feature = "test-util"))]`. Opens a database backed by a caller-supplied
+  `db_device`/`dwb_device` (`storage::block_device::BlockDevice`) and a
+  caller-supplied `wal_store` (`storage::wal::SegmentStore`) rather than
+  real files, for the crash-injection harness: wrapping a device in a
+  `storage::block_device::FaultyDevice`, or every segment a `SegmentStore`
+  opens in one (`storage::wal::FaultySegmentStore`), lets a test simulate a
+  crash at an exact point in a workload without actually killing a
+  process. Takes a `SegmentStore` rather than a single `BlockDevice` for
+  the log because there is exactly one on-disk WAL layout - a numbered
+  segment family - and production `open_impl` builds one too
+  (`docs/adr/0011-segmented-write-ahead-log.md`); a harness that wrote
+  through a single-device shortcut here and then recovered through the
+  real segment-family path in `open_impl` would silently be reading and
+  writing two different logs. Not logged like `open` - it's test-only
   infrastructure, not a boundary a real caller ever crosses - but still
   opens its own connection span the same way, so span-hierarchy tests can
   exercise the real thing.

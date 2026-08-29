@@ -36,7 +36,7 @@ together; nothing about the catalog itself is exercised by this file.
   `crash_injection.rs` uses: a shared fault counter across the database
   file, WAL, and double-write buffer, so "fail at write N" counts across
   the whole system.
-- `open_recovered_pool(db_device, wal_device, dwb_device) -> Result<BufferPool, StorageError>` -
+- `open_recovered_pool(db_device, wal_store, dwb_device) -> Result<BufferPool, StorageError>` -
   the storage-level equivalent of `Database::open_with_devices`: builds a
   `DiskManager`/`LogManager`/`DoubleWriteBuffer` directly on the given
   devices, runs `recovery::recover_double_write` then

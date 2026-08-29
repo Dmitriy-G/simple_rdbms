@@ -10,22 +10,36 @@ nothing in this test touches a private item.
 
 ## Key Components
 
+- `CountingSegmentStore` - private. A `SegmentStore` that wraps a real
+  `FileSegmentStore` and hands back every segment device wrapped in a
+  `CountingDevice`, sharing one pair of `calls`/`bytes` counters across
+  every segment it opens - the same shape `wal_segments.rs`'s own
+  identically-named private helper uses, kept local to each file rather
+  than shared, since `mod support;` only resolves within one crate's
+  `tests/` directory and this one struct is a few lines either way.
+  `LogManager` now always speaks through a `SegmentStore`
+  (`wal.MD`'s single-on-disk-layout invariant), so there is no longer a
+  way to hand it one already-open counted device directly.
 - `undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times` -
   rolling back thousands of updates must cost a small, constant amount of
   device I/O *per undone record*, not a whole extra log-sized read for
   every single one of them - the quadratic behavior `LogManager::read_at`
-  replaced `iter_from(lsn).next()` to fix. Wraps the WAL's device in a
-  `CountingDevice`, undoes 5,000 updates to one page, and asserts both the
-  call count and cumulative bytes read stay within a small constant factor
-  of the update count - a read counter is the deterministic way to check
-  this; a wall-clock timing assertion would be flaky.
+  replaced `iter_from(lsn).next()` to fix. Opens the WAL through a
+  `CountingSegmentStore`, undoes 5,000 updates to one page, and asserts
+  both the call count and cumulative bytes read stay within a small
+  constant factor of the update count - a read counter is the
+  deterministic way to check this; a wall-clock timing assertion would be
+  flaky.
 
 ## Usage Example
 
 ```rust
-let device: Box<dyn BlockDevice> =
-    Box::new(CountingDevice::new(Box::new(FileDevice::new(wal_file)), calls.clone(), bytes.clone()));
-let log = LogManager::open_with_device(device)?;
+let store: Arc<dyn SegmentStore> = Arc::new(CountingSegmentStore {
+    inner: FileSegmentStore::new(wal_path),
+    calls: calls.clone(),
+    bytes: bytes.clone(),
+});
+let log = LogManager::open_with_segment_store(store, DEFAULT_SEGMENT_SIZE)?;
 let pool = BufferPool::new(disk, dwb, log, 8, Box::new(LruKReplacer::new(8, 2)));
 // ... 5,000 writes to one page, then reset the counters ...
 undo_transaction(&pool, txn_id, last_lsn)?;

@@ -114,7 +114,8 @@ an error - the only external dependency this crate needs, since logging
 that once at the boundary is itself boundary-assembly, not domain logic.
 Dev-only: this crate again with its `test-util` feature enabled (for
 `Database::open_with_devices`, used by the crash-injection harness to open
-against fault-injecting `BlockDevice`s instead of real files), plus
+against fault-injecting `BlockDevice`s and a fault-injecting
+`storage::wal::SegmentStore` instead of real files), plus
 `tempfile` and `proptest` (for `tests/index_equivalence.rs`'s randomized
 index-vs-sequential-scan comparison).
 

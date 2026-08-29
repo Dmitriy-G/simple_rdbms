@@ -15,9 +15,11 @@ use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
-use storage::wal::{LogManager, LogRecordKind};
+use storage::wal::{
+    DEFAULT_SEGMENT_SIZE, FaultySegmentStore, LogManager, LogRecordKind, SegmentStore,
+};
 
-type DeviceTriple = (Box<dyn BlockDevice>, Box<dyn BlockDevice>, Box<dyn BlockDevice>);
+type DeviceTriple = (Box<dyn BlockDevice>, Arc<dyn SegmentStore>, Box<dyn BlockDevice>);
 
 fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
     OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
@@ -30,7 +32,6 @@ fn faulty_devices(
     model: DurabilityModel,
 ) -> Result<DeviceTriple, Box<dyn Error>> {
     let db_file = open_file(&dir.join("test.db"))?;
-    let wal_file = open_file(&dir.join("test.db.wal"))?;
     let dwb_file = open_file(&dir.join("test.db.dwb"))?;
     let db_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
         Box::new(FileDevice::new(db_file)),
@@ -38,28 +39,24 @@ fn faulty_devices(
         fail_at,
         model,
     ));
-    let wal_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
-        Box::new(FileDevice::new(wal_file)),
-        counter.clone(),
-        fail_at,
-        model,
-    ));
+    let wal_store: Arc<dyn SegmentStore> =
+        Arc::new(FaultySegmentStore::new(dir.join("test.db.wal"), counter.clone(), fail_at, model));
     let dwb_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
         Box::new(FileDevice::new(dwb_file)),
         counter.clone(),
         fail_at,
         model,
     ));
-    Ok((db_device, wal_device, dwb_device))
+    Ok((db_device, wal_store, dwb_device))
 }
 
 fn open_recovered_pool(
     db_device: Box<dyn BlockDevice>,
-    wal_device: Box<dyn BlockDevice>,
+    wal_store: Arc<dyn SegmentStore>,
     dwb_device: Box<dyn BlockDevice>,
 ) -> Result<BufferPool, StorageError> {
     let disk_manager = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
-    let log_manager = LogManager::open_with_device(wal_device)?;
+    let log_manager = LogManager::open_with_segment_store(wal_store, DEFAULT_SEGMENT_SIZE)?;
     let dwb = DoubleWriteBuffer::open_with_device(dwb_device, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
     recovery::recover_double_write(&disk_manager, &dwb)?;
     let pool =
@@ -101,11 +98,11 @@ fn commit(pool: &BufferPool, txn_id: TxnId) -> Result<(), StorageError> {
 
 fn run_until_crash(
     db_device: Box<dyn BlockDevice>,
-    wal_device: Box<dyn BlockDevice>,
+    wal_store: Arc<dyn SegmentStore>,
     dwb_device: Box<dyn BlockDevice>,
     keys: &[Vec<u8>],
 ) -> usize {
-    let Ok(pool) = open_recovered_pool(db_device, wal_device, dwb_device) else {
+    let Ok(pool) = open_recovered_pool(db_device, wal_store, dwb_device) else {
         return 0;
     };
     let pool = &pool;

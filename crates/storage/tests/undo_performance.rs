@@ -1,21 +1,42 @@
 use std::error::Error;
-use std::fs::OpenOptions;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::TxnId;
-use storage::block_device::{BlockDevice, FileDevice};
+use storage::StorageError;
+use storage::block_device::BlockDevice;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
 use storage::recovery::undo_transaction;
 use storage::replacer::LruKReplacer;
-use storage::wal::LogManager;
+use storage::wal::{DEFAULT_SEGMENT_SIZE, FileSegmentStore, LogManager, SegmentStore};
 
 mod support;
 
 use support::CountingDevice;
+
+struct CountingSegmentStore {
+    inner: FileSegmentStore,
+    calls: Arc<AtomicUsize>,
+    bytes: Arc<AtomicUsize>,
+}
+
+impl SegmentStore for CountingSegmentStore {
+    fn existing_segments(&self) -> Result<Vec<u64>, StorageError> {
+        self.inner.existing_segments()
+    }
+
+    fn open(&self, id: u64) -> Result<Box<dyn BlockDevice>, StorageError> {
+        let device = self.inner.open(id)?;
+        Ok(Box::new(CountingDevice::new(device, self.calls.clone(), self.bytes.clone())))
+    }
+
+    fn remove(&self, id: u64) -> Result<(), StorageError> {
+        self.inner.remove(id)
+    }
+}
 
 #[test]
 fn undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times()
@@ -23,20 +44,14 @@ fn undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times()
     let dir = tempfile::tempdir()?;
     let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
 
-    let wal_file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(dir.path().join("test.db.wal"))?;
     let calls = Arc::new(AtomicUsize::new(0));
     let bytes = Arc::new(AtomicUsize::new(0));
-    let device: Box<dyn BlockDevice> = Box::new(CountingDevice::new(
-        Box::new(FileDevice::new(wal_file)),
-        calls.clone(),
-        bytes.clone(),
-    ));
-    let log = LogManager::open_with_device(device)?;
+    let store: Arc<dyn SegmentStore> = Arc::new(CountingSegmentStore {
+        inner: FileSegmentStore::new(dir.path().join("test.db.wal")),
+        calls: calls.clone(),
+        bytes: bytes.clone(),
+    });
+    let log = LogManager::open_with_segment_store(store, DEFAULT_SEGMENT_SIZE)?;
     let dwb = DoubleWriteBuffer::open(
         dir.path().join("test.db.dwb"),
         DoubleWriteBuffer::DEFAULT_CAPACITY,

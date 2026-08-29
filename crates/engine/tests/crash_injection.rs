@@ -7,8 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use common::DbConfig;
 use engine::{Database, ResultSet, Tuple};
 use storage::block_device::{BlockDevice, DurabilityModel, FaultyDevice, FileDevice};
+use storage::wal::{DEFAULT_SEGMENT_SIZE, FaultySegmentStore, SegmentStore};
 
-type DeviceTriple = (Box<dyn BlockDevice>, Box<dyn BlockDevice>, Box<dyn BlockDevice>);
+type DeviceTriple = (Box<dyn BlockDevice>, Arc<dyn SegmentStore>, Box<dyn BlockDevice>);
 
 type TableRows = (String, Vec<Tuple>);
 
@@ -23,7 +24,6 @@ fn faulty_devices(
     model: DurabilityModel,
 ) -> Result<DeviceTriple, Box<dyn Error>> {
     let db_file = open_file(&dir.join("test.db"))?;
-    let wal_file = open_file(&dir.join("test.db.wal"))?;
     let dwb_file = open_file(&dir.join("test.db.dwb"))?;
     let db_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
         Box::new(FileDevice::new(db_file)),
@@ -31,19 +31,15 @@ fn faulty_devices(
         fail_at,
         model,
     ));
-    let wal_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
-        Box::new(FileDevice::new(wal_file)),
-        counter.clone(),
-        fail_at,
-        model,
-    ));
+    let wal_store: Arc<dyn SegmentStore> =
+        Arc::new(FaultySegmentStore::new(dir.join("test.db.wal"), counter.clone(), fail_at, model));
     let dwb_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
         Box::new(FileDevice::new(dwb_file)),
         counter.clone(),
         fail_at,
         model,
     ));
-    Ok((db_device, wal_device, dwb_device))
+    Ok((db_device, wal_store, dwb_device))
 }
 
 fn config(dir: &Path) -> DbConfig {
@@ -53,10 +49,15 @@ fn config(dir: &Path) -> DbConfig {
 fn total_write_count(workload: &[String]) -> Result<u64, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let counter = Arc::new(AtomicU64::new(0));
-    let (db_device, wal_device, dwb_device) =
+    let (db_device, wal_store, dwb_device) =
         faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
-    let mut db =
-        Database::open_with_devices(config(dir.path()), db_device, wal_device, dwb_device)?;
+    let mut db = Database::open_with_devices(
+        config(dir.path()),
+        db_device,
+        wal_store,
+        DEFAULT_SEGMENT_SIZE,
+        dwb_device,
+    )?;
     for stmt in workload {
         db.execute(stmt)?;
     }
@@ -82,12 +83,14 @@ fn observable_state(db: &mut Database) -> Result<Vec<TableRows>, Box<dyn Error>>
 fn run_until_crash(
     config: DbConfig,
     db_device: Box<dyn BlockDevice>,
-    wal_device: Box<dyn BlockDevice>,
+    wal_store: Arc<dyn SegmentStore>,
     dwb_device: Box<dyn BlockDevice>,
     workload: &[String],
 ) -> Result<usize, Box<dyn Error>> {
     let mut safe_prefix = 0usize;
-    if let Ok(mut db) = Database::open_with_devices(config, db_device, wal_device, dwb_device) {
+    if let Ok(mut db) =
+        Database::open_with_devices(config, db_device, wal_store, DEFAULT_SEGMENT_SIZE, dwb_device)
+    {
         let mut acked = 0usize;
         let mut in_txn = false;
         for stmt in workload {
@@ -123,16 +126,21 @@ fn assert_workload_is_crash_safe(
         let db_path_dir = dir.path();
 
         let counter = Arc::new(AtomicU64::new(0));
-        let (db_device, wal_device, dwb_device) = faulty_devices(db_path_dir, &counter, n, model)?;
+        let (db_device, wal_store, dwb_device) = faulty_devices(db_path_dir, &counter, n, model)?;
         let safe_prefix =
-            run_until_crash(config(db_path_dir), db_device, wal_device, dwb_device, workload)?;
+            run_until_crash(config(db_path_dir), db_device, wal_store, dwb_device, workload)?;
 
         for recovery_fail_at in [1u64, 2] {
             let inner_counter = Arc::new(AtomicU64::new(0));
-            let (db_device, wal_device, dwb_device) =
+            let (db_device, wal_store, dwb_device) =
                 faulty_devices(db_path_dir, &inner_counter, recovery_fail_at, model)?;
-            let _ =
-                Database::open_with_devices(config(db_path_dir), db_device, wal_device, dwb_device);
+            let _ = Database::open_with_devices(
+                config(db_path_dir),
+                db_device,
+                wal_store,
+                DEFAULT_SEGMENT_SIZE,
+                dwb_device,
+            );
         }
 
         let mut recovered = Database::open(config(db_path_dir))?;
@@ -217,10 +225,15 @@ fn total_write_count_after(prefix: &[String], workload: &[String]) -> Result<u64
     }
 
     let counter = Arc::new(AtomicU64::new(0));
-    let (db_device, wal_device, dwb_device) =
+    let (db_device, wal_store, dwb_device) =
         faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
-    let mut db =
-        Database::open_with_devices(config(dir.path()), db_device, wal_device, dwb_device)?;
+    let mut db = Database::open_with_devices(
+        config(dir.path()),
+        db_device,
+        wal_store,
+        DEFAULT_SEGMENT_SIZE,
+        dwb_device,
+    )?;
     for stmt in workload {
         db.execute(stmt)?;
     }
@@ -250,9 +263,9 @@ fn assert_two_generation_workload_is_crash_safe(
         }
 
         let counter = Arc::new(AtomicU64::new(0));
-        let (db_device, wal_device, dwb_device) = faulty_devices(db_path_dir, &counter, n1, model)?;
+        let (db_device, wal_store, dwb_device) = faulty_devices(db_path_dir, &counter, n1, model)?;
         let safe_prefix1 =
-            run_until_crash(config(db_path_dir), db_device, wal_device, dwb_device, gen1)?;
+            run_until_crash(config(db_path_dir), db_device, wal_store, dwb_device, gen1)?;
 
         Database::open(config(db_path_dir))?.close()?;
 

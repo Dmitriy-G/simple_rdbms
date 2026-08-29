@@ -314,21 +314,43 @@ impl SegmentStore for FileSegmentStore {
     }
 }
 
-struct NoSegmentStore;
+#[cfg(any(test, feature = "test-util"))]
+pub struct FaultySegmentStore {
+    inner: FileSegmentStore,
+    counter: Arc<AtomicU64>,
+    fail_at: u64,
+    model: crate::block_device::DurabilityModel,
+}
 
-impl SegmentStore for NoSegmentStore {
+#[cfg(any(test, feature = "test-util"))]
+impl FaultySegmentStore {
+    pub fn new(
+        base: impl Into<PathBuf>,
+        counter: Arc<AtomicU64>,
+        fail_at: u64,
+        model: crate::block_device::DurabilityModel,
+    ) -> Self {
+        Self { inner: FileSegmentStore::new(base), counter, fail_at, model }
+    }
+}
+
+#[cfg(any(test, feature = "test-util"))]
+impl SegmentStore for FaultySegmentStore {
     fn existing_segments(&self) -> Result<Vec<u64>, StorageError> {
-        Ok(Vec::new())
+        self.inner.existing_segments()
     }
 
-    fn open(&self, _id: u64) -> Result<Box<dyn BlockDevice>, StorageError> {
-        Err(StorageError::CorruptLogHeader {
-            reason: "a log opened from a single device has no segment store to roll to".to_string(),
-        })
+    fn open(&self, id: u64) -> Result<Box<dyn BlockDevice>, StorageError> {
+        Ok(Box::new(crate::block_device::FaultyDevice::with_model(
+            self.inner.open(id)?,
+            self.counter.clone(),
+            self.fail_at,
+            self.model,
+        )))
     }
 
-    fn remove(&self, _id: u64) -> Result<(), StorageError> {
-        Ok(())
+    fn remove(&self, id: u64) -> Result<(), StorageError> {
+        self.inner.remove(id)
     }
 }
 
@@ -428,9 +450,25 @@ pub struct LogManager {
     durable_lsn: AtomicU64,
 }
 
+fn reject_legacy_single_file_log(base: &Path) -> Result<(), StorageError> {
+    match std::fs::metadata(base) {
+        Ok(metadata) if metadata.is_file() => Err(StorageError::CorruptLogHeader {
+            reason: format!(
+                "{} is a legacy single-file write-ahead log; this build reads and writes a \
+                 numbered segment family ({}.NNNNNN) instead, so it cannot be opened directly",
+                base.display(),
+                base.display()
+            ),
+        }),
+        _ => Ok(()),
+    }
+}
+
 impl LogManager {
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, StorageError> {
-        let store: Arc<dyn SegmentStore> = Arc::new(FileSegmentStore::new(path.into()));
+        let path = path.into();
+        reject_legacy_single_file_log(&path)?;
+        let store: Arc<dyn SegmentStore> = Arc::new(FileSegmentStore::new(path));
         Self::open_with_store(store, DEFAULT_SEGMENT_SIZE)
     }
 
@@ -439,13 +477,10 @@ impl LogManager {
         path: impl Into<PathBuf>,
         target_segment_size: u64,
     ) -> Result<Self, StorageError> {
-        let store: Arc<dyn SegmentStore> = Arc::new(FileSegmentStore::new(path.into()));
+        let path = path.into();
+        reject_legacy_single_file_log(&path)?;
+        let store: Arc<dyn SegmentStore> = Arc::new(FileSegmentStore::new(path));
         Self::open_with_store(store, target_segment_size)
-    }
-
-    pub fn open_with_device(device: Box<dyn BlockDevice>) -> Result<Self, StorageError> {
-        let store: Arc<dyn SegmentStore> = Arc::new(NoSegmentStore);
-        Self::bootstrap(store, u64::MAX, 0, device, Vec::new())
     }
 
     #[cfg(any(test, feature = "test-util"))]

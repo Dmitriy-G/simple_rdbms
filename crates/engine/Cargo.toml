@@ -14,7 +14,7 @@ workspace = true
 # `BlockDevice`s rather than real files. Same rationale as `storage`'s own
 # `test-util` feature: `#[cfg(test)]` alone doesn't apply when this crate's
 # integration tests link against a normal build of it.
-test-util = []
+test-util = ["storage/test-util"]
 
 [dependencies]
 common = { workspace = true }

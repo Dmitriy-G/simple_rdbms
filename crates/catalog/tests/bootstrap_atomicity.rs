@@ -6,14 +6,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use catalog::Catalog;
 use common::TxnId;
-use storage::block_device::{BlockDevice, FaultyDevice, FileDevice};
+use storage::block_device::{BlockDevice, DurabilityModel, FaultyDevice, FileDevice};
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
-use storage::wal::{LogManager, LogRecordKind};
+use storage::wal::{
+    DEFAULT_SEGMENT_SIZE, FaultySegmentStore, LogManager, LogRecordKind, SegmentStore,
+};
 
 const BOOTSTRAP_TXN: TxnId = TxnId(0);
 
@@ -31,15 +33,16 @@ fn faulty_pool(
         counter.clone(),
         fail_at,
     ));
-    let wal_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::new(
-        Box::new(FileDevice::new(open_file(&dir.join("test.db.wal"))?)),
+    let wal_store: Arc<dyn SegmentStore> = Arc::new(FaultySegmentStore::new(
+        dir.join("test.db.wal"),
         counter.clone(),
         fail_at,
+        DurabilityModel::write_is_durable(),
     ));
     let disk = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
     let dwb =
         DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    let log = LogManager::open_with_device(wal_device)?;
+    let log = LogManager::open_with_segment_store(wal_store, DEFAULT_SEGMENT_SIZE)?;
     Ok(BufferPool::new(disk, dwb, log, 16, Box::new(LruKReplacer::new(16, 2))))
 }
 

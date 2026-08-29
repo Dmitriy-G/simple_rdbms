@@ -39,6 +39,15 @@ workload.
   force repeated eviction under pressure, so `write_observations`
   captures many real disk writes to check this against, not just the
   trivial case of a pool that never evicts.
+- `opening_a_legacy_single_file_log_is_a_clear_error` - writes a plain,
+  non-empty file at the log's base path (exactly what a pre-segmentation
+  database's `<db_path>.wal` looks like) and asserts `LogManager::open`
+  returns `StorageError::CorruptLogHeader` naming it, rather than treating
+  "no `.NNNNNN` siblings found" as "brand-new database" and silently
+  starting from an empty log. This is `reject_legacy_single_file_log`'s
+  only direct regression test; every other `wal.rs` test opens a fresh
+  temp-dir path that has never had anything written to it, so none of them
+  would notice if this check were ever accidentally removed.
 
 ## Usage Example
 

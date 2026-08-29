@@ -209,3 +209,20 @@ fn wal_ordering_holds_across_an_eviction_heavy_workload() -> Result<(), Box<dyn 
 
     Ok(())
 }
+
+#[test]
+fn opening_a_legacy_single_file_log_is_a_clear_error() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("test.wal");
+    std::fs::write(&path, b"not a segment family, just a plain pre-segmentation log file")?;
+
+    match LogManager::open(path) {
+        Ok(_) => panic!("a bare file at the log's base path must be refused"),
+        Err(err) => assert!(
+            matches!(err, storage::StorageError::CorruptLogHeader { .. }),
+            "expected CorruptLogHeader, got {err:?}"
+        ),
+    }
+
+    Ok(())
+}

@@ -27,23 +27,36 @@ right call (only when the test needs access to a private item).
 ## Usage Example
 
 ```rust
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
-use storage::block_device::{BlockDevice, FileDevice};
-use storage::wal::LogManager;
+use storage::wal::{FileSegmentStore, SegmentStore};
 
 mod support;
 use support::CountingDevice;
 
-let calls = Rc::new(Cell::new(0));
-let bytes = Rc::new(Cell::new(0));
-let device: Box<dyn BlockDevice> =
-    Box::new(CountingDevice::new(Box::new(FileDevice::new(wal_file)), calls.clone(), bytes.clone()));
-let log = LogManager::open_with_device(device)?;
+struct CountingSegmentStore {
+    inner: FileSegmentStore,
+    calls: Arc<AtomicUsize>,
+    bytes: Arc<AtomicUsize>,
+}
+
+impl SegmentStore for CountingSegmentStore {
+    // existing_segments and remove just forward to `inner`
+    fn open(&self, id: u64) -> Result<Box<dyn storage::block_device::BlockDevice>, storage::StorageError> {
+        let device = self.inner.open(id)?;
+        Ok(Box::new(CountingDevice::new(device, self.calls.clone(), self.bytes.clone())))
+    }
+}
 ```
 
-`crates/storage/tests/undo_performance.rs` is the one test that currently
-declares `mod support;` and drives `CountingDevice` this way, resetting
+`LogManager` always opens a `SegmentStore`, never a single device directly
+(`wal.MD`'s single-on-disk-layout invariant), so wrapping one device in
+`CountingDevice` means implementing a small `SegmentStore` like this one
+that hands every segment it opens through `CountingDevice` first.
+`crates/storage/tests/undo_performance.rs` declares `mod support;`, keeps
+its own private copy of exactly this `CountingSegmentStore` (`mod support;`
+only resolves within one crate's `tests/` directory, so it cannot be
+shared further than that), and drives it this way, resetting
 `calls`/`bytes` right before the operation under measurement so setup I/O
 doesn't pollute the count.

@@ -24,15 +24,7 @@ fn fetch_page_hot_loop_is_unaffected_by_disabled_trace_calls() {
     let disk = DiskManager::open_with_device(Box::new(FileDevice::new(db_file)), PAGE_SIZE, None)
         .expect("open disk manager");
 
-    let wal_file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(dir.path().join("bench.db.wal"))
-        .expect("open wal file");
-    let log = LogManager::open_with_device(Box::new(FileDevice::new(wal_file)))
-        .expect("open log manager");
+    let log = LogManager::open(dir.path().join("bench.db.wal")).expect("open log manager");
 
     let dwb_file = std::fs::OpenOptions::new()
         .read(true)

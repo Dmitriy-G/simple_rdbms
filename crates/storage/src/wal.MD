@@ -110,12 +110,24 @@ succeeded).
   file at `segment_path(base, id)`; `remove` deletes it, treating "already
   gone" as success rather than an error, since `truncate_below` racing a
   half-completed prior truncation should not itself fail.
-- `NoSegmentStore` - private. The `SegmentStore` `LogManager::open_with_device`
-  installs behind its single, caller-supplied device: `existing_segments`
-  reports none, `open` refuses (there is no second segment to open - a
-  device-backed log never rolls, so this is never actually called), and
-  `remove` is a harmless no-op (never called either, since nothing is ever
-  sealed).
+- `FaultySegmentStore` - `#[cfg(any(test, feature = "test-util"))]`. A
+  `SegmentStore` that wraps a real `FileSegmentStore` and hands back every
+  segment device wrapped in a `block_device::FaultyDevice`, all sharing one
+  `counter`/`fail_at`/`DurabilityModel`. There is exactly one on-disk log
+  layout (the paragraph above) - a numbered segment family - so this is the
+  only way a crash-injection harness gets fault injection into the log at
+  all; there is no single-device constructor left to hand it a lone faulty
+  device instead. `open(id)` wraps *that specific segment's* device freshly
+  on every call rather than wrapping once at construction, which matters
+  because segments are opened lazily by id as the log rolls - a harness
+  that only wrapped the first segment would silently stop injecting faults
+  into every segment after the first roll. Lives here rather than in
+  `crates/storage/tests/support/` because `mod support;` only resolves
+  within the crate whose `tests/` directory declares it - `engine` and
+  `catalog`'s own crash-injection harnesses need this too, and a Rust test
+  module can't reach into another crate's `tests/` directory, so a helper
+  meant to be shared *across* crates has to be part of the library itself,
+  gated the same way `open_with_segment_store` already is.
 - `write_segment_header(device, start_lsn)`/`read_segment_header(device) ->
   Result<u64, StorageError>` - private. Write/read a segment's fixed
   16-byte header (`SEGMENT_MAGIC` then `start_lsn`, little-endian).
@@ -242,9 +254,19 @@ succeeded).
   type - is a lock-free atomic load instead of a mutex acquisition, since
   it's consulted on every page flush (`BufferPool::flush_pages`) even
   when nothing about the buffer or file needs touching.
+- `reject_legacy_single_file_log(base) -> Result<(), StorageError>` -
+  private. Returns `StorageError::CorruptLogHeader` naming `base` if a
+  plain file already exists at exactly that path, before either `open`
+  variant below ever consults a `SegmentStore`. There is exactly one
+  on-disk log layout - a numbered segment family - so a bare `<path>` file
+  can only be a pre-segmentation database's log; without this check
+  `FileSegmentStore::existing_segments` would simply find no `.NNNNNN`
+  siblings, `open_with_store` would create a brand-new, empty
+  `<path>.000000`, and the entire log that file describes would be
+  silently ignored rather than refused (`docs/adr/0011-segmented-write-ahead-log.md`).
 - `LogManager::open(path)` - opens (creating the family if necessary) the
   segmented log at `path`, using `FileSegmentStore` and
-  `DEFAULT_SEGMENT_SIZE`.
+  `DEFAULT_SEGMENT_SIZE`, after `reject_legacy_single_file_log`.
 - `LogManager::open_with_segment_size(path, target_segment_size)` -
   `#[cfg(any(test, feature = "test-util"))]`. Same as `open`, but with a
   caller-chosen roll threshold instead of `DEFAULT_SEGMENT_SIZE` - the only
@@ -254,26 +276,25 @@ succeeded).
   `#[cfg(any(test, feature = "test-util"))]`. Same as `open_with_segment_size`,
   but with a caller-supplied `SegmentStore` instead of a real
   `FileSegmentStore` - lets a test wrap every segment device it opens
-  (e.g. in a byte-counting `BlockDevice`) to observe how much of the log
-  a given operation actually touches.
+  (e.g. in a byte-counting `BlockDevice`, or `FaultySegmentStore`) to
+  observe or fault-inject how much of the log a given operation actually
+  touches. This is the only way to open a `LogManager` at all when the
+  caller cannot hand it a real filesystem path - there is no
+  single-device constructor left; a caller with one already-constructed
+  fault-injecting device wraps it in a `SegmentStore` of its own (or uses
+  `FaultySegmentStore`) rather than the log growing a second on-disk
+  shape to accommodate it.
 - `LogManager::segment_ids(&self) -> Vec<u64>` -
   `#[cfg(any(test, feature = "test-util"))]`. Every segment id this log
   currently has open or sealed, active id last. Test-only introspection
   for asserting a truncation actually dropped the segments it should have.
-- `LogManager::open_with_device(device)` - opens a log backed by an
-  arbitrary `BlockDevice` as segment `0` of a log that never rolls
-  (`NoSegmentStore`, `target_segment_size = u64::MAX`), for tests and
-  crash-injection fault wrapping that hand this a single, already-constructed
-  device (`docs/adr/0011-segmented-write-ahead-log.md` on why this stays a
-  single-segment legacy path rather than growing a multi-device factory
-  API). Delegates straight to `bootstrap` with an empty sealed-id list.
 - `LogManager::open_with_store(store, target_segment_size)` - private.
   Lists `store.existing_segments()`; the highest id found (or `0`, for a
   brand-new database) becomes the active segment, and every other id found
   becomes a sealed candidate `bootstrap` will fold in.
 - `LogManager::bootstrap(store, target_segment_size, active_id, active_device, sealed_ids)` -
-  private, the shared core both `open_with_device` and `open_with_store`
-  funnel through. For each sealed id: opens it, reads its header for
+  private, the shared core `open_with_store` funnels through. For each
+  sealed id: opens it, reads its header for
   `start_lsn`, `scan_segment`s it (bounded to that one segment's size) to
   fold its transactions' last-seen LSNs into `last_lsn_by_txn`, and records
   its `SegmentMeta`. For the active segment: if it is shorter than

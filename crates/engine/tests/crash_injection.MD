@@ -3,14 +3,20 @@
 The crash-injection harness: for a fixed, deterministic workload of SQL
 statements, and for every possible point a write could fail (`1..=K`,
 where `K` is the total number of writes the workload performs), opens a
-fresh database on a `FaultyDevice` armed to fail at write `n`, runs the
-workload until it dies, reopens the same files on a real device (which
-runs `storage::recovery::recover` as part of `Database::open`), and
-checks the result is consistent with *some* prefix of the workload's
-statements: build a reference database by replaying exactly the
-statements that were acknowledged before the fault struck (against a
-fault-free device), and require the recovered database's observable
-state - its set of tables and every row in each - to match it exactly.
+fresh database on a `FaultyDevice`/`FaultySegmentStore` armed to fail at
+write `n`, runs the workload until it dies, reopens the same files on a
+real device (which runs `storage::recovery::recover` as part of
+`Database::open`), and checks the result is consistent with *some* prefix
+of the workload's statements: build a reference database by replaying
+exactly the statements that were acknowledged before the fault struck
+(against a fault-free device), and require the recovered database's
+observable state - its set of tables and every row in each - to match it
+exactly. The write half (`Database::open_with_devices`) and the recovery
+half (`Database::open`) must open the identical on-disk WAL layout for
+this comparison to mean anything, which is why the WAL side is a
+`storage::wal::SegmentStore` here rather than a single `BlockDevice`: both
+halves speak the same numbered segment family production actually writes
+(`docs/adr/0011-segmented-write-ahead-log.md`).
 
 This is the M7 deliverable per `task.MD`: "this harness will find more
 bugs than every other test in the repo combined."
@@ -63,18 +69,23 @@ injection at the `write_at`/`sync_all` call boundary can express at all.
 
 ## Key Components
 
-- `DeviceTriple` - a `Database::open_with_devices` call's trio of devices:
-  the database file, the write-ahead log, and the double-write buffer.
+- `DeviceTriple` - a `Database::open_with_devices` call's trio: the
+  database file's `BlockDevice`, the write-ahead log's `SegmentStore`, and
+  the double-write buffer's `BlockDevice`.
 - `TableRows` - one table's name alongside every row in it, in the order
   produced.
 - `open_file(path) -> std::io::Result<File>` - opens (creating if
   necessary) the file at `path` for a `FileDevice`.
 - `faulty_devices(dir, counter, fail_at, model) -> Result<DeviceTriple,
-  _>` - builds the trio of `BlockDevice`s a `Database::open_with_devices`
-  call needs, all sharing `counter` and armed to fail at write `fail_at`
-  under `model`, so that "fail at write N" counts across the whole system
-  rather than per file - matching how a real crash lands mid-workload
-  regardless of which file the Nth write happened to target.
+  _>` - builds the trio a `Database::open_with_devices` call needs, all
+  sharing `counter` and armed to fail at write `fail_at` under `model`, so
+  that "fail at write N" counts across the whole system rather than per
+  file - matching how a real crash lands mid-workload regardless of which
+  file the Nth write happened to target. The WAL side is a
+  `storage::wal::FaultySegmentStore` wrapping a real `FileSegmentStore`
+  rather than a single faulty device, so it faults every segment the log
+  ever opens (including ones created by a roll mid-workload), not just the
+  first.
 - `config(dir) -> DbConfig` - builds a `DbConfig` at `dir.join("test.db")`.
 - `total_write_count(workload) -> Result<u64, _>` - runs `workload` to
   completion (including a clean `close`) against a counting-but-never-
@@ -87,7 +98,7 @@ injection at the `write_at`/`sync_all` call boundary can express at all.
 - `observable_state(db) -> Result<Vec<TableRows>, _>` - every table's name
   (sorted) and every row in each, in the order produced - the "observable
   state" two databases are compared on.
-- `run_until_crash(config, db_device, wal_device, dwb_device, workload) ->
+- `run_until_crash(config, db_device, wal_store, dwb_device, workload) ->
   Result<usize, _>` - runs `workload` against a freshly opened database
   backed by (typically fault-injecting) devices until a statement fails
   or the workload finishes, returning how large a prefix of it is safe to

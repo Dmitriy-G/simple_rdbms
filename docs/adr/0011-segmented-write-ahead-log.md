@@ -45,10 +45,9 @@ does, that one-time cost was the easy trade.
 Each segment file starts with its own 16-byte header - the same 8-byte
 magic the single file used, plus the global LSN its first record starts at
 (`start_lsn`) - so a segment is self-describing: `crate::wal::SegmentStore`
-(the trait `FileSegmentStore` implements for real files, and the one
-`LogManager::open_with_device`'s single-device legacy path satisfies
-trivially by never rolling) never needs to consult any other segment to
-know where its own records fall in LSN space. Mapping an LSN to a physical
+(the trait `FileSegmentStore` implements for real files, and
+`FaultySegmentStore` implements for fault-injecting tests) never needs to
+consult any other segment to know where its own records fall in LSN space. Mapping an LSN to a physical
 location is `segment_header_len + (lsn - segment.start_lsn)` within
 whichever segment's `start_lsn` is the largest one `<=` that LSN - a linear
 scan of an in-memory `Vec<SegmentMeta>` that never holds more than a few
@@ -106,25 +105,29 @@ existing, well-understood "unsupported on-disk format version" error every
 other format change already produces, rather than a new, WAL-specific
 failure mode a caller would have to learn to recognize.
 
-`LogManager::open_with_device` - used by every test and crash-injection
-harness that hands a `LogManager` an already-constructed `BlockDevice`
-rather than a filesystem path - keeps its exact signature and treats the
-given device as segment `0` of a log that never rolls (`target_segment_size
-= u64::MAX`) and never truncates (`NoSegmentStore` refuses to open any
-other segment id, which `roll_segment` never needs to call under that
-target size). This was a deliberate scope decision: rewriting every
-existing fault-injecting device wrapper to construct a *family* of
-devices sharing one fault model was a substantially larger, higher-risk
-change than this fix needed, and every property those callers test
-(checksum handling, torn writes, ordering under eviction pressure) holds
-identically whether the log behind them is one segment or many. The
-crash-injection harnesses (`crates/engine/tests/crash_injection.rs`,
-`crates/storage/tests/btree_crash_injection.rs`) therefore do not yet
-exercise segment rollover or truncation under fault injection; the four
-tests in `crates/storage/tests/wal_segments.rs` are what covers that
-behavior today. A future task can extend the harnesses' device wrapping to
-a real multi-segment fault model if crash coverage of rollover itself is
-ever needed.
+**There is exactly one on-disk log layout: the numbered segment family.**
+An earlier revision of this ADR kept `LogManager::open_with_device`, a
+single-device legacy path every test and crash-injection harness used to
+hand a `LogManager` an already-constructed `BlockDevice` without rewriting
+every fault-injecting device wrapper into a family. That turned out to be
+the wrong trade: a harness that writes through the single-device path and
+then reopens for recovery through the production, segment-family path (as
+`crates/engine/tests/crash_injection.rs` does) is reading and writing two
+different on-disk shapes - the write half creates `<path>`, the read half
+looks for `<path>.000000`, finds nothing, and "recovers" an empty log. The
+harness measured nothing; every one of its fault points passed by
+accident, because recovery never touched the real data regardless of what
+the crash preserved. `open_with_device` and its backing `NoSegmentStore`
+are deleted rather than fixed in place, because keeping two log shapes
+alive is exactly the divergence that caused this. `FaultySegmentStore`
+(`wal.MD`) is the replacement: it wraps a real `FileSegmentStore` and
+hands back every segment device wrapped in a `block_device::FaultyDevice`
+sharing one fault model, so a crash-injection harness now writes and
+recovers through the identical segment family production uses.
+`LogManager::open` additionally refuses to open a path that exists as a
+plain file rather than a segment family (`StorageError::CorruptLogHeader`),
+so a database created before this change fails loudly on the first open
+instead of silently starting from an empty log.
 
 ## Consequences
 
@@ -138,6 +141,12 @@ An old, pre-segmentation database file now fails to open with a version
 error instead of being silently misread; there is no migration path from
 the old single-file format, since none existed for this project's alpha
 data yet and none was requested.
+
+The crash-injection harnesses (`crates/engine/tests/crash_injection.rs`,
+`crates/storage/tests/btree_crash_injection.rs`) now sweep real segment
+rollover and truncation under fault injection instead of a single
+never-rolling device, since `FaultySegmentStore` is the only way any of
+them can open a log at all.
 
 `max_txn_id` remains correct under truncation for a reason worth stating
 plainly since it is not obvious from the code alone: transaction ids are

@@ -67,10 +67,10 @@ impl Database {
 
     fn open_impl(config: DbConfig) -> Result<Self> {
         let conn_span = new_connection_span();
+        let disk_manager = DiskManager::open(config.db_path.clone(), config.page_size)?;
         let mut wal_path = config.db_path.clone().into_os_string();
         wal_path.push(".wal");
         let log_manager = LogManager::open(wal_path)?;
-        let disk_manager = DiskManager::open(config.db_path.clone(), config.page_size)?;
         let mut dwb_path = config.db_path.clone().into_os_string();
         dwb_path.push(".dwb");
         let dwb = DoubleWriteBuffer::open(dwb_path, config.dwb_capacity)?;
@@ -81,12 +81,13 @@ impl Database {
     pub fn open_with_devices(
         config: DbConfig,
         db_device: Box<dyn storage::block_device::BlockDevice>,
-        wal_device: Box<dyn storage::block_device::BlockDevice>,
+        wal_store: std::sync::Arc<dyn storage::wal::SegmentStore>,
+        wal_segment_size: u64,
         dwb_device: Box<dyn storage::block_device::BlockDevice>,
     ) -> Result<Self> {
         let conn_span = new_connection_span();
         let disk_manager = DiskManager::open_with_device(db_device, config.page_size, None)?;
-        let log_manager = LogManager::open_with_device(wal_device)?;
+        let log_manager = LogManager::open_with_segment_store(wal_store, wal_segment_size)?;
         let dwb = DoubleWriteBuffer::open_with_device(dwb_device, config.dwb_capacity)?;
         Self::open_with_managers(config, disk_manager, dwb, log_manager, conn_span)
     }
