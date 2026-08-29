@@ -624,11 +624,9 @@ impl LogManager {
         let from = Lsn(from.0.max(HEADER_LEN));
         let inner = recover_lock(self.inner.lock(), "LogManager.inner");
 
-        let start_index = inner.sealed.iter().rposition(|s| s.start_lsn <= from.0);
-        let pending_segments: VecDeque<u64> = match start_index {
-            Some(i) => inner.sealed[i..].iter().map(|s| s.id).collect(),
-            None => VecDeque::new(),
-        };
+        let start_index = inner.sealed.iter().rposition(|s| s.start_lsn <= from.0).unwrap_or(0);
+        let pending_segments: VecDeque<u64> =
+            inner.sealed[start_index..].iter().map(|s| s.id).collect();
 
         let active_len = inner.active_device.size()?;
         let durable_part = (active_len - SEGMENT_HEADER_LEN) as usize;

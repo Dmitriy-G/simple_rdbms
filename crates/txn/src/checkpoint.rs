@@ -1,4 +1,4 @@
-use common::Lsn;
+use common::{Lsn, PageId};
 use storage::buffer::BufferPool;
 use storage::wal::{CHECKPOINT_TXN, LogRecordKind};
 
@@ -21,6 +21,8 @@ pub fn write_checkpoint(
     let header_txn = txn_manager.begin(pool, IsolationLevel::ReadCommitted)?;
     pool.set_last_checkpoint_lsn(header_txn, begin_lsn)?;
     txn_manager.commit(header_txn, pool)?;
+    pool.flush_page(PageId(0))?;
+    pool.sync()?;
 
     let att_min = txn_manager.earliest_active_begin_lsn().map(|lsn| lsn.0);
     let truncate_bound = [dpt_min, att_min, Some(begin_lsn.0)].into_iter().flatten().min();

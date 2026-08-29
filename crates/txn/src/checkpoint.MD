@@ -46,6 +46,18 @@ rules.
   undo or redo can still reach may be deleted, and an active transaction's
   undo chain can reach all the way back to its own `Begin` record
   regardless of how many of its pages have since been flushed to disk.
+  Before computing that bound, forces the header transaction's write to
+  page 0 out to disk with `pool.flush_page(PageId(0))` followed by
+  `pool.sync()`. Page 0 is the hottest page in the database and is
+  effectively never evicted on its own, so without this call the on-disk
+  copy of `last_checkpoint_lsn` can lag arbitrarily far behind the
+  in-memory value — potentially all the way back to the previous
+  checkpoint, or to nothing at all if page 0 has never been flushed. A
+  crash before that stale on-disk LSN reaches disk, followed by
+  truncation, must not be possible: recovery reads that LSN as its start
+  point, and `truncate_log_below` deletes exactly the segments a stale
+  start point would need. The order is what makes this safe — the header
+  LSN is durable *before* `truncate_log_below` runs, never after.
 
 ## Usage Example
 

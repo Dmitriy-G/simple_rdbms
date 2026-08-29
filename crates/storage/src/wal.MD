@@ -46,6 +46,23 @@ below that bound - never the active segment, and never a partial segment.
 See `docs/adr/0011-segmented-write-ahead-log.md` for why the bound must use
 each active transaction's *earliest* LSN, not its most recent one.
 
+**`iter_from` must never read less of the log than `from` asks for.** If no
+sealed segment's `start_lsn` is `<= from` - meaning `from` precedes every
+segment this log still has - the correct segment to start from is the
+*first* surviving one, not "none": everything still retained is at or
+after `from` in that case, and skipping straight to the active segment
+would silently drop every sealed segment's records. Reading more of the
+log than strictly necessary only costs startup time; reading less costs
+committed data. Never resolve that ambiguity in the direction that reads
+less. This matters because `from` is not always trustworthy: it usually
+comes from the page-0 header's `last_checkpoint_lsn`, and page 0 is
+recovered by ordinary buffer-pool eviction like any other page, so a
+crash can leave the on-disk header behind whatever `truncate_below` has
+already deleted (`txn::write_checkpoint` flushes and syncs page 0 before
+truncating specifically to keep this from happening in practice - see
+`checkpoint.MD` - but `iter_from` does not get to assume that always
+succeeded).
+
 ## Key Components
 
 - `CHECKPOINT_TXN` - the `txn_id` every `CheckpointBegin`/`CheckpointEnd`
@@ -346,10 +363,13 @@ each active transaction's *earliest* LSN, not its most recent one.
   `flush`-then-read would - which is what lets a runtime `abort` (see
   `txn::TransactionManager::abort`) find and undo a transaction's own
   records before they have ever been flushed, not just after a crash.
-  Finds every sealed segment whose `start_lsn <= from` (there can be more
-  than one still to visit - `from` narrows *which* segment to start
-  from, but every later segment must still be scanned up to the current
-  tail) under the mutex, eagerly reads only the active segment's durable
+  Finds the latest sealed segment whose `start_lsn <= from` and starts
+  there, or the earliest sealed segment at all if none qualifies - see the
+  truncation-invariant section above for why "none qualifies" means "start
+  from the beginning of what's retained," not "there is nothing to read" -
+  then visits every later segment up to the current tail (there can be
+  more than one still to visit - `from` narrows *which* segment to start
+  from, but every later segment must still be scanned) under the mutex, eagerly reads only the active segment's durable
   bytes plus the buffer (bounded to one segment's worth, not the whole
   tail `from` might otherwise imply), and hands the rest off to
   `LogIterator` to load lazily. `from` must be `HEADER_LEN` or an LSN some
