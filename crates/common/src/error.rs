@@ -106,6 +106,14 @@ pub enum Error {
 
     #[error("another process has this database open: {path}")]
     DatabaseLocked { path: String },
+
+    #[error(
+        "buffer pool is poisoned: a previous flush failed after its double-write buffer batch \
+         was synced but before it was cleared, and writing a new batch now would overwrite a \
+         backup copy recovery still needs; reopen the database to let recovery repair it before \
+         any further page can be flushed"
+    )]
+    FlushPoisoned,
 }
 
 impl Error {
@@ -141,6 +149,7 @@ impl Error {
             Error::TransactionAborted => SqlState::IN_FAILED_SQL_TRANSACTION,
             Error::NotSupported(_) => SqlState::FEATURE_NOT_SUPPORTED,
             Error::DatabaseLocked { .. } => SqlState::LOCK_NOT_AVAILABLE,
+            Error::FlushPoisoned => SqlState::IO_ERROR,
         }
     }
 
@@ -156,7 +165,8 @@ impl Error {
             | Error::InvalidConfiguration { .. }
             | Error::DataCorrupted { .. }
             | Error::Internal { .. }
-            | Error::DatabaseLocked { .. } => Severity::Fatal,
+            | Error::DatabaseLocked { .. }
+            | Error::FlushPoisoned => Severity::Fatal,
 
             Error::BufferPoolExhausted
             | Error::BufferPoolWaitTimedOut { .. }
@@ -215,7 +225,8 @@ impl Error {
             | Error::NoActiveTransaction { .. }
             | Error::TransactionAborted
             | Error::NotSupported(_)
-            | Error::DatabaseLocked { .. } => self.to_string(),
+            | Error::DatabaseLocked { .. }
+            | Error::FlushPoisoned => self.to_string(),
 
             Error::Syntax { offset, .. } => format!("syntax error at offset {offset}: ?"),
 

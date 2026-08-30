@@ -15,8 +15,9 @@ existing condition - this crate has no index-specific `common::Error`
 variant of its own to map onto), `InPlaceUpdateOutOfBounds` and
 `NodeOverflow` both become `common::Error::Internal` (an invariant only a
 bug in this engine's own bookkeeping could violate, never something a
-caller's input could trigger), and `DatabaseLocked` becomes
-`common::Error::DatabaseLocked` directly - see `common`'s `error.MD` for
+caller's input could trigger), `DatabaseLocked` becomes
+`common::Error::DatabaseLocked` directly, and `FlushPoisoned` becomes
+`common::Error::FlushPoisoned` directly - see `common`'s `error.MD` for
 which).
 
 ## Key Components
@@ -95,7 +96,16 @@ which).
   one) already holds it (`block_device.MD`'s `lock_exclusive`). Never
   raised by `DiskManager::open_with_device`, which takes no lock at all,
   since the crash and in-memory device tests construct devices directly
-  and must not need a real file to lock.
+  and must not need a real file to lock. `FlushPoisoned` means
+  `BufferPool::flush_pages` previously failed after syncing a double-write
+  buffer batch but before clearing it, and this pool has therefore
+  permanently refused every flush since, to avoid a second batch reusing
+  those same slots and destroying the still-needed backup copy
+  (`buffer.MD`'s "Poisoning" paragraph on `flush_pages`) - raised
+  immediately, before any I/O, by every `flush_page`/`flush_all`/eviction
+  call on this pool from then on; only reopening the database (a fresh
+  `BufferPool`, after `recovery::recover_double_write` has had its chance
+  to repair the outstanding batch) clears it.
 - `impl From<StorageError> for common::Error` - matches each `StorageError`
   variant to the `common::Error` variant naming the same condition,
   preserving its structured fields rather than collapsing them into a

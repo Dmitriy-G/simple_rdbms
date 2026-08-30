@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -78,6 +78,7 @@ pub struct BufferPool {
     frame_available: Condvar,
     page_installed: Condvar,
     frame_wait_timeout: Duration,
+    flush_poisoned: AtomicBool,
     #[cfg(any(test, feature = "test-util"))]
     fetch_count: AtomicUsize,
     #[cfg(any(test, feature = "test-util"))]
@@ -134,6 +135,7 @@ impl BufferPool {
             frame_available: Condvar::new(),
             page_installed: Condvar::new(),
             frame_wait_timeout: Self::DEFAULT_FRAME_WAIT_TIMEOUT,
+            flush_poisoned: AtomicBool::new(false),
             #[cfg(any(test, feature = "test-util"))]
             fetch_count: AtomicUsize::new(0),
             #[cfg(any(test, feature = "test-util"))]
@@ -609,6 +611,9 @@ impl BufferPool {
     }
 
     fn flush_pages(&self, pages: &[(FrameId, PageId)]) -> Result<(), StorageError> {
+        if self.flush_poisoned.load(Ordering::Acquire) {
+            return Err(StorageError::FlushPoisoned);
+        }
         if pages.is_empty() {
             return Ok(());
         }
@@ -651,12 +656,23 @@ impl BufferPool {
         self.dwb.write_batch(&snapshot)?;
         metrics::counter!("dwb_batches_written_total").increment(1);
 
-        for page in &snapshot {
-            self.disk_manager.write_page(page.id(), page)?;
+        let after_dwb_write: Result<(), StorageError> = (|| {
+            for page in &snapshot {
+                self.disk_manager.write_page(page.id(), page)?;
+            }
+            self.disk_manager.sync()?;
+            self.dwb.clear_batch()
+        })();
+        if let Err(err) = after_dwb_write {
+            self.flush_poisoned.store(true, Ordering::Release);
+            tracing::error!(
+                %err,
+                "flush failed after its double-write buffer batch was synced but before it was \
+                 cleared; poisoning the buffer pool so no later flush can overwrite the backup \
+                 recovery still needs - reopen the database to repair it"
+            );
+            return Err(err);
         }
-        self.disk_manager.sync()?;
-
-        self.dwb.clear_batch()?;
 
         for (&(frame_id, _), snapshot_page) in pages.iter().zip(snapshot.iter()) {
             let idx = frame_id.0 as usize;

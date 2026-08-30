@@ -248,6 +248,10 @@ same thread.
   `DEFAULT_FRAME_WAIT_TIMEOUT` in `new` and overridable via
   `with_frame_wait_timeout`. `install_hook` (test/`test-util`-only) holds
   the optional `InstallHook` closure `call_install_hook` invokes.
+  `flush_poisoned: AtomicBool` starts `false` and is set permanently once
+  `flush_pages` fails after handing a batch's images to `dwb` but before
+  retiring them - see `flush_pages` below for why that specific window is
+  the one that matters.
 - `WriteObservation` - test/`test-util`-only. One observed disk write, for
   the WAL-ordering invariant test: at the moment `page_id` was written to
   disk, its `page_lsn` and the log's `durable_lsn` at that instant. The
@@ -528,28 +532,57 @@ same thread.
   source, alongside `try_install`'s losing branch. Moves the
   `buffer_pool_pinned_frames` gauge down.
 - `BufferPool::flush_pages(&self, pages) -> Result<(), StorageError>` -
-  private. Emits a `trace!` naming the batch size before doing anything,
-  and increments `dwb_batches_written_total` once the batch's double-write
-  copy is durable (a nonzero rate here, per `docs/ROADMAP.md`'s M13 entry,
-  is expected steady-state traffic, unlike `dwb_pages_restored_total` -
-  see `recovery.MD` - which should be zero outside a crash). Flushes a
-  batch of currently-dirty, resident pages to disk through the
-  double-write buffer, latching each frame only long enough to clone a
-  consistent snapshot of its bytes (never holding `index`'s mutex during
-  any of this). Every entry in `pages` must already be dirty and safe
-  from concurrent reassignment; this does not re-check either condition.
-  Implements the write-ahead rule (the log must be durable to the
-  batch's *highest* `page_lsn` before anything reaches the double-write
-  buffer - not before each page individually, and not merely before the
-  real file, which is what made a torn write unrecoverable before the
-  double-write buffer existed) and the double-write protocol itself:
-  write every page's image to `dwb` and sync it (so the batch is now
-  recoverable even if nothing below has happened yet), only then write
-  every page to its real location and sync that, then clear `dwb`. A
-  crash at any point along the way leaves either a real page untouched by
-  this batch, or a torn real page with an intact `dwb` copy
-  `recovery::recover_double_write` can restore from - never a torn real
-  page with no way back.
+  private. Refuses immediately with `StorageError::FlushPoisoned`, before
+  touching the log, `dwb`, or the data file, if `flush_poisoned` is
+  already set - see the poisoning paragraph below before assuming this
+  check is optional. Otherwise emits a `trace!` naming the batch size
+  before doing anything, and increments `dwb_batches_written_total` once
+  the batch's double-write copy is durable (a nonzero rate here, per
+  `docs/ROADMAP.md`'s M13 entry, is expected steady-state traffic, unlike
+  `dwb_pages_restored_total` - see `recovery.MD` - which should be zero
+  outside a crash). Flushes a batch of currently-dirty, resident pages to
+  disk through the double-write buffer, latching each frame only long
+  enough to clone a consistent snapshot of its bytes (never holding
+  `index`'s mutex during any of this). Every entry in `pages` must already
+  be dirty and safe from concurrent reassignment; this does not re-check
+  either condition. Implements the write-ahead rule (the log must be
+  durable to the batch's *highest* `page_lsn` before anything reaches the
+  double-write buffer - not before each page individually, and not merely
+  before the real file, which is what made a torn write unrecoverable
+  before the double-write buffer existed) and the double-write protocol
+  itself: write every page's image to `dwb` and sync it (so the batch is
+  now recoverable even if nothing below has happened yet), only then write
+  every page to its real location and sync that, then clear `dwb`. A crash
+  at any point up to and including a synced `dwb.write_batch` leaves
+  either a real page untouched by this batch, or a torn real page with an
+  intact `dwb` copy `recovery::recover_double_write` can restore from.
+
+  **Poisoning.** `dwb`'s slots are assigned by a batch's *position*
+  (`DoubleWriteBuffer::offset_of_slot`), not per page id, so at most one
+  batch's backup images can usefully exist on disk at a time - if this
+  function fails anywhere from the real-page-write loop through
+  `dwb.clear_batch` (a real write error, a sync failure, or the clear
+  itself failing), the just-synced `dwb` batch is left in place,
+  uncleared, exactly the state `recover_double_write` needs to repair a
+  torn real page on the next open. A second, later `flush_pages` call -
+  another eviction, a checkpoint, even just `Drop for Database`'s
+  best-effort flush - has no way to know that batch is still needed, and
+  writing a *new* one reuses the same slots: if that second write is
+  itself interrupted, it can overwrite the first batch's still-valid
+  backup with bytes that fail their own checksum, at which point
+  `recover_double_write` reads "bad slot checksum" and - correctly, by
+  its own rule - treats it as "the real write never started, nothing to
+  restore," even though the real page from the *first* failure is
+  actually torn and now has no way back. This was a real, reproduced bug
+  (`problems.MD`), not a hypothetical: a `ChecksumMismatch` on reopen with
+  no `dwb_pages_restored_total` warning ever logged. The fix is
+  `flush_poisoned`: once this function fails in that window, it sets the
+  flag and every later call - on this pool, for the rest of this process,
+  regardless of which pages it's asked to flush - fails fast with
+  `StorageError::FlushPoisoned` instead of touching `dwb` again. Only a
+  fresh `BufferPool` (i.e. reopening the database, running
+  `recover_double_write` before any pool exists) clears it, which is also
+  the only point it's safe to write a new batch again.
 
   Clearing `dirty_since_lsn` at the end is conditional, not unconditional:
   for each page, it re-takes the frame's `RwLock` (write half, so it is

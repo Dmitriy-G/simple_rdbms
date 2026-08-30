@@ -460,11 +460,11 @@ struct LogBufferInner {
 
 impl LogBufferInner {
     fn roll_segment(&mut self) -> Result<(), StorageError> {
-        self.sealed.push(SegmentMeta { id: self.active_id, start_lsn: self.active_start_lsn });
         let new_id = self.active_id + 1;
         let new_start_lsn = self.next_lsn;
         let device = self.store.open(new_id)?;
         write_segment_header(device.as_ref(), new_start_lsn)?;
+        self.sealed.push(SegmentMeta { id: self.active_id, start_lsn: self.active_start_lsn });
         self.active_device = device;
         self.active_id = new_id;
         self.active_start_lsn = new_start_lsn;
@@ -628,8 +628,15 @@ impl LogManager {
         self.durable_lsn.store(inner.next_lsn, Ordering::Release);
 
         let active_len = inner.active_device.size()?;
-        if active_len.saturating_sub(SEGMENT_HEADER_LEN) >= inner.target_segment_size {
-            inner.roll_segment()?;
+        if active_len.saturating_sub(SEGMENT_HEADER_LEN) >= inner.target_segment_size
+            && let Err(err) = inner.roll_segment()
+        {
+            tracing::warn!(
+                %err,
+                "failed to roll the write-ahead log to a new segment; every record up to this \
+                 flush is already durable regardless, and the roll will be retried on the next \
+                 flush that finds the active segment still oversized"
+            );
         }
         Ok(())
     }

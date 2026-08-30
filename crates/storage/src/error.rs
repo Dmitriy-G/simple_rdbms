@@ -67,6 +67,14 @@ pub enum StorageError {
 
     #[error("another process has this database open: {path}")]
     DatabaseLocked { path: String },
+
+    #[error(
+        "buffer pool is poisoned: a previous flush failed after its double-write buffer batch \
+         was synced but before it was cleared, and writing a new batch now would overwrite a \
+         backup copy recovery still needs; reopen the database to let recovery repair it before \
+         any further page can be flushed"
+    )]
+    FlushPoisoned,
 }
 
 impl From<StorageError> for common::Error {
@@ -103,6 +111,7 @@ impl From<StorageError> for common::Error {
             }
             StorageError::NodeOverflow { .. } => common::Error::Internal { detail: message },
             StorageError::DatabaseLocked { path } => common::Error::DatabaseLocked { path },
+            StorageError::FlushPoisoned => common::Error::FlushPoisoned,
         }
     }
 }

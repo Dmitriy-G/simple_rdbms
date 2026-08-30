@@ -121,6 +121,15 @@ had to change, from stringifying to matching.
     lock `DiskManager::open` takes on the database file before it reads
     the header (`block_device.MD`). Fatal because there is no session to
     continue - the connection never actually opened.
+  - `FlushPoisoned` -> `IO_ERROR` (58030), Fatal. From
+    `storage::StorageError::FlushPoisoned`: a previous flush on this
+    `storage::buffer::BufferPool` failed after syncing a double-write
+    buffer batch but before clearing it, so the pool now refuses every
+    flush rather than risk a later batch overwriting the still-needed
+    backup copy (`buffer.MD`'s "Poisoning" paragraph on `flush_pages`).
+    Fatal because nothing on this connection - or any other sharing the
+    same pool - can durably write again until the database is closed and
+    reopened.
 - `Error::sql_state(&self) -> SqlState` - the exhaustive match described
   above: every variant maps to exactly one `SqlState` constant, and a new
   variant fails to compile here until it's given one.

@@ -7,11 +7,29 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use common::DbConfig;
 use engine::{Database, ResultSet, Tuple};
 use storage::block_device::{BlockDevice, DurabilityModel, FaultyDevice, FileDevice};
-use storage::wal::{DEFAULT_SEGMENT_SIZE, FaultySegmentStore, SegmentStore};
+use storage::wal::{DEFAULT_SEGMENT_SIZE, FaultySegmentStore, FileSegmentStore, SegmentStore};
 
 type DeviceTriple = (Box<dyn BlockDevice>, Arc<dyn SegmentStore>, Box<dyn BlockDevice>);
 
 type TableRows = (String, Vec<Tuple>);
+
+#[derive(Clone, Copy)]
+struct HarnessConfig {
+    wal_segment_size: u64,
+    checkpoint_byte_threshold: u64,
+    buffer_pool_size: usize,
+}
+
+impl HarnessConfig {
+    const DEFAULT: Self = Self {
+        wal_segment_size: DEFAULT_SEGMENT_SIZE,
+        checkpoint_byte_threshold: DbConfig::DEFAULT_CHECKPOINT_BYTE_THRESHOLD,
+        buffer_pool_size: DbConfig::DEFAULT_BUFFER_POOL_SIZE,
+    };
+
+    const SEGMENT_ROLLING: Self =
+        Self { wal_segment_size: 4096, checkpoint_byte_threshold: 1024, buffer_pool_size: 8 };
+}
 
 fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
     OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
@@ -42,20 +60,30 @@ fn faulty_devices(
     Ok((db_device, wal_store, dwb_device))
 }
 
-fn config(dir: &Path) -> DbConfig {
-    DbConfig::new(dir.join("test.db"))
+fn config(dir: &Path, harness: HarnessConfig) -> DbConfig {
+    DbConfig {
+        checkpoint_byte_threshold: harness.checkpoint_byte_threshold,
+        buffer_pool_size: harness.buffer_pool_size,
+        ..DbConfig::new(dir.join("test.db"))
+    }
 }
 
-fn total_write_count(workload: &[String]) -> Result<u64, Box<dyn Error>> {
+fn wal_base_path(dir: &Path) -> std::path::PathBuf {
+    let mut path = dir.join("test.db").into_os_string();
+    path.push(".wal");
+    std::path::PathBuf::from(path)
+}
+
+fn total_write_count(workload: &[String], harness: HarnessConfig) -> Result<u64, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let counter = Arc::new(AtomicU64::new(0));
     let (db_device, wal_store, dwb_device) =
         faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
     let mut db = Database::open_with_devices(
-        config(dir.path()),
+        config(dir.path(), harness),
         db_device,
         wal_store,
-        DEFAULT_SEGMENT_SIZE,
+        harness.wal_segment_size,
         dwb_device,
     )?;
     for stmt in workload {
@@ -84,12 +112,13 @@ fn run_until_crash(
     config: DbConfig,
     db_device: Box<dyn BlockDevice>,
     wal_store: Arc<dyn SegmentStore>,
+    wal_segment_size: u64,
     dwb_device: Box<dyn BlockDevice>,
     workload: &[String],
 ) -> Result<usize, Box<dyn Error>> {
     let mut safe_prefix = 0usize;
     if let Ok(mut db) =
-        Database::open_with_devices(config, db_device, wal_store, DEFAULT_SEGMENT_SIZE, dwb_device)
+        Database::open_with_devices(config, db_device, wal_store, wal_segment_size, dwb_device)
     {
         let mut acked = 0usize;
         let mut in_txn = false;
@@ -117,8 +146,9 @@ fn run_until_crash(
 fn assert_workload_is_crash_safe(
     workload: &[String],
     model: DurabilityModel,
+    harness: HarnessConfig,
 ) -> Result<(), Box<dyn Error>> {
-    let k = total_write_count(workload)?;
+    let k = total_write_count(workload, harness)?;
     assert!(k > 0, "workload must perform at least one write");
 
     for n in 1..=k {
@@ -127,26 +157,32 @@ fn assert_workload_is_crash_safe(
 
         let counter = Arc::new(AtomicU64::new(0));
         let (db_device, wal_store, dwb_device) = faulty_devices(db_path_dir, &counter, n, model)?;
-        let safe_prefix =
-            run_until_crash(config(db_path_dir), db_device, wal_store, dwb_device, workload)?;
+        let safe_prefix = run_until_crash(
+            config(db_path_dir, harness),
+            db_device,
+            wal_store,
+            harness.wal_segment_size,
+            dwb_device,
+            workload,
+        )?;
 
         for recovery_fail_at in [1u64, 2] {
             let inner_counter = Arc::new(AtomicU64::new(0));
             let (db_device, wal_store, dwb_device) =
                 faulty_devices(db_path_dir, &inner_counter, recovery_fail_at, model)?;
             let _ = Database::open_with_devices(
-                config(db_path_dir),
+                config(db_path_dir, harness),
                 db_device,
                 wal_store,
-                DEFAULT_SEGMENT_SIZE,
+                harness.wal_segment_size,
                 dwb_device,
             );
         }
 
-        let mut recovered = Database::open(config(db_path_dir))?;
+        let mut recovered = Database::open(config(db_path_dir, harness))?;
 
         let ref_dir = tempfile::tempdir()?;
-        let mut reference = Database::open(config(ref_dir.path()))?;
+        let mut reference = Database::open(config(ref_dir.path(), harness))?;
         for stmt in &workload[..safe_prefix] {
             reference.execute(stmt)?;
         }
@@ -214,10 +250,60 @@ fn mid_transaction_kill() -> Vec<String> {
     ]
 }
 
-fn total_write_count_after(prefix: &[String], workload: &[String]) -> Result<u64, Box<dyn Error>> {
+fn segment_rolling_inserts() -> Vec<String> {
+    let mut stmts = vec!["CREATE TABLE t (a INTEGER, b TEXT)".to_string()];
+    let filler = "x".repeat(1800);
+    for i in 0..20 {
+        stmts.push(format!("INSERT INTO t VALUES ({i}, '{filler}')"));
+    }
+    stmts
+}
+
+fn assert_segment_rolling_and_truncation_occurred(
+    workload: &[String],
+    harness: HarnessConfig,
+) -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let counter = Arc::new(AtomicU64::new(0));
+    let (db_device, wal_store, dwb_device) =
+        faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
+    let mut db = Database::open_with_devices(
+        config(dir.path(), harness),
+        db_device,
+        wal_store,
+        harness.wal_segment_size,
+        dwb_device,
+    )?;
+    for stmt in workload {
+        db.execute(stmt)?;
+    }
+    db.close()?;
+
+    let store = FileSegmentStore::new(wal_base_path(dir.path()));
+    let ids = store.existing_segments()?;
+    assert!(
+        ids.len() >= 2,
+        "segment_rolling_inserts must actually roll past the first segment at a {}-byte segment \
+         size, got {} segment(s) on disk",
+        harness.wal_segment_size,
+        ids.len()
+    );
+    assert!(
+        ids[0] > 0,
+        "segment_rolling_inserts must trigger at least one checkpoint-driven truncation of \
+         segment 0, but segment 0 still exists: {ids:?}"
+    );
+    Ok(())
+}
+
+fn total_write_count_after(
+    prefix: &[String],
+    workload: &[String],
+    harness: HarnessConfig,
+) -> Result<u64, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     {
-        let mut db = Database::open(config(dir.path()))?;
+        let mut db = Database::open(config(dir.path(), harness))?;
         for stmt in prefix {
             db.execute(stmt)?;
         }
@@ -228,10 +314,10 @@ fn total_write_count_after(prefix: &[String], workload: &[String]) -> Result<u64
     let (db_device, wal_store, dwb_device) =
         faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
     let mut db = Database::open_with_devices(
-        config(dir.path()),
+        config(dir.path(), harness),
         db_device,
         wal_store,
-        DEFAULT_SEGMENT_SIZE,
+        harness.wal_segment_size,
         dwb_device,
     )?;
     for stmt in workload {
@@ -246,8 +332,9 @@ fn assert_two_generation_workload_is_crash_safe(
     gen1: &[String],
     gen2: &[String],
     model: DurabilityModel,
+    harness: HarnessConfig,
 ) -> Result<(), Box<dyn Error>> {
-    let k1 = total_write_count_after(setup, gen1)?;
+    let k1 = total_write_count_after(setup, gen1, harness)?;
     assert!(k1 > 0, "generation 1 must perform at least one write");
 
     for n1 in 1..=k1 {
@@ -255,7 +342,7 @@ fn assert_two_generation_workload_is_crash_safe(
         let db_path_dir = dir.path();
 
         {
-            let mut db = Database::open(config(db_path_dir))?;
+            let mut db = Database::open(config(db_path_dir, harness))?;
             for stmt in setup {
                 db.execute(stmt)?;
             }
@@ -264,22 +351,28 @@ fn assert_two_generation_workload_is_crash_safe(
 
         let counter = Arc::new(AtomicU64::new(0));
         let (db_device, wal_store, dwb_device) = faulty_devices(db_path_dir, &counter, n1, model)?;
-        let safe_prefix1 =
-            run_until_crash(config(db_path_dir), db_device, wal_store, dwb_device, gen1)?;
+        let safe_prefix1 = run_until_crash(
+            config(db_path_dir, harness),
+            db_device,
+            wal_store,
+            harness.wal_segment_size,
+            dwb_device,
+            gen1,
+        )?;
 
-        Database::open(config(db_path_dir))?.close()?;
+        Database::open(config(db_path_dir, harness))?.close()?;
 
         {
-            let mut db = Database::open(config(db_path_dir))?;
+            let mut db = Database::open(config(db_path_dir, harness))?;
             for stmt in gen2 {
                 db.execute(stmt)?;
             }
         }
 
-        let mut recovered = Database::open(config(db_path_dir))?;
+        let mut recovered = Database::open(config(db_path_dir, harness))?;
 
         let ref_dir = tempfile::tempdir()?;
-        let mut reference = Database::open(config(ref_dir.path()))?;
+        let mut reference = Database::open(config(ref_dir.path(), harness))?;
         for stmt in setup {
             reference.execute(stmt)?;
         }
@@ -319,6 +412,7 @@ fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point
         &two_generation_gen1(),
         &two_generation_gen2(),
         DurabilityModel::write_is_durable(),
+        HarnessConfig::DEFAULT,
     )
 }
 
@@ -330,6 +424,7 @@ fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point
         &two_generation_gen1(),
         &two_generation_gen2(),
         DurabilityModel::torn_write(),
+        HarnessConfig::DEFAULT,
     )
 }
 
@@ -341,6 +436,7 @@ fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point
         &two_generation_gen1(),
         &two_generation_gen2(),
         DurabilityModel::requires_sync(),
+        HarnessConfig::DEFAULT,
     )
 }
 
@@ -352,24 +448,37 @@ fn a_second_generation_transaction_never_corrupts_the_first_at_every_crash_point
         &two_generation_gen1(),
         &two_generation_gen2(),
         DurabilityModel::torn_write_requires_sync(),
+        HarnessConfig::DEFAULT,
     )
 }
 
 #[test]
 fn many_small_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::write_is_durable())
+    assert_workload_is_crash_safe(
+        &many_small_inserts(),
+        DurabilityModel::write_is_durable(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
 fn many_small_inserts_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::requires_sync())
+    assert_workload_is_crash_safe(
+        &many_small_inserts(),
+        DurabilityModel::requires_sync(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
 fn many_small_inserts_survive_a_crash_at_every_write_with_torn_writes() -> Result<(), Box<dyn Error>>
 {
-    assert_workload_is_crash_safe(&many_small_inserts(), DurabilityModel::torn_write())
+    assert_workload_is_crash_safe(
+        &many_small_inserts(),
+        DurabilityModel::torn_write(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
@@ -378,24 +487,37 @@ fn many_small_inserts_survive_a_crash_at_every_write_with_torn_and_unsynced_writ
     assert_workload_is_crash_safe(
         &many_small_inserts(),
         DurabilityModel::torn_write_requires_sync(),
+        HarnessConfig::DEFAULT,
     )
 }
 
 #[test]
 fn page_boundary_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::write_is_durable())
+    assert_workload_is_crash_safe(
+        &page_boundary_inserts(),
+        DurabilityModel::write_is_durable(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
 fn page_boundary_inserts_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::requires_sync())
+    assert_workload_is_crash_safe(
+        &page_boundary_inserts(),
+        DurabilityModel::requires_sync(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
 fn page_boundary_inserts_survive_a_crash_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&page_boundary_inserts(), DurabilityModel::torn_write())
+    assert_workload_is_crash_safe(
+        &page_boundary_inserts(),
+        DurabilityModel::torn_write(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
@@ -404,24 +526,37 @@ fn page_boundary_inserts_survive_a_crash_at_every_write_with_torn_and_unsynced_w
     assert_workload_is_crash_safe(
         &page_boundary_inserts(),
         DurabilityModel::torn_write_requires_sync(),
+        HarnessConfig::DEFAULT,
     )
 }
 
 #[test]
 fn create_table_then_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::write_is_durable())
+    assert_workload_is_crash_safe(
+        &create_table_then_inserts(),
+        DurabilityModel::write_is_durable(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
 fn create_table_then_inserts_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::requires_sync())
+    assert_workload_is_crash_safe(
+        &create_table_then_inserts(),
+        DurabilityModel::requires_sync(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
 fn create_table_then_inserts_survive_a_crash_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&create_table_then_inserts(), DurabilityModel::torn_write())
+    assert_workload_is_crash_safe(
+        &create_table_then_inserts(),
+        DurabilityModel::torn_write(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
@@ -430,6 +565,7 @@ fn create_table_then_inserts_survive_a_crash_at_every_write_with_torn_and_unsync
     assert_workload_is_crash_safe(
         &create_table_then_inserts(),
         DurabilityModel::torn_write_requires_sync(),
+        HarnessConfig::DEFAULT,
     )
 }
 
@@ -439,6 +575,7 @@ fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write()
     assert_workload_is_crash_safe(
         &interleaved_allocation_and_catalog_writes(),
         DurabilityModel::write_is_durable(),
+        HarnessConfig::DEFAULT,
     )
 }
 
@@ -448,6 +585,7 @@ fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write_with
     assert_workload_is_crash_safe(
         &interleaved_allocation_and_catalog_writes(),
         DurabilityModel::requires_sync(),
+        HarnessConfig::DEFAULT,
     )
 }
 
@@ -457,6 +595,7 @@ fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write_with
     assert_workload_is_crash_safe(
         &interleaved_allocation_and_catalog_writes(),
         DurabilityModel::torn_write(),
+        HarnessConfig::DEFAULT,
     )
 }
 
@@ -466,25 +605,38 @@ fn interleaved_allocation_and_catalog_writes_survive_a_crash_at_every_write_with
     assert_workload_is_crash_safe(
         &interleaved_allocation_and_catalog_writes(),
         DurabilityModel::torn_write_requires_sync(),
+        HarnessConfig::DEFAULT,
     )
 }
 
 #[test]
 fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::write_is_durable())
+    assert_workload_is_crash_safe(
+        &mid_transaction_kill(),
+        DurabilityModel::write_is_durable(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
 fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::requires_sync())
+    assert_workload_is_crash_safe(
+        &mid_transaction_kill(),
+        DurabilityModel::requires_sync(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
 fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(&mid_transaction_kill(), DurabilityModel::torn_write())
+    assert_workload_is_crash_safe(
+        &mid_transaction_kill(),
+        DurabilityModel::torn_write(),
+        HarnessConfig::DEFAULT,
+    )
 }
 
 #[test]
@@ -493,5 +645,53 @@ fn a_kill_mid_transaction_before_commit_leaves_no_trace_at_every_write_with_torn
     assert_workload_is_crash_safe(
         &mid_transaction_kill(),
         DurabilityModel::torn_write_requires_sync(),
+        HarnessConfig::DEFAULT,
+    )
+}
+
+#[test]
+fn segment_rolling_inserts_actually_roll_and_truncate() -> Result<(), Box<dyn Error>> {
+    assert_segment_rolling_and_truncation_occurred(
+        &segment_rolling_inserts(),
+        HarnessConfig::SEGMENT_ROLLING,
+    )
+}
+
+#[test]
+fn segment_rolling_inserts_survive_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &segment_rolling_inserts(),
+        DurabilityModel::write_is_durable(),
+        HarnessConfig::SEGMENT_ROLLING,
+    )
+}
+
+#[test]
+fn segment_rolling_inserts_survive_a_crash_at_every_write_with_unsynced_writes_lost()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &segment_rolling_inserts(),
+        DurabilityModel::requires_sync(),
+        HarnessConfig::SEGMENT_ROLLING,
+    )
+}
+
+#[test]
+fn segment_rolling_inserts_survive_a_crash_at_every_write_with_torn_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &segment_rolling_inserts(),
+        DurabilityModel::torn_write(),
+        HarnessConfig::SEGMENT_ROLLING,
+    )
+}
+
+#[test]
+fn segment_rolling_inserts_survive_a_crash_at_every_write_with_torn_and_unsynced_writes()
+-> Result<(), Box<dyn Error>> {
+    assert_workload_is_crash_safe(
+        &segment_rolling_inserts(),
+        DurabilityModel::torn_write_requires_sync(),
+        HarnessConfig::SEGMENT_ROLLING,
     )
 }

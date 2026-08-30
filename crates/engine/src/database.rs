@@ -154,15 +154,28 @@ impl Database {
         Ok(())
     }
 
-    fn maybe_checkpoint(&mut self) -> Result<()> {
+    fn maybe_checkpoint(&mut self) {
         let grown = self.buffer_pool.log_bytes_appended() - self.bytes_at_last_checkpoint;
-        if grown >= self.checkpoint_byte_threshold {
-            let mut txn_manager = recover_lock(self.txn_manager.lock(), "Database.txn_manager");
-            write_checkpoint(&self.buffer_pool, &mut txn_manager)?;
-            drop(txn_manager);
-            self.bytes_at_last_checkpoint = self.buffer_pool.log_bytes_appended();
+        if grown < self.checkpoint_byte_threshold {
+            return;
         }
-        Ok(())
+        let mut txn_manager = recover_lock(self.txn_manager.lock(), "Database.txn_manager");
+        let result = write_checkpoint(&self.buffer_pool, &mut txn_manager);
+        drop(txn_manager);
+        match result {
+            Ok(_) => {
+                self.bytes_at_last_checkpoint = self.buffer_pool.log_bytes_appended();
+            }
+            Err(err) => {
+                let err = Error::from(err);
+                tracing::warn!(
+                    sql_state = %err.sql_state(),
+                    error = %err.redacted(),
+                    "checkpoint attempt failed; the triggering statement's own effects are \
+                     unaffected and a later statement will retry"
+                );
+            }
+        }
     }
 
     pub fn execute(&mut self, sql: &str) -> Result<ResultSet> {
@@ -241,7 +254,7 @@ impl Database {
                 Ok(_) => {
                     recover_lock(self.txn_manager.lock(), "Database.txn_manager")
                         .commit(txn_id, &self.buffer_pool)?;
-                    self.maybe_checkpoint()?;
+                    self.maybe_checkpoint();
                 }
                 Err(_) => {
                     let _ = recover_lock(self.txn_manager.lock(), "Database.txn_manager")
@@ -278,7 +291,7 @@ impl Database {
                 self.reload_catalog()?;
                 self.txn_slot = TxnSlot::None;
                 self.txn_span = None;
-                self.maybe_checkpoint()?;
+                self.maybe_checkpoint();
                 Ok(ResultSet::RolledBack)
             }
             TxnSlot::Active(txn_id) => {
@@ -286,7 +299,7 @@ impl Database {
                     .commit(txn_id, &self.buffer_pool)?;
                 self.txn_slot = TxnSlot::None;
                 self.txn_span = None;
-                self.maybe_checkpoint()?;
+                self.maybe_checkpoint();
                 Ok(ResultSet::rows_affected(0))
             }
         }
@@ -303,7 +316,7 @@ impl Database {
 
         self.txn_slot = TxnSlot::None;
         self.txn_span = None;
-        self.maybe_checkpoint()?;
+        self.maybe_checkpoint();
         Ok(ResultSet::rows_affected(0))
     }
 
