@@ -16,6 +16,15 @@ Dependencies) even though it does pull in `tracing` to log each error
 exactly once at the boundary it owns (`Database::open`/`Database::execute`
 - see CLAUDE.md's "log at the boundary" rule).
 
+As of M14.1 (`docs/ROADMAP.md`), `Database` is a thin wrapper around one
+session of a dedicated engine thread (`runtime.rs`) reached by message
+passing, rather than doing the work itself on whatever thread calls it -
+see `runtime.MD` for the full design and why it's a thread, not a lock,
+that makes this safe. `Database`'s own public surface is unchanged by
+this; the three-step open sequence below now runs inside
+`runtime::EngineHandle::open`/`open_with_devices`, still synchronously on
+the calling thread, before the engine thread is ever spawned.
+
 `Database::open` runs a fixed three-step sequence, in this order, and the
 order is forced rather than incidental:
 
@@ -65,9 +74,15 @@ was (`Database::handle_explain`, `database.MD`).
 
 ## Key Components
 
-- `database` - `Database`, owns the catalog, buffer pool, and transaction
-  manager; opens, closes, and executes SQL against a single database. See
-  [database.MD](src/database.MD).
+- `database` - `Database`, a thin wrapper around one session of the
+  engine thread; opens, closes, and executes SQL against a single
+  database with a public surface unchanged since before the M14.1 split.
+  See [database.MD](src/database.MD).
+- `runtime` - `EngineHandle`/`SessionHandle` and the engine thread they
+  reach by message passing; owns the catalog, buffer pool, and
+  transaction manager (engine-wide) plus one `SessionState` per
+  connection (the explicit-transaction slot, its span, the statement
+  counter). Private to the crate. See [runtime.MD](src/runtime.MD).
 - `result_set` - `ResultSet`, the result of executing one SQL statement.
   See [result_set.MD](src/result_set.MD).
 - `executor_factory` - `build_executor`, lowers a `planner::PhysicalPlan`
@@ -95,13 +110,17 @@ separately sweeps randomized tables/predicates comparing indexed and
 sequential-scan results for equality, and `tests/index_scan.rs` checks an
 index's durability across a root split and a restart, `NULL` handling, and
 populating an index created on a non-empty table. What's missing is
-entirely inherited from the layers `engine` assembles, not added here: no
+mostly inherited from the layers `engine` assembles, not added here: no
 `DROP`/`UPDATE`/`DELETE`/`JOIN` (no crate above `sql` supports them yet),
-no concurrent transactions (`txn`'s lock manager and MVCC are unwired,
-M10), no composite/multi-column indexes, and no cost-based optimization
+no composite/multi-column indexes, and no cost-based optimization
 choosing *among* multiple viable access paths (M11 - `IndexScanRule` picks
 an index whenever one applies, but has no cost model for picking among
-several). See `docs/ROADMAP.md`.
+several). One gap belongs to this crate directly: M14.1's engine thread
+(`runtime.MD`) lets multiple sessions connect and interleave independent
+statements correctly, but does not yet enforce "one transaction at a
+time" - the FIFO park queue, idle-in-transaction timeout, and
+disconnect-during-park handling `docs/ROADMAP.md`'s M14.1 entry calls for
+are the next piece of this same milestone, not yet landed.
 
 ## Dependencies
 

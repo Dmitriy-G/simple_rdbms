@@ -37,6 +37,7 @@ fn sample_errors() -> Vec<Error> {
         Error::NotSupported("arithmetic".to_string()),
         Error::DatabaseLocked { path: "test.db".to_string() },
         Error::FlushPoisoned,
+        Error::EngineUnavailable { detail: "the engine thread's channel is closed".to_string() },
     ]
 }
 
@@ -73,6 +74,7 @@ fn expected_sql_state(err: &Error) -> SqlState {
         Error::NotSupported(_) => SqlState::FEATURE_NOT_SUPPORTED,
         Error::DatabaseLocked { .. } => SqlState::LOCK_NOT_AVAILABLE,
         Error::FlushPoisoned => SqlState::IO_ERROR,
+        Error::EngineUnavailable { .. } => SqlState::CONNECTION_FAILURE,
     }
 }
 

@@ -114,6 +114,9 @@ pub enum Error {
          any further page can be flushed"
     )]
     FlushPoisoned,
+
+    #[error("the database engine is not running: {detail}")]
+    EngineUnavailable { detail: String },
 }
 
 impl Error {
@@ -150,6 +153,7 @@ impl Error {
             Error::NotSupported(_) => SqlState::FEATURE_NOT_SUPPORTED,
             Error::DatabaseLocked { .. } => SqlState::LOCK_NOT_AVAILABLE,
             Error::FlushPoisoned => SqlState::IO_ERROR,
+            Error::EngineUnavailable { .. } => SqlState::CONNECTION_FAILURE,
         }
     }
 
@@ -166,7 +170,8 @@ impl Error {
             | Error::DataCorrupted { .. }
             | Error::Internal { .. }
             | Error::DatabaseLocked { .. }
-            | Error::FlushPoisoned => Severity::Fatal,
+            | Error::FlushPoisoned
+            | Error::EngineUnavailable { .. } => Severity::Fatal,
 
             Error::BufferPoolExhausted
             | Error::BufferPoolWaitTimedOut { .. }
@@ -226,7 +231,8 @@ impl Error {
             | Error::TransactionAborted
             | Error::NotSupported(_)
             | Error::DatabaseLocked { .. }
-            | Error::FlushPoisoned => self.to_string(),
+            | Error::FlushPoisoned
+            | Error::EngineUnavailable { .. } => self.to_string(),
 
             Error::Syntax { offset, .. } => format!("syntax error at offset {offset}: ?"),
 

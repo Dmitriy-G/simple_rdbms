@@ -130,6 +130,15 @@ had to change, from stringifying to matching.
     Fatal because nothing on this connection - or any other sharing the
     same pool - can durably write again until the database is closed and
     reopened.
+  - `EngineUnavailable` -> `CONNECTION_FAILURE` (08006), Fatal. The engine
+    thread a `SessionHandle` sends requests to and awaits replies from
+    (`engine::runtime.MD`) has exited - a panic, or a message sent after
+    it already shut down - so the channel that would have carried a reply
+    is closed. Every outstanding and future request on that channel gets
+    this instead of hanging forever waiting on a reply that will never
+    arrive. `detail` is an internal diagnostic string, never
+    user-supplied, so `redacted()` includes it verbatim like every other
+    non-literal-carrying variant.
 - `Error::sql_state(&self) -> SqlState` - the exhaustive match described
   above: every variant maps to exactly one `SqlState` constant, and a new
   variant fails to compile here until it's given one.
