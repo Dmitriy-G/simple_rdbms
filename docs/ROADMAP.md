@@ -205,24 +205,31 @@ queries.
 M10 (concurrent transactions), reasoning that a wire protocol implies
 multiple connections submitting statements at once, and that M8's
 single-threaded, serially-executed atomicity is not the same guarantee as
-isolation under real concurrent access. That reasoning assumed the engine
-itself would be shared across connection threads - but the storage layer
-is built on `RefCell`/`Cell`/`UnsafeCell` with no `Send` bounds, so a
-`Database` cannot cross threads at all, shared-locking or not. The
-assumption that a server needs shared-state concurrency was wrong. M14.1
-below instead runs the engine on a single dedicated thread reached from
+isolation under real concurrent access. That reasoning assumed the only
+way to get real isolation under concurrent access was locking or MVCC -
+but M14.1 below runs the engine on a single dedicated thread reached from
 every connection by message passing, so statements from all connections
 execute serially in arrival order regardless of how many connections are
-open. Isolation is genuinely serializable by construction, not by
-locking. **M14 does not require M10.** M10's lock manager and MVCC remain
-worth building for the concurrency they add on their own merits, but are
-no longer a prerequisite for shipping a network frontend.
+open, and isolation is genuinely serializable by construction rather than
+by locking. This is a **design choice**, not a technical necessity: nothing
+in the storage layer forces a single engine thread. Storage is
+`Mutex`/`RwLock`/`Condvar`/atomics throughout, and `BufferPool`,
+`BlockDevice`, and `SegmentStore` are all `Send + Sync` already -
+`buffer_pool_concurrency.rs` and `dwb_batch_exclusion.rs` both drive the
+buffer pool from eight threads at once. **M14 does not require M10.**
+M10's lock manager and MVCC remain worth building for the concurrency
+they add on their own merits - and are exactly what a later milestone
+would use to relax the single engine thread into genuine multi-threaded
+execution - but are no longer a prerequisite for shipping a network
+frontend.
 
 ### M14.1 — Many connections against a single-threaded engine
-**Problem:** the storage layer is built on `RefCell`/`Cell`/`UnsafeCell`
-with no `Send` bounds, so `Database` cannot cross threads, yet a wire
-listener needs to serve many concurrent connections, each of which may
-submit a statement at any time.
+**Problem:** a wire listener needs to serve many concurrent connections,
+each of which may submit a statement at any time, but letting each
+connection's statements run against a shared `Database` from its own
+thread would need real locking or MVCC to stay correct - exactly the
+machinery M10 provides, and this milestone deliberately avoids requiring
+it yet.
 **Solution:** split per-connection session state out of `Database`, run
 the engine on one dedicated thread, and reach it from connection tasks by
 message passing. Statements execute serially in arrival order, so

@@ -79,13 +79,14 @@ here, on the reasoning that multiple wire connections mean multiple
 concurrent transactions for real, and `txn::LockManager`/`txn::mvcc`
 (currently unwired scaffolding, per `docs/adr/0004-acid-scope.md`) would
 need wiring into every read and write path before M14 could safely ship.
-That assumption is corrected in `docs/ROADMAP.md`'s M14 entry: the
-storage layer's `RefCell`/`Cell`/`UnsafeCell` types have no `Send` bounds,
-so `Database` cannot be shared across connection threads at all, which
-means the "multiple connections, shared engine state" scenario M10 would
-have protected against does not arise in the first place. M14.1 runs the
-engine on one dedicated thread reached by message passing instead, so
-every connection's statements execute serially in arrival order - real
-isolation without needing M10's lock manager or MVCC. M10 stays valuable
+That assumption is corrected in `docs/ROADMAP.md`'s M14 entry: M14.1 runs
+the engine on one dedicated thread reached by message passing instead of
+sharing `Database` across connection threads, so every connection's
+statements execute serially in arrival order - real isolation by
+construction, without needing M10's lock manager or MVCC. This is a
+**design choice**, not a technical necessity the storage layer forces:
+storage is `Mutex`/`RwLock`/`Condvar`/atomics throughout and is
+`Send + Sync` already, so a later milestone remains free to share it
+across threads and lean on M10's lock manager instead. M10 stays valuable
 for the concurrency it adds on its own merits, but M14 no longer depends
 on it.
