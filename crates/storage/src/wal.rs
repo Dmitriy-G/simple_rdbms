@@ -456,6 +456,7 @@ struct LogBufferInner {
     next_lsn: u64,
     last_lsn_by_txn: HashMap<TxnId, u64>,
     bytes_appended: u64,
+    sealed_device_cache: Option<(u64, Box<dyn BlockDevice>)>,
 }
 
 impl LogBufferInner {
@@ -593,6 +594,7 @@ impl LogManager {
                 next_lsn,
                 last_lsn_by_txn,
                 bytes_appended: 0,
+                sealed_device_cache: None,
             }),
             durable_lsn: AtomicU64::new(next_lsn),
         })
@@ -694,6 +696,9 @@ impl LogManager {
                 return Ok(());
             }
             let removed: Vec<u64> = inner.sealed.drain(..keep_from).map(|s| s.id).collect();
+            if matches!(&inner.sealed_device_cache, Some((id, _)) if removed.contains(id)) {
+                inner.sealed_device_cache = None;
+            }
             (inner.store.clone(), removed)
         };
         for id in to_remove {
@@ -731,7 +736,7 @@ impl LogManager {
         if offset == 0 {
             return Ok(None);
         }
-        let inner = recover_lock(self.inner.lock(), "LogManager.inner");
+        let mut inner = recover_lock(self.inner.lock(), "LogManager.inner");
         let durable_lsn = self.durable_lsn.load(Ordering::Acquire);
         if offset >= durable_lsn {
             let buf_offset = (offset - durable_lsn) as usize;
@@ -741,11 +746,20 @@ impl LogManager {
             let local = SEGMENT_HEADER_LEN + (offset - inner.active_start_lsn);
             return read_record_at(inner.active_device.as_ref(), local);
         }
-        let Some(meta) = inner.sealed.iter().rev().find(|s| s.start_lsn <= offset) else {
+        let Some((meta_id, meta_start_lsn)) =
+            inner.sealed.iter().rev().find(|s| s.start_lsn <= offset).map(|s| (s.id, s.start_lsn))
+        else {
             return Ok(None);
         };
-        let local = SEGMENT_HEADER_LEN + (offset - meta.start_lsn);
-        let device = inner.store.open(meta.id)?;
+        let local = SEGMENT_HEADER_LEN + (offset - meta_start_lsn);
+        let cached = matches!(&inner.sealed_device_cache, Some((id, _)) if *id == meta_id);
+        if !cached {
+            let device = inner.store.open(meta_id)?;
+            inner.sealed_device_cache = Some((meta_id, device));
+        }
+        let Some((_, device)) = inner.sealed_device_cache.as_ref() else {
+            return Ok(None);
+        };
         read_record_at(device.as_ref(), local)
     }
 }

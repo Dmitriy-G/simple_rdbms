@@ -199,6 +199,11 @@ noticed the resulting hole in the LSN space.
   through `store`, only when something actually needs to read it
   (`iter_from`, `read_at`, `bootstrap`), so a long-lived database with many
   sealed segments does not pay for dozens of idle open file handles.
+  `LogBufferInner::sealed_device_cache` remembers the single
+  most-recently-opened one across calls, so a caller that keeps reading
+  the same sealed segment - `undo_transaction` walking a `prev_lsn` chain
+  backward one `read_at` at a time is the case this exists for - does not
+  reopen it once per record.
 - `MIN_RECORD_LEN` - the fixed-size portion of a serialized record: front
   `total_len` (4 bytes), `lsn` (8), `prev_lsn` (8), `txn_id` (8), `kind`
   tag (1), `crc32` (4), and trailing `total_len` (4). Any candidate
@@ -275,12 +280,14 @@ noticed the resulting hole in the LSN space.
   appended but not yet flushed, `next_lsn` (the LSN the next `append` will
   assign - the active segment's durable length plus buffer length, offset
   by `active_start_lsn`), `last_lsn_by_txn` (each transaction's most
-  recently appended LSN, consulted by `append` to fill in `prev_lsn`), and
+  recently appended LSN, consulted by `append` to fill in `prev_lsn`),
   `bytes_appended` (cumulative, for the checkpoint byte-threshold
-  trigger). Grouped into one struct rather than one field each because
-  every one of them changes together on an `append`, a `flush`, or a
-  segment roll - there is no scenario where taking the lock for just one
-  of them makes sense.
+  trigger), and `sealed_device_cache` (`Option<(u64, Box<dyn
+  BlockDevice>)>` - the id and open device handle of the sealed segment
+  `read_at` most recently opened, or `None`). Grouped into one struct
+  rather than one field each because every one of them changes together
+  on an `append`, a `flush`, or a segment roll - there is no scenario
+  where taking the lock for just one of them makes sense.
   - `LogBufferInner::roll_segment(&mut self) -> Result<(), StorageError>` -
     private. Seals the current active segment (pushes its `id`/`start_lsn`
     into `sealed`), opens a fresh segment one id higher via `store`, writes
@@ -431,7 +438,11 @@ noticed the resulting hole in the LSN space.
   through a batch, the segments already dropped from `sealed` stay
   dropped (their metadata is gone) even though their files may still exist
   on disk - an orphaned file, not a correctness problem, since nothing
-  ever looks for a segment id `sealed` doesn't know about.
+  ever looks for a segment id `sealed` doesn't know about. Also clears
+  `sealed_device_cache` if it holds a handle to one of the ids being
+  removed, still under the same mutex acquisition that computes `removed`
+  - so a cached device is never held open (or, worse, read from) after
+  its underlying file has been deleted.
 - `LogManager::iter_from(&self, from) -> Result<LogIterator, StorageError>` -
   returns a forward iterator over every record with LSN `>= from`,
   spanning however many segments that requires - whether durably on disk
@@ -469,10 +480,16 @@ noticed the resulting hole in the LSN space.
   segment's `start_lsn` reads it (via `read_record_at`) from the active
   device at the corresponding local offset; otherwise a linear search
   through `sealed` (in practice a handful of entries) finds whichever
-  segment's `start_lsn` is the largest one `<= lsn`, opens it through
-  `store`, and reads from there. A durable-region lookup always costs
-  exactly two device reads (peek `total_len`, then read exactly that many
-  bytes) rather than one read sized to the whole durable region.
+  segment's `start_lsn` is the largest one `<= lsn`, then either reuses
+  `sealed_device_cache` if it already holds that segment's id or opens it
+  through `store` and replaces the cache entry, and reads from there. A
+  durable-region lookup always costs exactly two device reads (peek
+  `total_len`, then read exactly that many bytes) rather than one read
+  sized to the whole durable region. The one-entry cache is sized for
+  `undo_transaction`'s access pattern - walking a `prev_lsn` chain strictly
+  backward, so consecutive `read_at` calls that land in a sealed segment at
+  all tend to land in the *same* one - not for `iter_from`, which already
+  streams forward through `LogIterator` without going through `read_at`.
 - `LogIterator` - forward iterator over `LoggedRecord`s spanning however
   many segments a call to `LogManager::iter_from` needs: `pending_segments`
   (ids still to open, oldest first), `tail` (the active segment's durable

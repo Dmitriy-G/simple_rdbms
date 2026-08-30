@@ -13,13 +13,15 @@ nothing in this test touches a private item.
 - `CountingSegmentStore` - private. A `SegmentStore` that wraps a real
   `FileSegmentStore` and hands back every segment device wrapped in a
   `CountingDevice`, sharing one pair of `calls`/`bytes` counters across
-  every segment it opens - the same shape `wal_segments.rs`'s own
-  identically-named private helper uses, kept local to each file rather
-  than shared, since `mod support;` only resolves within one crate's
-  `tests/` directory and this one struct is a few lines either way.
-  `LogManager` now always speaks through a `SegmentStore`
-  (`wal.MD`'s single-on-disk-layout invariant), so there is no longer a
-  way to hand it one already-open counted device directly.
+  every segment it opens, plus its own `opens` counter (incremented once
+  per `SegmentStore::open` call, independent of `CountingDevice`, since
+  opening a segment and reading from it are different costs to bound) -
+  the same shape `wal_segments.rs`'s own identically-named private helper
+  uses, kept local to each file rather than shared, since `mod support;`
+  only resolves within one crate's `tests/` directory and this one struct
+  is a few lines either way. `LogManager` now always speaks through a
+  `SegmentStore` (`wal.MD`'s single-on-disk-layout invariant), so there is
+  no longer a way to hand it one already-open counted device directly.
 - `undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times` -
   rolling back thousands of updates must cost a small, constant amount of
   device I/O *per undone record*, not a whole extra log-sized read for
@@ -29,7 +31,24 @@ nothing in this test touches a private item.
   both the call count and cumulative bytes read stay within a small
   constant factor of the update count - a read counter is the
   deterministic way to check this; a wall-clock timing assertion would be
-  flaky.
+  flaky. Runs at `DEFAULT_SEGMENT_SIZE`, so every record stays in the
+  active segment and `LogBufferInner::sealed_device_cache` (`wal.MD`)
+  never comes into play - see the next test for that path.
+- `undoing_across_sealed_segments_reads_the_log_a_bounded_number_of_times` -
+  the same property, but for a chain that actually crosses sealed
+  segments, which the test above cannot see. Opens the WAL through a
+  `CountingSegmentStore` at `SMALL_SEGMENT` (512 bytes) and flushes after
+  every one of 2,000 writes so the active segment actually rolls
+  repeatedly; asserts at least four segments sealed before undoing (the
+  precondition the test depends on) and, after undoing, that
+  `SegmentStore::open` was called at most `sealed_segment_count + 2`
+  times - not once per undone record. Without
+  `LogBufferInner::sealed_device_cache`, `LogManager::read_at` reopens the
+  relevant sealed segment on every single call as `undo_transaction` walks
+  backward, so this assertion catches the regression the way the
+  bytes/calls counters above cannot: that test's workload never leaves the
+  active segment, so a per-record device open in the sealed-segment branch
+  of `read_at` is invisible to it.
 
 ## Usage Example
 
