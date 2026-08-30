@@ -382,6 +382,10 @@ impl BufferPool {
         self.disk_manager.sync()
     }
 
+    pub fn is_flush_poisoned(&self) -> bool {
+        self.flush_poisoned.load(Ordering::Acquire)
+    }
+
     pub fn catalog_first_page(&self) -> Result<Option<PageId>, StorageError> {
         let guard = self.fetch_page_read(PageId(0))?;
         let raw = read_u32(guard.page().data(), header::CATALOG_FIRST_PAGE_RANGE.start);

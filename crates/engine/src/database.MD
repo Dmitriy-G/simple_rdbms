@@ -126,16 +126,32 @@ those lower layers needing to know a connection or a transaction exists.
   Errors here are real failures worth reporting, which is why this is a
   separate, explicit call rather than left entirely to `Drop` (which
   cannot report them, and does not log a matching close event either).
-- `Database::maybe_checkpoint(&mut self) -> Result<()>` - private.
-  Checkpoints if the log has grown by `checkpoint_byte_threshold` bytes
-  since the last one, bounding how much of the log a future recovery has
-  to scan. Called after every statement's commit.
+- `Database::maybe_checkpoint(&mut self)` - private. Returns immediately,
+  before even reading `bytes_at_last_checkpoint`, if
+  `buffer_pool.is_flush_poisoned()` - a checkpoint's `write_checkpoint`
+  ends in a flush, so once the pool is poisoned every attempt would fail,
+  log a `warn!`, and leave `bytes_at_last_checkpoint` stuck, guaranteeing
+  the next statement retries and fails the same way; the early return
+  turns that into silence instead of one warning per statement forever.
+  Otherwise checkpoints if the log has grown by `checkpoint_byte_threshold`
+  bytes since the last one, bounding how much of the log a future recovery
+  has to scan. Called after every statement's commit.
 - `Database::execute(&mut self, sql) -> Result<ResultSet>` - the public
   entry point. Assigns this call's `stmt_id`, clones `txn_span` (a `Span`
   is cheap to clone - it's a handle, not the span's data) and enters it
   for the duration of the call so a statement that joins an explicit
-  transaction nests under it, times the call, then delegates to
-  `execute_impl`. On success, logs `info!` with `sql::fingerprint(sql)` as
+  transaction nests under it, times the call, then checks
+  `buffer_pool.is_flush_poisoned()` before delegating to `execute_impl` -
+  a poisoned pool fails this statement immediately with
+  `common::Error::FlushPoisoned` rather than letting it appear to succeed
+  (an `INSERT` into an already-resident page plus a WAL commit needs no
+  flush) and degrade silently until eviction finally has no clean frame
+  left to reclaim. This is a fatal, terminal condition once it happens -
+  reopening the database is what actually clears `flush_poisoned` - so
+  every statement after the first failure gets the same clear error
+  rather than the vaguer, delayed `BufferPoolExhausted`/`FlushPoisoned`
+  mix a real eviction would eventually surface. On success, logs `info!`
+  with `sql::fingerprint(sql)` as
   the `fingerprint` field (never the raw SQL - see CLAUDE.md's logging
   section) and, separately, a `warn!` naming `duration_ms` if the call ran
   past `slow_query_warn_threshold_ms`. On failure, logs the same
@@ -314,6 +330,14 @@ those lower layers needing to know a connection or a transaction exists.
   don't call `close` explicitly. Errors are swallowed here (there is
   nowhere to report them from `Drop`); call `close` to observe them. Does
   not log a "connection closed" event, matching that same asymmetry.
+  Skips the flush entirely when `buffer_pool.is_flush_poisoned()`: once a
+  flush has failed in the specific window `storage::buffer::BufferPool`'s
+  poisoning protects (`buffer.MD`), the double-write buffer holds a batch
+  recovery still needs, and a destructor doing further I/O against that
+  same pool is exactly the second, uncoordinated flush poisoning exists to
+  prevent - `close()` is unaffected and still attempts its flush and still
+  returns the error, since an explicit close has somewhere to report a
+  failure to and a destructor does not.
 - `new_connection_span() -> tracing::span::EnteredSpan` - private free
   function. Allocates the next `conn_id` from `NEXT_CONN_ID`, creates and
   enters an `info_span!("connection", conn_id)`, logs `info!` "connection

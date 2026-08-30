@@ -403,6 +403,11 @@ same thread.
 - `BufferPool::sync(&self)` - forces every write made so far to durable
   storage. Callers should `flush_all` first; this only syncs whatever has
   already reached the disk manager.
+- `BufferPool::is_flush_poisoned(&self) -> bool` - whether `flush_poisoned`
+  is currently set. Lets a caller above `storage` - `engine::Database`,
+  see `database.MD` - notice the fatal condition and refuse further work
+  immediately instead of discovering it only once eviction can no longer
+  find a clean victim to reclaim.
 - `BufferPool::catalog_first_page(&self) -> Result<Option<PageId>, StorageError>` -
   the catalog's first page, as recorded in the database header (page 0),
   or `None` if the catalog has not been persisted yet. Reads page 0

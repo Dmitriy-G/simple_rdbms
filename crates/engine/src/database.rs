@@ -155,6 +155,9 @@ impl Database {
     }
 
     fn maybe_checkpoint(&mut self) {
+        if self.buffer_pool.is_flush_poisoned() {
+            return;
+        }
         let grown = self.buffer_pool.log_bytes_appended() - self.bytes_at_last_checkpoint;
         if grown < self.checkpoint_byte_threshold {
             return;
@@ -186,7 +189,11 @@ impl Database {
         let _txn_guard = txn_span.as_ref().map(tracing::Span::enter);
 
         let start = std::time::Instant::now();
-        let result = self.execute_impl(sql, stmt_id);
+        let result = if self.buffer_pool.is_flush_poisoned() {
+            Err(Error::FlushPoisoned)
+        } else {
+            self.execute_impl(sql, stmt_id)
+        };
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
         match &result {
@@ -489,6 +496,9 @@ impl Database {
 
 impl Drop for Database {
     fn drop(&mut self) {
+        if self.buffer_pool.is_flush_poisoned() {
+            return;
+        }
         let _ = self.buffer_pool.flush_log_all();
         let _ = self.buffer_pool.flush_all();
     }
