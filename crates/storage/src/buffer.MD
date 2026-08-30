@@ -393,7 +393,20 @@ same thread.
   cleared, but the ownership rule's `debug_assert!`s catch it immediately
   if a future edit changes that.
 - `BufferPool::flush_page(&self, page_id)` - flushes `page_id` to disk if
-  its frame is dirty.
+  it is resident and its frame is dirty; a non-resident `page_id` is a
+  silent `Ok(())`, not `StorageError::PageNotFound`, because a page that
+  isn't in the pool at all is already durable - eviction only ever
+  removes a page from `page_table` after successfully flushing it if it
+  was dirty (the eviction-visibility rule above), so absence itself is
+  proof there is nothing left to flush. This matters beyond an odd corner
+  case: `txn::write_checkpoint`'s `pool.flush_page(PageId(0))` call is a
+  real, live dependency on this - page 0 (the database header) is by far
+  the coldest page in the pool, and under enough eviction pressure from
+  everything else a checkpoint touches, it can easily have been evicted
+  (and its own dirty bytes already durable) by the time the checkpoint
+  gets to this call. Before this returned `Ok(())` for the non-resident
+  case, that ordinary eviction would have surfaced as a checkpoint
+  failure with no real error underneath it.
 - `BufferPool::flush_all(&self)` - flushes every dirty resident page to
   disk, batching them through the double-write buffer in groups of at
   most `dwb.capacity()` pages - one double-write round trip per group
@@ -649,8 +662,10 @@ same thread.
   what makes the check-then-clear atomic with respect to a racing
   `PageWriteGuard::write`, which needs the same lock to mutate `page_lsn`
   in the first place.
-- `BufferPool::frame_of(&self, page_id) -> Result<FrameId, StorageError>` -
-  private.
+- `BufferPool::frame_of(&self, page_id) -> Option<FrameId>` - private.
+  `page_id`'s frame, or `None` if it isn't currently resident. Its only
+  caller, `flush_page`, treats `None` as "already durable," not an error
+  - see `flush_page` above.
 - `BufferPool::dirty_page_table(&self) -> Vec<(PageId, Lsn)>` - the Dirty
   Page Table: every currently-dirty resident page and its
   `recovery_lsn` (the LSN of the record that first dirtied it since its

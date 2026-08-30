@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{Lsn, PageId, TxnId};
 use storage::StorageError;
-use storage::block_device::BlockDevice;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::dwb::DoubleWriteBuffer;
@@ -17,30 +16,9 @@ use storage::wal::{
 };
 
 mod support;
-use support::CountingDevice;
+use support::CountingSegmentStore;
 
 const SMALL_SEGMENT: u64 = 512;
-
-struct CountingSegmentStore {
-    inner: FileSegmentStore,
-    calls: Arc<AtomicUsize>,
-    bytes: Arc<AtomicUsize>,
-}
-
-impl SegmentStore for CountingSegmentStore {
-    fn existing_segments(&self) -> Result<Vec<u64>, StorageError> {
-        self.inner.existing_segments()
-    }
-
-    fn open(&self, id: u64) -> Result<Box<dyn BlockDevice>, StorageError> {
-        let device = self.inner.open(id)?;
-        Ok(Box::new(CountingDevice::new(device, self.calls.clone(), self.bytes.clone())))
-    }
-
-    fn remove(&self, id: u64) -> Result<(), StorageError> {
-        self.inner.remove(id)
-    }
-}
 
 type Counters = (Arc<AtomicUsize>, Arc<AtomicUsize>);
 
@@ -50,11 +28,12 @@ fn open_counting(
 ) -> Result<(LogManager, Counters), Box<dyn Error>> {
     let calls = Arc::new(AtomicUsize::new(0));
     let bytes = Arc::new(AtomicUsize::new(0));
-    let store = Arc::new(CountingSegmentStore {
-        inner: FileSegmentStore::new(path),
-        calls: calls.clone(),
-        bytes: bytes.clone(),
-    });
+    let store = Arc::new(CountingSegmentStore::new(
+        FileSegmentStore::new(path),
+        calls.clone(),
+        bytes.clone(),
+        Arc::new(AtomicUsize::new(0)),
+    ));
     let log = LogManager::open_with_segment_store(store, target_segment_size)?;
     Ok((log, (calls, bytes)))
 }

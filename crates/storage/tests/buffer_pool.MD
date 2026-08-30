@@ -48,6 +48,16 @@ read or a write guard.
   necessarily evicted at least once; asserts its dirty byte was flushed
   to disk before eviction and comes back correctly on refetch after an
   explicit `flush_all`.
+- `flush_page_on_a_non_resident_page_is_a_silent_ok` - task.MD's P-5:
+  writes a marker into a page, allocates a second page into a one-frame
+  pool (evicting the first, which durably flushes it as a side effect of
+  eviction), confirms via `frame_count_for` that the first page really is
+  gone from the pool, then calls `flush_page` on it directly and expects
+  `Ok(())`, not `StorageError::PageNotFound` - a non-resident page is
+  already durable by construction, so its absence from the pool is not an
+  error condition. Re-fetches it afterward to confirm the marker survived,
+  proving `flush_page`'s early return didn't skip anything that still
+  needed writing.
 - `fetch_errors_rather_than_panics_when_every_frame_is_pinned` - with
   every frame in a 2-frame pool pinned *by this same thread*, a third
   `new_page` call must return `StorageError::BufferPoolExhausted`

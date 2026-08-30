@@ -3,25 +3,18 @@
 `storage::recovery::undo_transaction`'s I/O cost under a long undo chain,
 exercised entirely through public API (`undo_transaction`, `BufferPool`,
 `DiskManager`, `LogManager`, `DoubleWriteBuffer`, `LruKReplacer`) plus the
-`CountingDevice` helper from `tests/support/mod.rs`. Formerly an inline
-`#[cfg(test)] mod tests` in `crates/storage/src/recovery.rs`; moved here
-once `CountingDevice` itself moved out from behind `#[cfg(test)]`, since
-nothing in this test touches a private item.
+`CountingDevice`/`CountingSegmentStore` helpers from `tests/support/mod.rs`.
+Formerly an inline `#[cfg(test)] mod tests` in
+`crates/storage/src/recovery.rs`; moved here once `CountingDevice` itself
+moved out from behind `#[cfg(test)]`, since nothing in this test touches a
+private item. `CountingSegmentStore` used to be a private copy local to
+this file (identical in shape to one `wal_segments.rs` also kept), unified
+into `support/mod.rs` once both needed the same wrapper - see that file's
+`.MD` for what it counts and why `opens` exists as a separate counter from
+`calls`/`bytes`.
 
 ## Key Components
 
-- `CountingSegmentStore` - private. A `SegmentStore` that wraps a real
-  `FileSegmentStore` and hands back every segment device wrapped in a
-  `CountingDevice`, sharing one pair of `calls`/`bytes` counters across
-  every segment it opens, plus its own `opens` counter (incremented once
-  per `SegmentStore::open` call, independent of `CountingDevice`, since
-  opening a segment and reading from it are different costs to bound) -
-  the same shape `wal_segments.rs`'s own identically-named private helper
-  uses, kept local to each file rather than shared, since `mod support;`
-  only resolves within one crate's `tests/` directory and this one struct
-  is a few lines either way. `LogManager` now always speaks through a
-  `SegmentStore` (`wal.MD`'s single-on-disk-layout invariant), so there is
-  no longer a way to hand it one already-open counted device directly.
 - `undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times` -
   rolling back thousands of updates must cost a small, constant amount of
   device I/O *per undone record*, not a whole extra log-sized read for
@@ -53,11 +46,12 @@ nothing in this test touches a private item.
 ## Usage Example
 
 ```rust
-let store: Arc<dyn SegmentStore> = Arc::new(CountingSegmentStore {
-    inner: FileSegmentStore::new(wal_path),
-    calls: calls.clone(),
-    bytes: bytes.clone(),
-});
+let store: Arc<dyn SegmentStore> = Arc::new(CountingSegmentStore::new(
+    FileSegmentStore::new(wal_path),
+    calls.clone(),
+    bytes.clone(),
+    opens,
+));
 let log = LogManager::open_with_segment_store(store, DEFAULT_SEGMENT_SIZE)?;
 let pool = BufferPool::new(disk, dwb, log, 8, Box::new(LruKReplacer::new(8, 2)));
 // ... 5,000 writes to one page, then reset the counters ...

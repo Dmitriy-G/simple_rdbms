@@ -349,7 +349,9 @@ impl BufferPool {
     }
 
     pub fn flush_page(&self, page_id: PageId) -> Result<(), StorageError> {
-        let frame_id = self.frame_of(page_id)?;
+        let Some(frame_id) = self.frame_of(page_id) else {
+            return Ok(());
+        };
         if self.frames[frame_id.0 as usize].dirty_since_lsn.load(Ordering::Acquire) != 0 {
             self.flush_pages(&[(frame_id, page_id)])?;
         }
@@ -696,12 +698,8 @@ impl BufferPool {
         Ok(())
     }
 
-    fn frame_of(&self, page_id: PageId) -> Result<FrameId, StorageError> {
-        recover_lock(self.index.lock(), "BufferPool.index")
-            .page_table
-            .get(&page_id)
-            .copied()
-            .ok_or(StorageError::PageNotFound(page_id.0))
+    fn frame_of(&self, page_id: PageId) -> Option<FrameId> {
+        recover_lock(self.index.lock(), "BufferPool.index").page_table.get(&page_id).copied()
     }
 
     pub fn dirty_page_table(&self) -> Vec<(PageId, Lsn)> {

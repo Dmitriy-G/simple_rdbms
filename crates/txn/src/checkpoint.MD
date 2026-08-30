@@ -48,16 +48,55 @@ rules.
   regardless of how many of its pages have since been flushed to disk.
   Before computing that bound, forces the header transaction's write to
   page 0 out to disk with `pool.flush_page(PageId(0))` followed by
-  `pool.sync()`. Page 0 is the hottest page in the database and is
-  effectively never evicted on its own, so without this call the on-disk
-  copy of `last_checkpoint_lsn` can lag arbitrarily far behind the
-  in-memory value — potentially all the way back to the previous
-  checkpoint, or to nothing at all if page 0 has never been flushed. A
-  crash before that stale on-disk LSN reaches disk, followed by
+  `pool.sync()`. Page 0 is normally one of the hottest pages in the
+  database, but "normally" is not "always" — under enough eviction
+  pressure from everything else a checkpoint touches, it can genuinely be
+  evicted between checkpoints, which is exactly why `flush_page` treats a
+  non-resident page as an already-durable `Ok(())` rather than
+  `StorageError::PageNotFound` (`buffer.MD`): ordinary eviction must never
+  turn into a checkpoint failure. Without this explicit flush call, the
+  on-disk copy of `last_checkpoint_lsn` can still lag arbitrarily far
+  behind the in-memory value — potentially all the way back to the
+  previous checkpoint, or to nothing at all if page 0 has never been
+  flushed. A crash before that stale on-disk LSN reaches disk, followed by
   truncation, must not be possible: recovery reads that LSN as its start
   point, and `truncate_log_below` deletes exactly the segments a stale
   start point would need. The order is what makes this safe — the header
   LSN is durable *before* `truncate_log_below` runs, never after.
+
+  **Why truncation can never make `next_txn_id` regress.**
+  `txn::TransactionManager::new` seeds its id counter from
+  `storage::buffer::BufferPool::max_txn_id`, which - after segmentation -
+  only sees whatever transaction ids still appear in the surviving log
+  segments (`docs/adr/0011-segmented-write-ahead-log.md`); anything
+  named only in a segment `truncate_log_below` has already deleted is
+  invisible to it. Since `TxnId`s are handed out by a strictly increasing
+  counter, this is safe only because every checkpoint's `header_txn` -
+  the fresh, ordinary transaction this function begins and commits a few
+  lines above to write `last_checkpoint_lsn` - is itself assigned the
+  highest id in use *at that moment*, and its own `Begin`/`Update`/
+  `Commit`/`End` records are logged at LSNs at or after this checkpoint's
+  own `begin_lsn`, which is one of the three values `truncate_bound`
+  takes the `min` of - so `header_txn`'s records can never fall below the
+  bound this same checkpoint computes, and can never be part of what
+  *this* call to `truncate_log_below` removes. Any transaction with a
+  *higher* id must have begun after `header_txn` and therefore logs even
+  later, so it survives for the same reason. The next checkpoint repeats
+  this with its own, newer `header_txn`, so by induction the most recent
+  checkpoint's header transaction is always a safe, present lower bound
+  for `max_txn_id` on every future reopen - a reopened database's
+  `next_txn_id` can undercount how many transactions actually ran, but it
+  can never undercount past the highest id that ever needs remembering.
+  If `set_last_checkpoint_lsn` ever stopped going through a fresh,
+  ordinarily-logged transaction of its own - becoming an unlogged direct
+  write, for instance, or reusing an existing transaction - this
+  guarantee breaks silently: nothing would then guarantee any record
+  naming the current maximum id survives truncation, a reopened database
+  could hand out an id already used by a truncated-away transaction, and
+  `storage::wal::LogManager`'s purely-by-`TxnId` `prev_lsn` chaining
+  (`recovery.MD`'s `undo_transaction` entry) would splice the new
+  generation's undo chain onto the old one's, silently corrupting rollback
+  for both.
 
 ## Usage Example
 

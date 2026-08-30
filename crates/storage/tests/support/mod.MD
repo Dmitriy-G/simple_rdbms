@@ -23,6 +23,22 @@ right call (only when the test needs access to a private item).
   `crates/storage/src/block_device.rs`; moved here because it implements
   only the public `BlockDevice` trait and touches nothing private, so the
   gate served no purpose beyond hiding it from `tests/`.
+- `CountingSegmentStore` - a `storage::wal::SegmentStore` that wraps a real
+  `FileSegmentStore` and hands every segment it opens through a
+  `CountingDevice`, so a test can measure per-lookup I/O at the
+  `SegmentStore` level the same way `CountingDevice` measures it at the
+  `BlockDevice` level. `CountingSegmentStore::new(inner, calls, bytes, opens)`
+  additionally counts `open` calls into `opens` - `wal_segments.rs`'s tests
+  only care about `calls`/`bytes` and pass a throwaway counter for `opens`,
+  while `undo_performance.rs`'s cross-segment test asserts on `opens`
+  directly, to prove a backward undo walk across several sealed segments
+  opens each one at most once rather than once per record undone.
+  `existing_segments`/`remove` just forward to `inner` unchanged. Used to
+  be two separate, near-identical private copies (one per file); unified
+  here once both needed the same shape, since `mod support;` already
+  existed for `CountingDevice` and the note below about it not crossing
+  crate boundaries applies just as well to a second type in the same
+  module.
 
 ## Usage Example
 
@@ -30,33 +46,32 @@ right call (only when the test needs access to a private item).
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-use storage::wal::{FileSegmentStore, SegmentStore};
+use storage::wal::{FileSegmentStore, LogManager};
 
 mod support;
-use support::CountingDevice;
+use support::CountingSegmentStore;
 
-struct CountingSegmentStore {
-    inner: FileSegmentStore,
-    calls: Arc<AtomicUsize>,
-    bytes: Arc<AtomicUsize>,
-}
-
-impl SegmentStore for CountingSegmentStore {
-    // existing_segments and remove just forward to `inner`
-    fn open(&self, id: u64) -> Result<Box<dyn storage::block_device::BlockDevice>, storage::StorageError> {
-        let device = self.inner.open(id)?;
-        Ok(Box::new(CountingDevice::new(device, self.calls.clone(), self.bytes.clone())))
-    }
-}
+let calls = Arc::new(AtomicUsize::new(0));
+let bytes = Arc::new(AtomicUsize::new(0));
+let opens = Arc::new(AtomicUsize::new(0));
+let store = Arc::new(CountingSegmentStore::new(
+    FileSegmentStore::new(wal_path),
+    calls.clone(),
+    bytes.clone(),
+    opens,
+));
+let log = LogManager::open_with_segment_store(store, target_segment_size)?;
 ```
 
 `LogManager` always opens a `SegmentStore`, never a single device directly
-(`wal.MD`'s single-on-disk-layout invariant), so wrapping one device in
-`CountingDevice` means implementing a small `SegmentStore` like this one
-that hands every segment it opens through `CountingDevice` first.
-`crates/storage/tests/undo_performance.rs` declares `mod support;`, keeps
-its own private copy of exactly this `CountingSegmentStore` (`mod support;`
-only resolves within one crate's `tests/` directory, so it cannot be
-shared further than that), and drives it this way, resetting
-`calls`/`bytes` right before the operation under measurement so setup I/O
-doesn't pollute the count.
+(`wal.MD`'s single-on-disk-layout invariant), which is why measuring I/O
+at the segment-open granularity needs a `SegmentStore` wrapper rather than
+handing `CountingDevice` to `LogManager` directly.
+`crates/storage/tests/wal_segments.rs` and
+`crates/storage/tests/undo_performance.rs` both declare `mod support;` and
+drive `CountingSegmentStore` this way (`mod support;` only resolves within
+one crate's `tests/` directory, so this module cannot be shared with
+another crate's tests - the note that motivated moving `CountingDevice`
+here still applies, it just doesn't force a second copy of
+`CountingSegmentStore` too), resetting `calls`/`bytes`/`opens` right before
+the operation under measurement so setup I/O doesn't pollute the count.

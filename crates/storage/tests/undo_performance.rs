@@ -3,8 +3,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::TxnId;
-use storage::StorageError;
-use storage::block_device::BlockDevice;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::dwb::DoubleWriteBuffer;
@@ -15,32 +13,9 @@ use storage::wal::{DEFAULT_SEGMENT_SIZE, FileSegmentStore, LogManager, SegmentSt
 
 mod support;
 
-use support::CountingDevice;
+use support::CountingSegmentStore;
 
 const SMALL_SEGMENT: u64 = 512;
-
-struct CountingSegmentStore {
-    inner: FileSegmentStore,
-    calls: Arc<AtomicUsize>,
-    bytes: Arc<AtomicUsize>,
-    opens: Arc<AtomicUsize>,
-}
-
-impl SegmentStore for CountingSegmentStore {
-    fn existing_segments(&self) -> Result<Vec<u64>, StorageError> {
-        self.inner.existing_segments()
-    }
-
-    fn open(&self, id: u64) -> Result<Box<dyn BlockDevice>, StorageError> {
-        self.opens.fetch_add(1, Ordering::Relaxed);
-        let device = self.inner.open(id)?;
-        Ok(Box::new(CountingDevice::new(device, self.calls.clone(), self.bytes.clone())))
-    }
-
-    fn remove(&self, id: u64) -> Result<(), StorageError> {
-        self.inner.remove(id)
-    }
-}
 
 #[test]
 fn undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times()
@@ -51,12 +26,12 @@ fn undoing_thousands_of_updates_reads_the_log_a_bounded_number_of_times()
     let calls = Arc::new(AtomicUsize::new(0));
     let bytes = Arc::new(AtomicUsize::new(0));
     let opens = Arc::new(AtomicUsize::new(0));
-    let store: Arc<dyn SegmentStore> = Arc::new(CountingSegmentStore {
-        inner: FileSegmentStore::new(dir.path().join("test.db.wal")),
-        calls: calls.clone(),
-        bytes: bytes.clone(),
+    let store: Arc<dyn SegmentStore> = Arc::new(CountingSegmentStore::new(
+        FileSegmentStore::new(dir.path().join("test.db.wal")),
+        calls.clone(),
+        bytes.clone(),
         opens,
-    });
+    ));
     let log = LogManager::open_with_segment_store(store, DEFAULT_SEGMENT_SIZE)?;
     let dwb = DoubleWriteBuffer::open(
         dir.path().join("test.db.dwb"),
@@ -105,12 +80,12 @@ fn undoing_across_sealed_segments_reads_the_log_a_bounded_number_of_times()
     let calls = Arc::new(AtomicUsize::new(0));
     let bytes = Arc::new(AtomicUsize::new(0));
     let opens = Arc::new(AtomicUsize::new(0));
-    let store: Arc<dyn SegmentStore> = Arc::new(CountingSegmentStore {
-        inner: FileSegmentStore::new(dir.path().join("test.db.wal")),
-        calls: calls.clone(),
-        bytes: bytes.clone(),
-        opens: opens.clone(),
-    });
+    let store: Arc<dyn SegmentStore> = Arc::new(CountingSegmentStore::new(
+        FileSegmentStore::new(dir.path().join("test.db.wal")),
+        calls.clone(),
+        bytes.clone(),
+        opens.clone(),
+    ));
     let store_for_inspection = store.clone();
     let log = LogManager::open_with_segment_store(store, SMALL_SEGMENT)?;
     let dwb = DoubleWriteBuffer::open(

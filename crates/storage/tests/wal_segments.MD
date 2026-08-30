@@ -19,15 +19,14 @@ or disk.
 - `SMALL_SEGMENT` - the target segment size every test in this file uses,
   small enough that a few hundred filler records reliably span three or
   more segments.
-- `CountingSegmentStore` - a `SegmentStore` wrapping a real
-  `FileSegmentStore`, whose every opened segment device is wrapped in
-  `support::CountingDevice` sharing one pair of call/byte counters across
-  every segment the log opens over its lifetime - the mechanism
-  `opening_a_long_log_reads_only_the_live_tail` uses to prove `open` reads
-  a bounded number of bytes rather than one proportional to total history.
 - `open_counting(path, target_segment_size) -> (LogManager, calls, bytes)` -
-  opens a `LogManager` through a fresh `CountingSegmentStore`, returning
-  the shared counters alongside it.
+  opens a `LogManager` through a fresh `support::CountingSegmentStore`
+  (`support/mod.MD`), returning the shared call/byte counters alongside it
+  - the mechanism `opening_a_long_log_reads_only_the_live_tail` uses to
+  prove `open` reads a bounded number of bytes rather than one
+  proportional to total history. Passes a throwaway, never-read `opens`
+  counter, since nothing in this file needs it -
+  `crates/storage/tests/undo_performance.rs` is the one that does.
 - `open_pool(dir, target_segment_size) -> BufferPool` - like the `open_pool`
   helper in `recovery.rs`, but plumbing a caller-chosen segment size
   through to the `LogManager` instead of the default.

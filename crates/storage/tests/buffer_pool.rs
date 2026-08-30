@@ -72,6 +72,37 @@ fn evicts_under_pressure_and_dirty_data_survives_flush_and_refetch() -> Result<(
 }
 
 #[test]
+fn flush_page_on_a_non_resident_page_is_a_silent_ok() -> Result<(), Box<dyn Error>> {
+    let (pool, _dir) = open_pool(1)?;
+
+    let (evicted_id, mut guard) = pool.new_page(TxnId(0))?;
+    guard.write(TxnId(0), MARKER_OFFSET, &[7])?;
+    drop(guard);
+
+    let (_still_resident_id, guard) = pool.new_page(TxnId(1))?;
+    drop(guard);
+
+    assert_eq!(
+        pool.frame_count_for(evicted_id),
+        0,
+        "the one-frame pool must have evicted the first page to make room for the second"
+    );
+
+    pool.flush_page(evicted_id)?;
+
+    let guard = pool.fetch_page_read(evicted_id)?;
+    assert_eq!(
+        guard.page().data()[MARKER_OFFSET],
+        7,
+        "eviction must have already made this durable"
+    );
+    drop(guard);
+
+    pool.assert_frame_accounting();
+    Ok(())
+}
+
+#[test]
 fn fetch_errors_rather_than_panics_when_every_frame_is_pinned() -> Result<(), Box<dyn Error>> {
     let (pool, _dir) = open_pool(2)?;
 
