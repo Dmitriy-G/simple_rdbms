@@ -79,6 +79,7 @@ pub struct BufferPool {
     page_installed: Condvar,
     frame_wait_timeout: Duration,
     flush_poisoned: AtomicBool,
+    flush_sequence: Mutex<()>,
     #[cfg(any(test, feature = "test-util"))]
     fetch_count: AtomicUsize,
     #[cfg(any(test, feature = "test-util"))]
@@ -136,6 +137,7 @@ impl BufferPool {
             page_installed: Condvar::new(),
             frame_wait_timeout: Self::DEFAULT_FRAME_WAIT_TIMEOUT,
             flush_poisoned: AtomicBool::new(false),
+            flush_sequence: Mutex::new(()),
             #[cfg(any(test, feature = "test-util"))]
             fetch_count: AtomicUsize::new(0),
             #[cfg(any(test, feature = "test-util"))]
@@ -653,6 +655,11 @@ impl BufferPool {
             }
         }
 
+        let flush_sequence = recover_lock(self.flush_sequence.lock(), "BufferPool.flush_sequence");
+        if self.flush_poisoned.load(Ordering::Acquire) {
+            return Err(StorageError::FlushPoisoned);
+        }
+
         self.dwb.write_batch(&snapshot)?;
         metrics::counter!("dwb_batches_written_total").increment(1);
 
@@ -673,6 +680,7 @@ impl BufferPool {
             );
             return Err(err);
         }
+        drop(flush_sequence);
 
         for (&(frame_id, _), snapshot_page) in pages.iter().zip(snapshot.iter()) {
             let idx = frame_id.0 as usize;

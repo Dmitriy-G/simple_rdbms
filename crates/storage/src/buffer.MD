@@ -74,6 +74,21 @@ the shared fetch/pin/evict/install logic already follows this structurally;
 M10.2 will be tempted to inline pinning and latching into one step, and
 doing so would reintroduce exactly the ordering this rule forbids.
 
+**The flush-sequence rule - read this before touching `flush_pages`:**
+`flush_sequence` (a `Mutex<()>`) is acquired *after* `index`'s mutex has
+already been released and *before* any frame latch the flush's real-write
+loop might need, and is held across the whole double-write sequence -
+`dwb.write_batch`, every real page write, `disk_manager.sync`, and
+`dwb.clear_batch` - not just one call in it. None of `flush_pages`'s three
+callers (`flush_page`, `flush_all`, `acquire_free_frame`) holds a page
+latch when they call in, so this ordering is a documentation obligation
+rather than a refactor forced by an existing conflict - but it matters the
+moment a future caller does hold one, since taking `flush_sequence` while
+already holding a frame latch would invert the order every other path in
+this file assumes. See the poisoning paragraph below for what the lock
+protects and why per-call atomicity of `write_batch`/`clear_batch` alone
+was not enough.
+
 `try_install` (below) takes one narrow, deliberate exception: it writes a
 freshly-read page's bytes into its frame's `RwLock` *while still holding*
 `index`'s mutex, rather than after releasing it. This is safe only because
@@ -251,7 +266,9 @@ same thread.
   `flush_poisoned: AtomicBool` starts `false` and is set permanently once
   `flush_pages` fails after handing a batch's images to `dwb` but before
   retiring them - see `flush_pages` below for why that specific window is
-  the one that matters.
+  the one that matters. `flush_sequence: Mutex<()>` serializes the
+  double-write sequence itself (the flush-sequence rule above) so that at
+  most one batch is ever outstanding in `dwb` at a time.
 - `WriteObservation` - test/`test-util`-only. One observed disk write, for
   the WAL-ordering invariant test: at the moment `page_id` was written to
   disk, its `page_lsn` and the log's `durable_lsn` at that instant. The
@@ -556,6 +573,28 @@ same thread.
   at any point up to and including a synced `dwb.write_batch` leaves
   either a real page untouched by this batch, or a torn real page with an
   intact `dwb` copy `recovery::recover_double_write` can restore from.
+  `flush_sequence` (the flush-sequence rule above) is taken immediately
+  before this sequence starts and held until `dwb.clear_batch` returns,
+  success or failure, with the authoritative `flush_poisoned` check made
+  under that same lock - the check at the very top of this function is
+  only a cheap early-out and is not by itself what makes poisoning safe.
+
+  **Why a per-call-atomic `dwb` was not enough.** Before `flush_sequence`
+  existed, `DoubleWriteBuffer`'s own internal mutex made each of
+  `write_batch`/`clear_batch` individually atomic, but the three-step
+  sequence around them was not, and `flush_pages` is reachable
+  concurrently from `acquire_free_frame` (two evictions on different
+  frames), `flush_page`, and `flush_all` alike. With `dwb`'s single header
+  able to describe only one outstanding batch, T1's `write_batch([P])`
+  followed by T2's `write_batch([Q])` silently discards P's backup before
+  T1 has written P to its real location; if T1's real write then tears P
+  and the process crashes, recovery finds Q's still-valid batch, restores
+  nothing, and P is corrupt with no error ever raised anywhere. This was a
+  real, reproduced failure - a `ChecksumMismatch` on reopen with no
+  `dwb_pages_restored_total` warning ever logged - and required no I/O
+  failure at all, only the ordinary interleaving two concurrent evictions
+  already produce. `flush_sequence` closes it by making the sequence
+  itself, not just its individual calls, exclusive.
 
   **Poisoning.** `dwb`'s slots are assigned by a batch's *position*
   (`DoubleWriteBuffer::offset_of_slot`), not per page id, so at most one
@@ -577,7 +616,9 @@ same thread.
   (`problems.MD`), not a hypothetical: a `ChecksumMismatch` on reopen with
   no `dwb_pages_restored_total` warning ever logged. The fix is
   `flush_poisoned`: once this function fails in that window, it sets the
-  flag and every later call - on this pool, for the rest of this process,
+  flag (still under `flush_sequence`, so the set and the batch it
+  describes become visible together) and every later call - on this pool,
+  for the rest of this process,
   regardless of which pages it's asked to flush - fails fast with
   `StorageError::FlushPoisoned` instead of touching `dwb` again. Only a
   fresh `BufferPool` (i.e. reopening the database, running
