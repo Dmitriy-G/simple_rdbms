@@ -10,10 +10,11 @@ use crate::block_device::{BlockDevice, FileDevice};
 use crate::error::StorageError;
 use crate::page::{self, PAGE_SIZE, Page};
 
-const MAGIC: &[u8; 8] = b"FDBDWB01";
+const MAGIC: &[u8; 8] = b"FDBDWB02";
 
 const ENTRY_COUNT_OFFSET: usize = MAGIC.len();
-const PAGE_IDS_OFFSET: usize = ENTRY_COUNT_OFFSET + 4;
+const ENTRIES_OFFSET: usize = ENTRY_COUNT_OFFSET + 4;
+const ENTRY_SIZE: usize = 8;
 
 pub struct DoubleWriteBuffer {
     device: Mutex<Box<dyn BlockDevice>>,
@@ -38,7 +39,7 @@ impl DoubleWriteBuffer {
             return Err(StorageError::InvalidDwbCapacity);
         }
         debug_assert!(
-            PAGE_IDS_OFFSET + capacity * 4 + 4 <= PAGE_SIZE,
+            ENTRIES_OFFSET + capacity * ENTRY_SIZE + 4 <= PAGE_SIZE,
             "a {capacity}-entry double-write buffer header does not fit in a {PAGE_SIZE}-byte page"
         );
         let expected_len = (1 + capacity) as u64 * PAGE_SIZE as u64;
@@ -64,12 +65,14 @@ impl DoubleWriteBuffer {
             self.capacity
         );
         let device = recover_lock(self.device.lock(), "DoubleWriteBuffer.device");
+        let mut entries = Vec::with_capacity(pages.len());
         for (index, page) in pages.iter().enumerate() {
             let mut scratch = *page.data();
             page::stamp_checksum(&mut scratch);
             device.write_at(self.offset_of_slot(index), &scratch)?;
+            entries.push((page.id(), crc32(&scratch)));
         }
-        let header = self.encode_header(pages.iter().map(Page::id));
+        let header = self.encode_header(entries.into_iter());
         device.write_at(0, &header)?;
         device.sync_all()?;
         Ok(())
@@ -83,22 +86,24 @@ impl DoubleWriteBuffer {
         Ok(())
     }
 
-    fn encode_header(&self, page_ids: impl Iterator<Item = PageId>) -> [u8; PAGE_SIZE] {
-        let ids: Vec<PageId> = page_ids.collect();
+    fn encode_header(&self, entries: impl Iterator<Item = (PageId, u32)>) -> [u8; PAGE_SIZE] {
+        let entries: Vec<(PageId, u32)> = entries.collect();
         let mut buf = [0u8; PAGE_SIZE];
         buf[0..MAGIC.len()].copy_from_slice(MAGIC);
-        buf[ENTRY_COUNT_OFFSET..PAGE_IDS_OFFSET].copy_from_slice(&(ids.len() as u32).to_le_bytes());
-        for (i, id) in ids.iter().enumerate() {
-            let at = PAGE_IDS_OFFSET + i * 4;
+        buf[ENTRY_COUNT_OFFSET..ENTRIES_OFFSET]
+            .copy_from_slice(&(entries.len() as u32).to_le_bytes());
+        for (i, (id, slot_crc)) in entries.iter().enumerate() {
+            let at = ENTRIES_OFFSET + i * ENTRY_SIZE;
             buf[at..at + 4].copy_from_slice(&id.0.to_le_bytes());
+            buf[at + 4..at + 8].copy_from_slice(&slot_crc.to_le_bytes());
         }
-        let content_end = PAGE_IDS_OFFSET + ids.len() * 4;
+        let content_end = ENTRIES_OFFSET + entries.len() * ENTRY_SIZE;
         let crc = crc32(&buf[0..content_end]);
         buf[content_end..content_end + 4].copy_from_slice(&crc.to_le_bytes());
         buf
     }
 
-    pub fn read_batch(&self) -> Result<Option<Vec<PageId>>, StorageError> {
+    pub fn read_batch(&self) -> Result<Option<Vec<(PageId, u32)>>, StorageError> {
         let mut header = [0u8; PAGE_SIZE];
         recover_lock(self.device.lock(), "DoubleWriteBuffer.device").read_at(0, &mut header)?;
 
@@ -109,7 +114,7 @@ impl DoubleWriteBuffer {
         if count == 0 || count > self.capacity {
             return Ok(None);
         }
-        let content_end = PAGE_IDS_OFFSET + count * 4;
+        let content_end = ENTRIES_OFFSET + count * ENTRY_SIZE;
         if content_end + 4 > PAGE_SIZE {
             return Ok(None);
         }
@@ -118,8 +123,13 @@ impl DoubleWriteBuffer {
             return Ok(None);
         }
 
-        let ids = (0..count).map(|i| PageId(read_u32(&header, PAGE_IDS_OFFSET + i * 4))).collect();
-        Ok(Some(ids))
+        let entries = (0..count)
+            .map(|i| {
+                let at = ENTRIES_OFFSET + i * ENTRY_SIZE;
+                (PageId(read_u32(&header, at)), read_u32(&header, at + 4))
+            })
+            .collect();
+        Ok(Some(entries))
     }
 
     pub fn read_slot(&self, index: usize) -> Result<[u8; PAGE_SIZE], StorageError> {
@@ -127,6 +137,27 @@ impl DoubleWriteBuffer {
         recover_lock(self.device.lock(), "DoubleWriteBuffer.device")
             .read_at(self.offset_of_slot(index), &mut buf)?;
         Ok(buf)
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn write_raw_slot(
+        &self,
+        index: usize,
+        content: &[u8; PAGE_SIZE],
+    ) -> Result<(), StorageError> {
+        let device = recover_lock(self.device.lock(), "DoubleWriteBuffer.device");
+        device.write_at(self.offset_of_slot(index), content)?;
+        device.sync_all()?;
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn write_raw_header_entries(&self, entries: &[(PageId, u32)]) -> Result<(), StorageError> {
+        let header = self.encode_header(entries.iter().copied());
+        let device = recover_lock(self.device.lock(), "DoubleWriteBuffer.device");
+        device.write_at(0, &header)?;
+        device.sync_all()?;
+        Ok(())
     }
 }
 

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use common::crc::crc32;
 use common::{Lsn, PageId, TxnId};
 
 use crate::buffer::BufferPool;
@@ -13,14 +14,21 @@ pub fn recover_double_write(
     disk: &DiskManager,
     dwb: &DoubleWriteBuffer,
 ) -> Result<(), StorageError> {
-    let Some(page_ids) = dwb.read_batch()? else {
+    let Some(entries) = dwb.read_batch()? else {
         return Ok(());
     };
 
     let mut restored_pages = Vec::new();
-    for (index, page_id) in page_ids.into_iter().enumerate() {
+    for (index, &(page_id, slot_crc)) in entries.iter().enumerate() {
         let slot = dwb.read_slot(index)?;
-        if !page::checksum_ok(&slot) {
+        let actual_crc = crc32(&slot);
+        if actual_crc != slot_crc {
+            if entries.iter().any(|&(_, other_crc)| other_crc == actual_crc) {
+                return Err(StorageError::DoubleWriteRestoreFailed { page_id: page_id.0 });
+            }
+            continue;
+        }
+        if slot.iter().all(|&b| b == 0) {
             continue;
         }
 

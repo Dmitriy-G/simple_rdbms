@@ -11,6 +11,26 @@ for the durability claim these tests check.
 
 ## Key Components
 
+- `open_file(path)` - private. Opens (creating if necessary) a real file
+  for a device to wrap, matching the same helper name used elsewhere in
+  this crate's tests.
+- `read_raw_page(db_path, page_id) -> Result<[u8; PAGE_SIZE], Box<dyn Error>>` -
+  private. Reads `page_id`'s bytes directly off `db_path` via a raw file
+  handle, bypassing `DiskManager::read_page`/`read_page_unchecked`
+  entirely (the latter is `pub(crate)`, unreachable from an integration
+  test). Used by the three hardening tests below to snapshot a page's
+  exact bytes before and after `recover_double_write`, since a torn page
+  fails `DiskManager::read_page`'s own checksum check and
+  `read_page_unchecked` isn't visible here.
+- `tear_page(db_path, disk, page_id, bytes)` - private. Writes a
+  well-formed page (`bytes` at offset 20) through `disk`, syncs, then
+  flips one byte directly on `db_path` at that same offset - the same
+  write-then-flip shape `a_corrupted_double_write_copy_is_skipped_not_restored_from`
+  already used inline, factored out since the three new tests below all
+  need a page that fails its own checksum *before* recovery runs, for the
+  same reason `recover_double_write_restores_a_page_torn_mid_flush` does:
+  otherwise a test that merely leaves the page untouched would pass even
+  if the check under test never ran at all.
 - `write_batch_then_read_batch_round_trips_page_ids_in_order` - writes two
   pages as a batch and checks `read_batch` returns their ids in order and
   `read_slot` returns each one's bytes.
@@ -92,6 +112,40 @@ for the durability claim these tests check.
   must reject a zero capacity outright rather than constructing a buffer
   `BufferPool::flush_pages`'s `pages.len() <= capacity` assertion would
   debug-panic against on the very first non-empty flush.
+- `a_slot_whose_crc_does_not_match_is_not_restored` - task.MD's P-2:
+  tears a real page, then uses `DoubleWriteBuffer::write_raw_slot`/
+  `write_raw_header_entries` to record an entry whose `slot_crc` doesn't
+  match the slot's actual bytes and doesn't collide with any other entry
+  in the batch either (a single-entry batch, so there is no "other entry"
+  to collide with) - the plain corruption case. Asserts the real page's
+  raw bytes (`read_raw_page`) are unchanged by `recover_double_write`,
+  which returns `Ok(())`: skipped, not an error.
+- `an_all_zero_slot_is_never_written_over_a_live_page` - task.MD's P-2:
+  the specific weakness that motivated the whole fix -
+  `page::checksum_ok` treats an all-zero page as valid (correctly, for a
+  freshly allocated data page), which used to be the *only* test
+  `recover_double_write` applied to a slot before trusting it. Records an
+  honestly-self-consistent entry for an all-zero slot (its `slot_crc`
+  really is `crc32` of all zero bytes, so the crc check alone would pass
+  it) against a torn real page, and asserts the real page's raw bytes are
+  still unchanged afterward - the explicit all-zero guard, not the crc
+  check, is what has to catch this one.
+- `a_slot_holding_the_wrong_page_id_fails_recovery_loudly` - task.MD's
+  P-2: writes a genuine two-page batch via `write_batch` (so both
+  entries' `slot_crc`s are the real ones `write_batch` computed), then
+  uses `write_raw_slot` to overwrite slot 0's bytes with slot 1's own
+  on-disk bytes, leaving the header untouched - the exact shape a second,
+  overlapping flush racing the double-write buffer used to be able to
+  produce before `buffer::BufferPool::flush_sequence` (`buffer.MD`, and
+  `crates/storage/tests/dwb_batch_exclusion.rs`) made that race
+  impossible, and the reason this check is "hardening" rather than
+  reachable today. Slot 0's content-crc now matches entry 1's recorded
+  `slot_crc`, not its own entry's - `recover_double_write` must notice the
+  crc belongs to a *different* entry and refuse the whole pass with
+  `StorageError::DoubleWriteRestoreFailed` naming page A, rather than
+  either silently skipping it or, worse, restoring page A's real location
+  with page B's content. Asserts both the returned error and that page
+  A's raw bytes are unchanged.
 
 ## Usage Example
 

@@ -22,12 +22,41 @@ calls it directly rather than reimplementing undo.
   by a crash must be restored *first* - this is what lets a
   `ChecksumMismatch` surviving to `recover`'s own Redo pass stay a hard,
   unrecoverable error (real media corruption) rather than something Redo
-  itself has to work around. For each page id the double-write buffer's
-  header names: reads that slot's copy and checks *its own* checksum
-  first. A bad copy means the crash landed while the copy itself was
-  still being written (protocol steps 1-2) - the real page was never
-  touched by this batch, so it is already fine and there is nothing to
-  restore it from. A good copy means it's safe to compare against the
+  itself has to work around. For each `(page_id, slot_crc)` entry the
+  double-write buffer's header names: reads that slot's raw bytes and
+  recomputes their CRC-32, comparing it against the entry's recorded
+  `slot_crc` rather than the slot's own internal page checksum
+  (`page::checksum_ok`) - `slot_crc` is the one signal that actually ties
+  a slot's *exact* on-disk bytes to the moment `write_batch` wrote them,
+  where `checksum_ok` only proves the bytes are *some* internally
+  consistent page (or, deliberately, an all-zero one - see
+  `dwb.MD`'s `checksum_ok` cross-reference - which is exactly the
+  weaker property that let a torn or mismatched slot still look "good
+  enough" to restore from before this check existed). A `slot_crc`
+  mismatch has two possible causes, told apart by checking whether the
+  actual bytes' CRC matches *any other* entry in this same batch's
+  header: if it matches none, the crash landed while the copy itself was
+  still being written (protocol steps 1-2) and the real page was never
+  touched by this batch, so this slot is skipped - nothing to restore it
+  from. If it matches a *different* entry's recorded `slot_crc`, this
+  slot is holding a different page's content than its own header entry
+  claims - the exact confusion a batch's slots being addressed by
+  position rather than page id makes possible (`buffer.MD`'s poisoning
+  paragraph walks through how, absent `flush_sequence`, two overlapping
+  flushes used to produce exactly this state) - and using it would mean
+  writing the wrong page's bytes over the real page it's being restored
+  into; this returns `StorageError::DoubleWriteRestoreFailed` naming the
+  page immediately, refusing the whole recovery pass rather than silently
+  either skipping or misapplying it. A `slot_crc` match that turns out to
+  be an all-zero slot is also skipped, never restored from, regardless of
+  whether it matches its recorded crc: an honest, non-corrupted all-zero
+  slot can occur (a batch entry position never actually written this
+  session), and a freshly allocated page being legitimately all zero is
+  exactly why `page::checksum_ok`'s own all-zero exemption exists for
+  *that* job - but here, "safe to overwrite a live page with" is a
+  strictly stronger claim than "internally consistent," and an
+  all-zero slot never gets to make it. Once a slot's `slot_crc` matches
+  its own entry and it isn't all-zero, it's safe to compare against the
   real page: if the real page's own checksum fails, it was torn by this
   batch's real-file write (step 4) and is restored from the copy; if it
   verifies, it is left alone - either this batch never reached it or

@@ -5,6 +5,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use common::crc::crc32;
 use common::{PageId, TxnId};
 use storage::StorageError;
 use storage::block_device::{BlockDevice, DurabilityModel, FaultyDevice, FileDevice};
@@ -15,6 +16,43 @@ use storage::page::{PAGE_SIZE, Page};
 use storage::recovery;
 use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
+
+fn open_file(path: &std::path::Path) -> io::Result<std::fs::File> {
+    OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
+}
+
+fn read_raw_page(
+    db_path: &std::path::Path,
+    page_id: PageId,
+) -> Result<[u8; PAGE_SIZE], Box<dyn Error>> {
+    let mut buf = [0u8; PAGE_SIZE];
+    let mut file = open_file(db_path)?;
+    file.seek(SeekFrom::Start(page_id.0 as u64 * PAGE_SIZE as u64))?;
+    file.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
+fn tear_page(
+    db_path: &std::path::Path,
+    disk: &DiskManager,
+    page_id: PageId,
+    bytes: &[u8],
+) -> Result<(), Box<dyn Error>> {
+    let mut original = Page::new(page_id);
+    original.data_mut()[20..20 + bytes.len()].copy_from_slice(bytes);
+    disk.write_page(page_id, &original)?;
+    disk.sync()?;
+
+    let offset = page_id.0 as u64 * PAGE_SIZE as u64 + 20;
+    let mut file = open_file(db_path)?;
+    file.seek(SeekFrom::Start(offset))?;
+    let mut byte = [0u8; 1];
+    file.read_exact(&mut byte)?;
+    byte[0] ^= 0xFF;
+    file.seek(SeekFrom::Start(offset))?;
+    file.write_all(&byte)?;
+    Ok(())
+}
 
 #[test]
 fn write_batch_then_read_batch_round_trips_page_ids_in_order() -> Result<(), Box<dyn Error>> {
@@ -31,7 +69,8 @@ fn write_batch_then_read_batch_round_trips_page_ids_in_order() -> Result<(), Box
 
     dwb.write_batch(&[page_a, page_b])?;
 
-    let ids = dwb.read_batch()?.ok_or("expected a batch to be in flight")?;
+    let entries = dwb.read_batch()?.ok_or("expected a batch to be in flight")?;
+    let ids: Vec<PageId> = entries.iter().map(|&(id, _)| id).collect();
     assert_eq!(ids, vec![PageId(1), PageId(2)]);
 
     let slot0 = dwb.read_slot(0)?;
@@ -431,6 +470,115 @@ fn open_rejects_zero_capacity() -> Result<(), Box<dyn Error>> {
     assert!(
         matches!(result, Err(StorageError::InvalidDwbCapacity)),
         "capacity 0 must be rejected with InvalidDwbCapacity"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_slot_whose_crc_does_not_match_is_not_restored() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("test.db");
+    let dwb_path = dir.path().join("test.db.dwb");
+
+    let disk = DiskManager::open_with_device(
+        Box::new(FileDevice::new(open_file(&db_path)?)),
+        PAGE_SIZE,
+        None,
+    )?;
+    let page_id = disk.allocate_page()?;
+    tear_page(&db_path, &disk, page_id, b"original")?;
+
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let slot_content = [0xABu8; PAGE_SIZE];
+    dwb.write_raw_slot(0, &slot_content)?;
+    let wrong_crc = crc32(&slot_content).wrapping_add(1);
+    dwb.write_raw_header_entries(&[(page_id, wrong_crc)])?;
+
+    let before = read_raw_page(&db_path, page_id)?;
+
+    recovery::recover_double_write(&disk, &dwb)?;
+
+    let after = read_raw_page(&db_path, page_id)?;
+    assert_eq!(
+        after, before,
+        "a slot whose recorded crc does not match its content must never be restored from"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_all_zero_slot_is_never_written_over_a_live_page() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("test.db");
+    let dwb_path = dir.path().join("test.db.dwb");
+
+    let disk = DiskManager::open_with_device(
+        Box::new(FileDevice::new(open_file(&db_path)?)),
+        PAGE_SIZE,
+        None,
+    )?;
+    let page_id = disk.allocate_page()?;
+    tear_page(&db_path, &disk, page_id, b"original")?;
+
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let zero_slot = [0u8; PAGE_SIZE];
+    dwb.write_raw_slot(0, &zero_slot)?;
+    dwb.write_raw_header_entries(&[(page_id, crc32(&zero_slot))])?;
+
+    let before = read_raw_page(&db_path, page_id)?;
+
+    recovery::recover_double_write(&disk, &dwb)?;
+
+    let after = read_raw_page(&db_path, page_id)?;
+    assert_eq!(
+        after, before,
+        "an all-zero slot must never be written over a live page, even when its recorded crc \
+         matches"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_slot_holding_the_wrong_page_id_fails_recovery_loudly() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let db_path = dir.path().join("test.db");
+    let dwb_path = dir.path().join("test.db.dwb");
+
+    let disk = DiskManager::open_with_device(
+        Box::new(FileDevice::new(open_file(&db_path)?)),
+        PAGE_SIZE,
+        None,
+    )?;
+    let page_a = disk.allocate_page()?;
+    let page_b = disk.allocate_page()?;
+    tear_page(&db_path, &disk, page_a, b"page-a-x")?;
+
+    let dwb = DoubleWriteBuffer::open(&dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
+    let mut content_a = Page::new(page_a);
+    content_a.data_mut()[20..28].copy_from_slice(b"a-backup");
+    let mut content_b = Page::new(page_b);
+    content_b.data_mut()[20..28].copy_from_slice(b"b-backup");
+    dwb.write_batch(&[content_a, content_b])?;
+
+    let slot1 = dwb.read_slot(1)?;
+    dwb.write_raw_slot(0, &slot1)?;
+
+    let before = read_raw_page(&db_path, page_a)?;
+
+    let result = recovery::recover_double_write(&disk, &dwb);
+    match &result {
+        Err(StorageError::DoubleWriteRestoreFailed { page_id }) if *page_id == page_a.0 => {}
+        other => panic!(
+            "expected DoubleWriteRestoreFailed naming page {page_a:?}, got a different result: \
+             {other:?}"
+        ),
+    }
+
+    let after = read_raw_page(&db_path, page_a)?;
+    assert_eq!(
+        after, before,
+        "a slot holding a different page's content than its header claims must never be \
+         restored from"
     );
     Ok(())
 }
