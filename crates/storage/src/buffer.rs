@@ -632,6 +632,11 @@ impl BufferPool {
             pages.len()
         );
 
+        let flush_sequence = recover_lock(self.flush_sequence.lock(), "BufferPool.flush_sequence");
+        if self.flush_poisoned.load(Ordering::Acquire) {
+            return Err(StorageError::FlushPoisoned);
+        }
+
         let snapshot: Vec<Page> = pages
             .iter()
             .map(|&(frame_id, _)| {
@@ -661,11 +666,6 @@ impl BufferPool {
             }
         }
 
-        let flush_sequence = recover_lock(self.flush_sequence.lock(), "BufferPool.flush_sequence");
-        if self.flush_poisoned.load(Ordering::Acquire) {
-            return Err(StorageError::FlushPoisoned);
-        }
-
         self.dwb.write_batch(&snapshot)?;
         metrics::counter!("dwb_batches_written_total").increment(1);
 
@@ -686,7 +686,6 @@ impl BufferPool {
             );
             return Err(err);
         }
-        drop(flush_sequence);
 
         for (&(frame_id, _), snapshot_page) in pages.iter().zip(snapshot.iter()) {
             let idx = frame_id.0 as usize;
@@ -695,6 +694,7 @@ impl BufferPool {
                 self.frames[idx].dirty_since_lsn.store(0, Ordering::Release);
             }
         }
+        drop(flush_sequence);
         Ok(())
     }
 

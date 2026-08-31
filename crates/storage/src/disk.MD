@@ -12,7 +12,7 @@ touching the file directly.
   stored at the start of page 0, just after page 0's own checksum and
   `page_lsn` prefixes.
 - `HEADER_VERSION` - the on-disk format version this build reads and
-  writes: `9`. Covers not just the page-0 header's own byte layout but the
+  writes: `11`. Covers not just the page-0 header's own byte layout but the
   heap page layout too (`heap::NO_NEXT_PAGE`, `heap::SlottedPage::init`),
   both baked into every page already on disk, so a change to either must
   bump this, otherwise a file written by an older build gets silently
@@ -30,8 +30,19 @@ touching the file directly.
   to `8` when every page gained a 4-byte CRC-32 checksum prefix; to `9`
   when the header gained `index_catalog_first_page`, the root of the
   second catalog heap that holds index metadata
-  (`catalog::catalog.MD`'s `Catalog::create_index`). No migration: a file
-  written under an older version must be deleted and recreated.
+  (`catalog::catalog.MD`'s `Catalog::create_index`); to `10` when the
+  write-ahead log moved from one bare file to numbered segments
+  (`docs/adr/0011-segmented-write-ahead-log.md`) - a pre-segmentation
+  `<db_path>.wal`'s first sixteen bytes would otherwise be misread as a
+  segment header's magic-plus-start-lsn instead of the old bare eight-byte
+  magic, silently reading garbage instead of failing loudly; to `11` when
+  the double-write buffer's own header (`dwb::MAGIC`, `FDBDWB02`) grew a
+  per-slot CRC (`dwb.MD`) - a data file written before that change could
+  still carry an outstanding `FDBDWB01`-format batch that `dwb::read_batch`
+  no longer recognizes, and without this bump the data-file version check
+  alone would pass while the unreadable batch was silently ignored instead
+  of surfacing as a version error. No migration: a file written under an
+  older version must be deleted and recreated.
 - `header` (`pub(crate)`) - the byte layout of the page-0 header, given as
   six `Range<usize>` constants: `MAGIC_RANGE` (12..20) - the 8-byte magic
   string; `VERSION_RANGE` (20..24) - `HEADER_VERSION`; `PAGE_SIZE_RANGE`

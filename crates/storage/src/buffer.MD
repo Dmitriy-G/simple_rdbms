@@ -76,18 +76,26 @@ doing so would reintroduce exactly the ordering this rule forbids.
 
 **The flush-sequence rule - read this before touching `flush_pages`:**
 `flush_sequence` (a `Mutex<()>`) is acquired *after* `index`'s mutex has
-already been released and *before* any frame latch the flush's real-write
-loop might need, and is held across the whole double-write sequence -
-`dwb.write_batch`, every real page write, `disk_manager.sync`, and
-`dwb.clear_batch` - not just one call in it. None of `flush_pages`'s three
-callers (`flush_page`, `flush_all`, `acquire_free_frame`) holds a page
-latch when they call in, so this ordering is a documentation obligation
-rather than a refactor forced by an existing conflict - but it matters the
-moment a future caller does hold one, since taking `flush_sequence` while
-already holding a frame latch would invert the order every other path in
-this file assumes. See the poisoning paragraph below for what the lock
-protects and why per-call atomicity of `write_batch`/`clear_batch` alone
-was not enough.
+already been released and *before* any frame latch the flush needs -
+including the read latch each page's snapshot is cloned under - and is
+held across the whole flush: the per-page snapshot, `log_manager.flush`
+up to the batch's highest `page_lsn`, `dwb.write_batch`, every real page
+write, `disk_manager.sync`, `dwb.clear_batch`, and the loop that clears
+each frame's `dirty_since_lsn` once its snapshot's `page_lsn` is confirmed
+still current - not just one call in the middle of it. This width matters:
+narrower coverage (once acquired only around `write_batch`/`clear_batch`)
+still let two concurrent flushes of the same frame interleave their
+snapshot-then-write steps and land out of order - an older snapshot's
+bytes written last, over a newer snapshot's, with the frame already marked
+clean by the newer flush's dirty-clear - since nothing serialized "read
+this frame's current bytes" against another flush doing the same read and
+write around it. None of `flush_pages`'s three callers (`flush_page`,
+`flush_all`, `acquire_free_frame`) holds a page latch when they call in,
+so lock order is `flush_sequence` -> frame latch, never the reverse - a
+future caller that already holds a frame latch before calling in would
+invert the order every other path in this file assumes. See the poisoning
+paragraph below for what the lock protects and why per-call atomicity of
+`write_batch`/`clear_batch` alone was not enough.
 
 `try_install` (below) takes one narrow, deliberate exception: it writes a
 freshly-read page's bytes into its frame's `RwLock` *while still holding*
@@ -591,11 +599,12 @@ same thread.
   at any point up to and including a synced `dwb.write_batch` leaves
   either a real page untouched by this batch, or a torn real page with an
   intact `dwb` copy `recovery::recover_double_write` can restore from.
-  `flush_sequence` (the flush-sequence rule above) is taken immediately
-  before this sequence starts and held until `dwb.clear_batch` returns,
-  success or failure, with the authoritative `flush_poisoned` check made
-  under that same lock - the check at the very top of this function is
-  only a cheap early-out and is not by itself what makes poisoning safe.
+  `flush_sequence` (the flush-sequence rule above) is taken before the
+  per-page snapshot is even cloned and held through `dwb.clear_batch`
+  returning (success or failure) and the dirty-clear loop right after it,
+  with the authoritative `flush_poisoned` check made under that same lock
+  - the check at the very top of this function is only a cheap early-out
+  and is not by itself what makes poisoning safe.
 
   **Why a per-call-atomic `dwb` was not enough.** Before `flush_sequence`
   existed, `DoubleWriteBuffer`'s own internal mutex made each of
