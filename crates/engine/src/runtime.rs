@@ -154,6 +154,7 @@ impl EngineHandle {
         Self::spawn(config, disk_manager, dwb, log_manager)
     }
 
+    #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn open_with_devices(
         config: &DbConfig,
         db_device: Box<dyn storage::block_device::BlockDevice>,

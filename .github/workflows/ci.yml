@@ -31,6 +31,9 @@ jobs:
       - name: Check docs convention
         run: bash scripts/check_docs.sh
 
+      - name: Build (no dev-dependencies, no test-util)
+        run: cargo build --workspace
+
       - name: Test
         run: cargo test --workspace
 
