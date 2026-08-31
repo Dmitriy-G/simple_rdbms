@@ -2,18 +2,13 @@ use common::DbConfig;
 use engine::{Database, ResultSet};
 use types::Value;
 
+mod support;
+use support::rows_of;
+
 #[cfg(test)]
 fn open(dir: &tempfile::TempDir) -> Database {
     let config = DbConfig::new(dir.path().join("test.db"));
     Database::open(config).expect("open database")
-}
-
-fn rows_of(result: ResultSet) -> Vec<Vec<Value>> {
-    match result {
-        ResultSet::Rows { rows, .. } => rows.into_iter().map(|t| t.values().to_vec()).collect(),
-        ResultSet::RowsAffected(n) => panic!("expected Rows, got RowsAffected({n})"),
-        ResultSet::RolledBack => panic!("expected Rows, got RolledBack"),
-    }
 }
 
 #[test]

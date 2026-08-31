@@ -8,7 +8,7 @@ fn open(dir: &tempfile::TempDir) -> Database {
     Database::open(config).expect("open database")
 }
 
-fn rows_of(result: ResultSet) -> (Vec<String>, Vec<Vec<Value>>) {
+fn rows_and_columns_of(result: ResultSet) -> (Vec<String>, Vec<Vec<Value>>) {
     match result {
         ResultSet::Rows { columns, rows } => {
             (columns, rows.into_iter().map(|t| t.values().to_vec()).collect())
@@ -27,7 +27,7 @@ fn create_insert_and_select_star_preserves_insertion_order() {
     let inserted = db.execute("INSERT INTO t VALUES (1, 10), (2, 20), (3, 30)").expect("insert");
     assert_eq!(inserted, ResultSet::RowsAffected(3));
 
-    let (columns, rows) = rows_of(db.execute("SELECT * FROM t").expect("select"));
+    let (columns, rows) = rows_and_columns_of(db.execute("SELECT * FROM t").expect("select"));
     assert_eq!(columns, vec!["a", "b"]);
     assert_eq!(
         rows,
@@ -47,7 +47,7 @@ fn select_list_can_subset_and_reorder_columns() {
     db.execute("CREATE TABLE t (a INTEGER, b INTEGER)").expect("create table");
     db.execute("INSERT INTO t VALUES (1, 10), (2, 20)").expect("insert");
 
-    let (columns, rows) = rows_of(db.execute("SELECT b, a FROM t").expect("select"));
+    let (columns, rows) = rows_and_columns_of(db.execute("SELECT b, a FROM t").expect("select"));
     assert_eq!(columns, vec!["b", "a"]);
     assert_eq!(
         rows,
@@ -66,8 +66,9 @@ fn where_clause_evaluates_eq_lt_and_or_and_excludes_null_predicate_rows() {
     db.execute("CREATE TABLE t (a INTEGER, b INTEGER)").expect("create table");
     db.execute("INSERT INTO t VALUES (1, 10), (2, 20), (3, NULL)").expect("insert");
 
-    let (_, rows) =
-        rows_of(db.execute("SELECT a FROM t WHERE (a = 1 OR b < 15) AND a > 0").expect("select"));
+    let (_, rows) = rows_and_columns_of(
+        db.execute("SELECT a FROM t WHERE (a = 1 OR b < 15) AND a > 0").expect("select"),
+    );
     assert_eq!(rows, vec![vec![Value::Integer(1)]]);
 }
 
@@ -84,7 +85,7 @@ fn insert_spanning_multiple_pages_is_all_readable_back() {
     let inserted = db.execute(&insert_sql).expect("insert");
     assert_eq!(inserted, ResultSet::RowsAffected(ROW_COUNT));
 
-    let (_, rows) = rows_of(db.execute("SELECT n FROM t").expect("select"));
+    let (_, rows) = rows_and_columns_of(db.execute("SELECT n FROM t").expect("select"));
     assert_eq!(rows.len(), ROW_COUNT);
 }
 
@@ -101,7 +102,7 @@ fn data_survives_close_and_reopen() {
     }
 
     let mut db = Database::open(DbConfig::new(&path)).expect("reopen database");
-    let (columns, rows) = rows_of(db.execute("SELECT * FROM t").expect("select"));
+    let (columns, rows) = rows_and_columns_of(db.execute("SELECT * FROM t").expect("select"));
     assert_eq!(columns, vec!["a", "b"]);
     assert_eq!(
         rows,
@@ -146,7 +147,7 @@ fn integer_bigint_and_double_columns_round_trip_their_own_value_variants() {
     db.execute("CREATE TABLE t (a INTEGER, b BIGINT, c DOUBLE)").expect("create table");
     db.execute("INSERT INTO t VALUES (1, 9999999999, 1.5)").expect("insert");
 
-    let (columns, rows) = rows_of(db.execute("SELECT * FROM t").expect("select"));
+    let (columns, rows) = rows_and_columns_of(db.execute("SELECT * FROM t").expect("select"));
     assert_eq!(columns, vec!["a", "b", "c"]);
     assert_eq!(rows, vec![vec![Value::Integer(1), Value::BigInt(9999999999), Value::Double(1.5)]]);
 }
@@ -159,7 +160,7 @@ fn where_clause_integer_literal_narrows_against_an_integer_column() {
     db.execute("CREATE TABLE t (a INTEGER)").expect("create table");
     db.execute("INSERT INTO t VALUES (1), (2)").expect("insert");
 
-    let (_, rows) = rows_of(db.execute("SELECT a FROM t WHERE a = 1").expect("select"));
+    let (_, rows) = rows_and_columns_of(db.execute("SELECT a FROM t WHERE a = 1").expect("select"));
     assert_eq!(rows, vec![vec![Value::Integer(1)]]);
 }
 
@@ -218,7 +219,8 @@ fn an_index_on_a_low_cardinality_column_survives_bulk_insert() {
         db.execute(&format!("INSERT INTO orders VALUES ({id}, 1)")).expect("insert");
     }
 
-    let (_, rows) = rows_of(db.execute("SELECT id FROM orders WHERE status = 1").expect("select"));
+    let (_, rows) =
+        rows_and_columns_of(db.execute("SELECT id FROM orders WHERE status = 1").expect("select"));
     assert_eq!(rows.len(), 1_000);
 }
 
