@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use catalog::Schema;
 use common::{DbConfig, Result};
 
@@ -7,7 +5,6 @@ use crate::result_set::ResultSet;
 use crate::runtime::{EngineHandle, SessionHandle};
 
 pub struct Database {
-    _engine: Arc<EngineHandle>,
     session: SessionHandle,
 }
 
@@ -21,7 +18,7 @@ impl Database {
     fn open_impl(config: DbConfig) -> Result<Self> {
         let engine = EngineHandle::open(&config)?;
         let session = engine.connect()?;
-        Ok(Self { _engine: engine, session })
+        Ok(Self { session })
     }
 
     #[cfg(any(test, feature = "test-util"))]
@@ -40,7 +37,7 @@ impl Database {
             dwb_device,
         )?;
         let session = engine.connect()?;
-        Ok(Self { _engine: engine, session })
+        Ok(Self { session })
     }
 
     pub fn execute(&mut self, sql: &str) -> Result<ResultSet> {

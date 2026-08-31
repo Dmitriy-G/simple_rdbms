@@ -78,3 +78,17 @@ fn a_refused_second_open_does_not_touch_the_wal() -> Result<(), Box<dyn Error>> 
     drop(first);
     Ok(())
 }
+
+#[test]
+fn a_database_can_be_reopened_immediately_after_the_previous_one_drops()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    for i in 0..50 {
+        let mut db = Database::open(DbConfig::new(dir.path().join("db")))?;
+        db.execute(&format!("CREATE TABLE t{i} (a INTEGER)"))?;
+        db.close()?;
+        let db = Database::open(DbConfig::new(dir.path().join("db")))?;
+        drop(db);
+    }
+    Ok(())
+}

@@ -40,6 +40,19 @@ and print, not a bare OS error code.
   gets silently trimmed away by the second open's own bootstrap) and
   passes once `open_impl` takes the lock - via `DiskManager::open` -
   before ever calling `LogManager::open` (`database.MD`).
+- `a_database_can_be_reopened_immediately_after_the_previous_one_drops` -
+  opens a `Database` against the same path, `close()`s it, reopens
+  immediately, and bare-`drop`s that one, fifty times in a row with no
+  work in between. Exercises both teardown shapes `Database` has -
+  `close()` then reopen, and a bare `drop` then reopen - because they take
+  different paths through teardown and the crash-injection harness only
+  ever exercises one of them (`runtime.MD`'s `EngineHandle`/`Drop for
+  EngineHandle`). Before `SessionHandle` held the `Arc<EngineHandle>`
+  itself, `Database::drop` could return before the engine thread had
+  actually released the file's exclusive lock, so the very next `open` on
+  the same path could spuriously see `DatabaseLocked`; this test pins
+  that a dropped `Database` has fully released the lock by the time
+  `drop` returns, not just eventually.
 
 ## Usage Example
 

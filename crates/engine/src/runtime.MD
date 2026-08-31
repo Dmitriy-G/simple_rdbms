@@ -116,54 +116,75 @@ rediscover by watching a test go quiet.
   in this design ever deliberately exits it) - every such failure maps to
   this one variant rather than a hang or a generic error, per
   `common::error.MD`.
-- `EngineHandle` - `pub(crate)`. Wraps the one
-  `mpsc::SyncSender<EngineMessage>` every session's requests and every
-  `connect()` call funnel through. `EngineHandle::open(config) ->
-  Result<Arc<Self>>`/`open_with_devices(config, db_device, wal_store,
-  wal_segment_size, dwb_device) -> Result<Arc<Self>>` - build the real
-  (or caller-supplied, test-only) `DiskManager`/`DoubleWriteBuffer`/
-  `LogManager` exactly as `database.rs`'s old `open_impl`/
-  `open_with_devices` did, then call `spawn`. Both run entirely on the
-  calling thread up through `EngineState::open` succeeding, before any
-  thread exists - a lock conflict, a corrupt header, or an injected fault
-  during bootstrap still surfaces as a synchronous `Err` from these
-  functions, exactly as it did before the split, which is what lets
-  `database_lock.rs` and every crash-injection test keep working
-  unmodified. `EngineHandle::spawn(config, disk_manager, dwb, log_manager)
-  -> Result<Arc<Self>>` - private. Runs `EngineState::open` (still on the
-  calling thread), then spawns the engine thread carrying that state and
-  the channel's receiving half, propagating the calling thread's tracing
-  dispatcher (see above). The spawned closure captures only `state` and
-  `receiver`, never a clone of `sender` - the engine thread must never
-  hold a sender of its own, or the channel could never disconnect and the
-  thread could never exit once every real handle drops.
-  `EngineHandle::connect(&self) -> Result<SessionHandle>` - sends
-  `Connect`, awaits the assigned `SessionId`, and returns a `SessionHandle`
-  wrapping a clone of the same `mpsc::SyncSender` (cheap and
-  `Send + Sync` - `std::sync::mpsc::SyncSender` is safe to call `send` on
-  concurrently through a shared reference, which is what lets many
-  sessions share one channel without a wrapping lock of their own) plus
-  the new `SessionId`.
-- `SessionHandle` - `pub(crate)`. `execute(&self, sql) ->
-  Result<ResultSet>`/`table_schema(&self, name) -> Result<Schema>`/
-  `checkpoint_and_flush(&self) -> Result<()>` all follow the same shape:
-  build a one-shot reply channel, send the matching `EngineMessage`
-  (mapping a `send` failure to `engine_unavailable()`), and block on the
-  reply (mapping a `recv` failure the same way, then unwrapping the inner
-  `Result` the engine sent back). `table_names(&self) -> Vec<String>`
-  follows the same shape but can't report a channel failure without
-  changing its return type, so it answers with an empty `Vec` instead -
-  see `database.MD` for why that's an acceptable gap.
-  `best_effort_flush(&self)` sends `BestEffortFlush` and waits for the
-  reply, discarding whatever it gets (including a send/recv failure) -
-  used only from `Drop for Database`, which has nowhere to report an
-  error either way.
-- `impl Drop for SessionHandle` - sends `Disconnect` for this session,
-  ignoring a send failure (the engine is already gone, so there is
-  nothing left to disconnect from). This is what actually removes the
-  session's `SessionState` from the engine's map; without it, a session
-  whose `Database` was dropped without calling `close()` would leak
-  forever in `run_engine`'s `sessions` map.
+- `EngineHandle` - `pub(crate)`. `sender: Option<mpsc::SyncSender<EngineMessage>>`
+  plus `thread: Option<std::thread::JoinHandle<()>>`, both `Option` purely
+  so `Drop` can `take()` them (see below) - every live `EngineHandle`
+  always has both populated. `EngineHandle::send(&self, message) ->
+  Result<()>` - private. The one place that maps a missing/closed sender
+  to `engine_unavailable()`; every other method funnels its `send` through
+  this instead of touching `self.sender` directly.
+  `EngineHandle::open(config) -> Result<Arc<Self>>`/`open_with_devices(config,
+  db_device, wal_store, wal_segment_size, dwb_device) -> Result<Arc<Self>>` -
+  build the real (or caller-supplied, test-only) `DiskManager`/
+  `DoubleWriteBuffer`/`LogManager` exactly as `database.rs`'s old
+  `open_impl`/`open_with_devices` did, then call `spawn`. Both run
+  entirely on the calling thread up through `EngineState::open`
+  succeeding, before any thread exists - a lock conflict, a corrupt
+  header, or an injected fault during bootstrap still surfaces as a
+  synchronous `Err` from these functions, exactly as it did before the
+  split, which is what lets `database_lock.rs` and every crash-injection
+  test keep working unmodified. `EngineHandle::spawn(config, disk_manager,
+  dwb, log_manager) -> Result<Arc<Self>>` - private. Runs `EngineState::open`
+  (still on the calling thread), then spawns the engine thread carrying
+  that state and the channel's receiving half, propagating the calling
+  thread's tracing dispatcher (see above). The spawned closure captures
+  only `state` and `receiver`, never a clone of `sender` - the engine
+  thread must never hold a sender of its own, or the channel could never
+  disconnect and the thread could never exit once every real handle
+  drops. `EngineHandle::connect(self: &Arc<Self>) -> Result<SessionHandle>` -
+  sends `Connect`, awaits the assigned `SessionId`, and returns a
+  `SessionHandle` wrapping `Arc::clone(self)` (not a bare clone of the
+  sender - see below) plus the new `SessionId`.
+- `impl Drop for EngineHandle` - `take()`s `sender`, dropping the last
+  live `mpsc::SyncSender<EngineMessage>` unless the engine thread's own
+  clone-free receiver loop already saw every session's sender go away
+  first, then `take()`s and joins `thread`. This runs precisely when the
+  last `Arc<EngineHandle>` - which by construction means the last
+  `SessionHandle`, since that is the only place one is stored - drops, so
+  the join can never hang waiting on a session that still exists, and it
+  is this join, not merely dropping a channel, that guarantees
+  `EngineState` (and the `DiskManager`/exclusive file lock it owns) is
+  gone before `Database::drop` returns. See `database.MD` for why the
+  previous shape - `Database` holding `_engine: Arc<EngineHandle>` and
+  `session: SessionHandle` as sibling fields - let `Database::drop` return
+  before the engine thread had actually exited.
+- `SessionHandle` - `pub(crate)`. `engine: Arc<EngineHandle>` (the sole
+  thing keeping the engine thread alive on this session's behalf - see
+  `impl Drop for EngineHandle` above) plus `session_id`.
+  `execute(&self, sql) -> Result<ResultSet>`/`table_schema(&self, name) ->
+  Result<Schema>`/`checkpoint_and_flush(&self) -> Result<()>` all follow
+  the same shape: build a one-shot reply channel, send the matching
+  `EngineMessage` through `self.engine.send` (which already maps a closed
+  channel to `engine_unavailable()`), and block on the reply (mapping a
+  `recv` failure the same way, then unwrapping the inner `Result` the
+  engine sent back). `table_names(&self) -> Vec<String>` follows the same
+  shape but can't report a channel failure without changing its return
+  type, so it answers with an empty `Vec` instead - see `database.MD` for
+  why that's an acceptable gap. `best_effort_flush(&self)` sends
+  `BestEffortFlush` and waits for the reply, discarding whatever it gets
+  (including a send failure) - used only from `Drop for Database`, which
+  has nowhere to report an error either way.
+- `impl Drop for SessionHandle` - sends `Disconnect` for this session
+  through `self.engine.send`, ignoring a failure (the engine is already
+  gone, so there is nothing left to disconnect from). This is what
+  actually removes the session's `SessionState` from the engine's map;
+  without it, a session whose `Database` was dropped without calling
+  `close()` would leak forever in `run_engine`'s `sessions` map. This
+  `Disconnect` is queued before `self.engine` (the `Arc<EngineHandle>`)
+  itself drops on the very next line of an ordinary field drop, and `mpsc`
+  delivers everything queued before a channel's last sender disconnects,
+  so the engine thread always sees this session's `Disconnect` before the
+  receive loop ends.
 - `run_engine(state, receiver)` - private free function, the engine
   thread's entire body. A single `for message in receiver` loop - which
   exits, ending the thread, exactly when every `EngineMessage` sender

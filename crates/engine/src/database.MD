@@ -13,13 +13,13 @@ as they always have, with no idea an engine thread exists underneath.
 
 ## Key Components
 
-- `Database` - `_engine: Arc<runtime::EngineHandle>` (kept alive for as
-  long as this `Database` exists, but never called through directly -
-  see `runtime.MD` for why a leading underscore is the right way to mark
-  a field held only for its lifetime, the same convention the pre-split
-  `_conn_span` field used) and `session: runtime::SessionHandle`, the one
-  session this `Database` drives. Every method below is a thin
-  forward onto `session`.
+- `Database` - one field, `session: runtime::SessionHandle`, the one
+  session this `Database` drives. Every method below is a thin forward
+  onto `session`. There is no separate `_engine: Arc<runtime::EngineHandle>`
+  field - `SessionHandle` itself holds that `Arc` (`runtime.MD`), so
+  keeping the engine thread alive for as long as this `Database` exists
+  falls out of `session` staying alive, with no second field and no
+  drop-order relationship between fields to get right.
 - `Database::open(config) -> Result<Self>` - the public entry point: opens
   a fresh `EngineHandle` (spawning its engine thread and running recovery
   synchronously first - see `runtime.MD`'s `EngineHandle::open`) and

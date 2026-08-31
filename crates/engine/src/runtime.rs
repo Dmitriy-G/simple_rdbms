@@ -78,10 +78,19 @@ fn engine_unavailable() -> Error {
 }
 
 pub(crate) struct EngineHandle {
-    sender: mpsc::SyncSender<EngineMessage>,
+    sender: Option<mpsc::SyncSender<EngineMessage>>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl EngineHandle {
+    fn send(&self, message: EngineMessage) -> Result<()> {
+        self.sender
+            .as_ref()
+            .ok_or_else(engine_unavailable)?
+            .send(message)
+            .map_err(|_| engine_unavailable())
+    }
+
     pub(crate) fn open(config: &DbConfig) -> Result<Arc<Self>> {
         let disk_manager = DiskManager::open(config.db_path.clone(), config.page_size)?;
         let mut wal_path = config.db_path.clone().into_os_string();
@@ -115,44 +124,51 @@ impl EngineHandle {
         let state = EngineState::open(config, disk_manager, dwb, log_manager)?;
         let (sender, receiver) = mpsc::sync_channel(REQUEST_CHANNEL_CAPACITY);
         let dispatch = tracing::dispatcher::get_default(|dispatch| dispatch.clone());
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("engine".to_string())
             .spawn(move || {
                 tracing::dispatcher::with_default(&dispatch, || run_engine(state, receiver));
             })
             .map_err(Error::Io)?;
-        Ok(Arc::new(Self { sender }))
+        Ok(Arc::new(Self { sender: Some(sender), thread: Some(thread) }))
     }
 
-    pub(crate) fn connect(&self) -> Result<SessionHandle> {
+    pub(crate) fn connect(self: &Arc<Self>) -> Result<SessionHandle> {
         let (reply, reply_rx) = mpsc::sync_channel(1);
-        self.sender.send(EngineMessage::Connect { reply }).map_err(|_| engine_unavailable())?;
+        self.send(EngineMessage::Connect { reply })?;
         let session_id = reply_rx.recv().map_err(|_| engine_unavailable())?;
-        Ok(SessionHandle { sender: self.sender.clone(), session_id })
+        Ok(SessionHandle { engine: Arc::clone(self), session_id })
+    }
+}
+
+impl Drop for EngineHandle {
+    fn drop(&mut self) {
+        self.sender.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
 pub(crate) struct SessionHandle {
-    sender: mpsc::SyncSender<EngineMessage>,
+    engine: Arc<EngineHandle>,
     session_id: SessionId,
 }
 
 impl SessionHandle {
     pub(crate) fn execute(&self, sql: &str) -> Result<ResultSet> {
         let (reply, reply_rx) = mpsc::sync_channel(1);
-        self.sender
-            .send(EngineMessage::Execute {
-                session_id: self.session_id,
-                sql: sql.to_string(),
-                reply,
-            })
-            .map_err(|_| engine_unavailable())?;
+        self.engine.send(EngineMessage::Execute {
+            session_id: self.session_id,
+            sql: sql.to_string(),
+            reply,
+        })?;
         reply_rx.recv().map_err(|_| engine_unavailable())?
     }
 
     pub(crate) fn table_names(&self) -> Vec<String> {
         let (reply, reply_rx) = mpsc::sync_channel(1);
-        if self.sender.send(EngineMessage::TableNames { reply }).is_err() {
+        if self.engine.send(EngineMessage::TableNames { reply }).is_err() {
             return Vec::new();
         }
         reply_rx.recv().unwrap_or_default()
@@ -160,21 +176,19 @@ impl SessionHandle {
 
     pub(crate) fn table_schema(&self, name: &str) -> Result<Schema> {
         let (reply, reply_rx) = mpsc::sync_channel(1);
-        self.sender
-            .send(EngineMessage::TableSchema { name: name.to_string(), reply })
-            .map_err(|_| engine_unavailable())?;
+        self.engine.send(EngineMessage::TableSchema { name: name.to_string(), reply })?;
         reply_rx.recv().map_err(|_| engine_unavailable())?
     }
 
     pub(crate) fn checkpoint_and_flush(&self) -> Result<()> {
         let (reply, reply_rx) = mpsc::sync_channel(1);
-        self.sender.send(EngineMessage::Checkpoint { reply }).map_err(|_| engine_unavailable())?;
+        self.engine.send(EngineMessage::Checkpoint { reply })?;
         reply_rx.recv().map_err(|_| engine_unavailable())?
     }
 
     pub(crate) fn best_effort_flush(&self) {
         let (reply, reply_rx) = mpsc::sync_channel(1);
-        if self.sender.send(EngineMessage::BestEffortFlush { reply }).is_ok() {
+        if self.engine.send(EngineMessage::BestEffortFlush { reply }).is_ok() {
             let _ = reply_rx.recv();
         }
     }
@@ -182,7 +196,7 @@ impl SessionHandle {
 
 impl Drop for SessionHandle {
     fn drop(&mut self) {
-        let _ = self.sender.send(EngineMessage::Disconnect { session_id: self.session_id });
+        let _ = self.engine.send(EngineMessage::Disconnect { session_id: self.session_id });
     }
 }
 
