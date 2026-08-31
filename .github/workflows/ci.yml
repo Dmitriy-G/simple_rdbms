@@ -14,6 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Reject CRLF in tracked files
+        run: |
+          if git ls-files --eol | grep -q 'i/crlf'; then
+            git ls-files --eol | grep 'i/crlf'
+            exit 1
+          fi
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
