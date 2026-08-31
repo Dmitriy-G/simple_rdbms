@@ -376,18 +376,37 @@ anything touching the filesystem so tests don't collide or leave state
 behind, and seed any randomness (`proptest` included) rather than relying
 on ambient entropy.
 
-An inline `#[cfg(test)] mod tests` in `src/` is justified only when the
-test needs access to a private item that should stay private — nothing
-else earns the gate. Everything else, including a test that merely
-happens to sit near the code it exercises, goes in `tests/`, driven
-through the crate's public API: `#[cfg(test)]` only takes effect when
-compiling a crate's own unit-test binary, so anything gated behind it is
-invisible to `tests/`, and a binary-only crate has no `tests/`-reachable
-target at all unless it also ships a `[lib]`. When a test helper needs to
-be shared across multiple files under `tests/`, it lives in
-`tests/support/`, declared with `mod support;` by whichever test file
-needs it — never behind `#[cfg(test)]` in `src/`, which would hide it from
-every other test file that wants it too.
+Integration tests in `tests/` remain the default and the only place
+anything touching I/O, locks, the buffer pool or the log may be tested. A
+`#[cfg(test)] mod tests` block in a `src/` file is permitted **only** for
+private functions that are pure: no I/O, no locking, no shared state,
+arguments in and a value out. If a test needs a `BufferPool`, a
+`DiskManager`, a device or a temp directory, it belongs in `tests/`.
+Everything else, including a test that merely happens to sit near the
+code it exercises, goes in `tests/`, driven through the crate's public
+API: `#[cfg(test)]` only takes effect when compiling a crate's own
+unit-test binary, so anything gated behind it is invisible to `tests/`,
+and a binary-only crate has no `tests/`-reachable target at all unless it
+also ships a `[lib]`. When a test helper needs to be shared across
+multiple files under `tests/`, it lives in `tests/support/`, declared
+with `mod support;` by whichever test file needs it — never behind
+`#[cfg(test)]` in `src/`, which would hide it from every other test file
+that wants it too.
+
+A test may assert on log output only when logging is the behavior under
+test — `crates/engine/tests/logging.rs` and
+`crates/storage/tests/recovery_logging.rs` are the legitimate case, since
+each is checking that a specific event actually gets logged, with the
+right fields, when it should be. Using a log line as a *proxy* for some
+other behavior is not legitimate: a durability or correctness invariant
+must be asserted through the public API, a counter, or on-disk state, not
+by grepping captured tracing output for a message string that carries no
+contract not to be reworded. `crates/engine/tests/sessions.rs`'s
+`several_sessions_checkpoint_once_per_threshold_not_once_each` used to
+violate this - counting `"checkpoint complete"` events to prove
+checkpoints don't multiply with sessions - and a real counter
+(`engine::Database::stats()`, gated `#[cfg(any(test, feature =
+"test-util"))]`) replaced it.
 
 The crash-injection harness (`crates/engine/tests/crash_injection.rs`,
 `crates/storage/tests/btree_crash_injection.rs`) is the repository's
