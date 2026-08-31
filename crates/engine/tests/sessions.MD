@@ -83,13 +83,21 @@ exactly one connection.
   `Error::EngineUnavailable` on their next statement rather than hanging,
   proving every session's channel fails the same way once the thread is
   gone, regardless of which session triggered the shutdown.
-- `checkpoint_count(threshold, drive, statements) -> Result<usize>` -
-  private helper. Installs a capturing subscriber
-  (`tests/support/mod.MD`) before `Database::open`, creates a table, runs
-  `drive` against the open `Database`, and counts how many "checkpoint
-  complete" events (`txn::checkpoint::write_checkpoint`) were logged - the
-  observable proxy for how many times `EngineState::maybe_checkpoint`
-  actually decided to checkpoint.
+- `checkpoint_count(threshold, drive, statements) -> Result<u64>` -
+  private helper. Opens a `Database`, creates a table, runs `drive`
+  against it, and reads `Database::stats()?.checkpoints_written`
+  (`database.MD`, `#[cfg(any(test, feature = "test-util"))]`) - a real
+  counter on the engine rather than a count of "checkpoint complete" log
+  events. This file used to capture that log line through
+  `tests/support/mod.MD`'s subscriber, but a thread-local
+  `tracing::subscriber::set_default` only guarantees isolation from other
+  *threads*; tracing's callsite-interest cache is process-wide, so a
+  concurrently-running test on another thread with no subscriber of its
+  own could race the interest rebuild and leave this callsite looking
+  globally disabled, silently dropping the event this test needed to see.
+  That made the test pass alone but fail intermittently under the full
+  suite; the counter sidesteps tracing entirely and needs no such
+  isolation.
 - `several_sessions_checkpoint_once_per_threshold_not_once_each` - runs
   the same forty `INSERT`s twice with the same `checkpoint_byte_threshold`:
   once through one session, once split alternately across two sessions

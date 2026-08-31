@@ -2,6 +2,8 @@ use catalog::Schema;
 use common::{DbConfig, Result};
 
 use crate::result_set::ResultSet;
+#[cfg(any(test, feature = "test-util"))]
+use crate::runtime::EngineStats;
 use crate::runtime::{EngineHandle, SessionHandle};
 
 pub struct Database {
@@ -63,6 +65,11 @@ impl Database {
     #[cfg(any(test, feature = "test-util"))]
     pub fn kill_engine_for_test(&self) {
         self.session.kill_engine_for_test();
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn stats(&self) -> Result<EngineStats> {
+        self.session.stats()
     }
 }
 

@@ -149,7 +149,13 @@ rediscover by watching a test go quiet.
   `a_dead_engine_thread_fails_every_session_with_a_fatal_error` in
   `tests/sessions.MD` to prove every session's next request reports
   `EngineUnavailable` instead of hanging, without needing to actually
-  panic the thread to produce a dead one).
+  panic the thread to produce a dead one), and `Stats` (`#[cfg(any(test,
+  feature = "test-util"))]` - reads `EngineState::stats()` back to the
+  caller, for a test to assert a behavioral invariant like "checkpoints
+  don't multiply with sessions" against a real counter instead of
+  grepping captured log text, which depends on tracing's thread-local
+  dispatcher and process-wide callsite-interest cache both behaving under
+  concurrent test threads - see `EngineState::checkpoints_written` below).
 - `engine_unavailable() -> common::Error` - private free function.
   Builds `Error::EngineUnavailable` with a fixed diagnostic detail message.
   Used everywhere a channel `send`/`recv` fails, which only happens if the
@@ -232,6 +238,10 @@ rediscover by watching a test go quiet.
   only from `Drop for Database`, which has nowhere to report an error
   either way. `kill_engine_for_test(&self)` - `#[cfg(any(test, feature =
   "test-util"))]`. Sends `Shutdown` and ignores the result; test-only.
+  `stats(&self) -> Result<EngineStats>` - `#[cfg(any(test, feature =
+  "test-util"))]`. Sends `Stats` and blocks on the reply, the same
+  request/reply shape as `table_names`/`table_schema`; test-only, since
+  production code has no need to read engine counters back out.
 - `impl Drop for SessionHandle` - sends `Disconnect` for this session
   through `self.engine.send`, ignoring a failure (the engine is already
   gone, so there is nothing left to disconnect from). This is what
@@ -340,13 +350,20 @@ rediscover by watching a test go quiet.
   indefinitely. Finally removes the session from `sessions` and calls
   `try_admit_waiters`, since freeing the slot here (unlike a `COMMIT`)
   has no statement-completion path of its own to do it.
+- `EngineStats` - `pub`, `#[cfg(any(test, feature = "test-util"))]`,
+  `Debug + Clone + Copy + Default`. A snapshot of engine-wide counters a
+  test can assert on without going through tracing at all -
+  `checkpoints_written: u64` today, read via `EngineState::stats()`.
 - `EngineState` - private. `catalog: Catalog`, `buffer_pool:
   Arc<BufferPool>`, `txn_manager: TransactionManager` (a plain owned
   field now, not `Arc<Mutex<TransactionManager>>` - the engine thread is
   its sole accessor by construction, so the `Mutex` the pre-split
   `Database` needed only to satisfy `Send + Sync` on a struct that could
   be handed across threads is no longer buying anything and was removed),
-  `checkpoint_byte_threshold`, `bytes_at_last_checkpoint`, and
+  `checkpoint_byte_threshold`, `bytes_at_last_checkpoint`,
+  `checkpoints_written` (a running count of every checkpoint that has
+  actually completed, incremented by `record_checkpoint_written` and
+  never reset - the field `EngineStats`/`stats()` below reads), and
   `slow_query_warn_threshold_ms` - the five fields `task.MD`'s M14.1 plan
   calls "engine-wide", now genuinely shared across every session rather
   than duplicated per-`Database` the way `bytes_at_last_checkpoint` used
@@ -372,6 +389,15 @@ rediscover by watching a test go quiet.
   when opening the engine and opening its one connection were the same
   event; `new_connection_span` (below) is what logs "connection opened"
   now, separately, once per `Connect`.
+- `EngineState::record_checkpoint_written(&mut self)` - private. Called
+  from every place a checkpoint actually completes -
+  `checkpoint_and_flush` and `maybe_checkpoint`'s `Ok` arm, never on a
+  failed attempt. Increments `checkpoints_written` and
+  `metrics::counter!("checkpoints_written_total")` together, so the two
+  can never drift apart.
+- `EngineState::stats(&self) -> EngineStats` - `#[cfg(any(test, feature =
+  "test-util"))]`. Copies the current counters into an `EngineStats`;
+  `EngineMessage::Stats`'s handler is the only caller.
 - `EngineState::checkpoint_and_flush(&mut self) -> Result<()>` - the work
   `Database::close` needs: `write_checkpoint`, `flush_log_all`,
   `flush_all`, `sync`, in that order. No longer logs `info!` "connection
@@ -391,8 +417,9 @@ rediscover by watching a test go quiet.
 - `EngineState::maybe_checkpoint(&mut self)` - unchanged from the
   pre-split method of the same name: skips if poisoned, skips if the log
   hasn't grown `checkpoint_byte_threshold` bytes since the last
-  checkpoint, otherwise checkpoints and logs a `warn!` on failure without
-  propagating it (the triggering statement's own effects are unaffected).
+  checkpoint, otherwise checkpoints, calls `record_checkpoint_written` on
+  success, and logs a `warn!` on failure without propagating it (the
+  triggering statement's own effects are unaffected).
 - `EngineState::table_names(&self) -> Vec<String>`/`table_schema(&self,
   name) -> Result<Schema>` - unchanged, read `self.catalog` directly.
 - `EngineState::execute(&mut self, session, sql) -> Result<ResultSet>` -

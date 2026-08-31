@@ -88,6 +88,14 @@ as they always have, with no idea an engine thread exists underneath.
   without going through a real panic or process exit, so a test can assert
   every session's next request fails with `Error::EngineUnavailable`
   instead of hanging.
+- `Database::stats(&self) -> Result<runtime::EngineStats>` - `#[cfg(any(test,
+  feature = "test-util"))]`. Forwards to `SessionHandle::stats`, reading
+  engine-wide counters (currently just `checkpoints_written`) straight off
+  `EngineState` rather than through a tracing capture buffer, so a test
+  asserting a behavioral invariant like "checkpoints don't multiply with
+  sessions" (`crates/engine/tests/sessions.rs`) does not depend on log
+  wording or on tracing's thread-local dispatcher and process-wide
+  callsite-interest cache both cooperating under concurrent test threads.
 
 ## Usage Example
 

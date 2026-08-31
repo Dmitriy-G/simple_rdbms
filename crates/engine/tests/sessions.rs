@@ -10,9 +10,6 @@ use engine::{Database, ResultSet};
 use storage::block_device::{BlockDevice, FileDevice};
 use storage::wal::{FileSegmentStore, SegmentStore};
 
-mod support;
-use support::{CaptureBuf, captured_events, set_capturing_subscriber};
-
 fn row_count(result: ResultSet) -> usize {
     match result {
         ResultSet::Rows { rows, .. } => rows.len(),
@@ -246,10 +243,8 @@ fn checkpoint_count(
     threshold: u64,
     drive: impl FnOnce(&mut Database, &[String]) -> Result<(), Box<dyn Error>>,
     statements: &[String],
-) -> Result<usize, Box<dyn Error>> {
+) -> Result<u64, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let capture = CaptureBuf::default();
-    let _guard = set_capturing_subscriber(&capture);
 
     let config = DbConfig {
         checkpoint_byte_threshold: threshold,
@@ -259,8 +254,7 @@ fn checkpoint_count(
     db.execute("CREATE TABLE t (a INTEGER)")?;
     drive(&mut db, statements)?;
 
-    let events = captured_events(&capture);
-    Ok(events.iter().filter(|event| event["fields"]["message"] == "checkpoint complete").count())
+    Ok(db.stats()?.checkpoints_written)
 }
 
 #[test]

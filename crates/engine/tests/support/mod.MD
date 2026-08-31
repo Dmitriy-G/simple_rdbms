@@ -19,8 +19,18 @@ why each crate that needs it carries its own copy.
   `tracing_subscriber` writer closure can hand out clones of the same
   underlying buffer to every event it formats. Originally private to
   `logging.rs`; moved here once `sessions.rs` needed the identical
-  pattern to observe checkpoint completion events, per the sharing rule
-  above.
+  pattern to observe checkpoint completion events. `sessions.rs` has
+  since moved off it - `Database::stats()` (`database.MD`) reads a real
+  counter instead, since a thread-local `set_default` subscriber isn't
+  actually isolated from concurrently-running tests: tracing's
+  callsite-interest cache is process-wide, and a test on another thread
+  with no subscriber at all could race the interest rebuild and leave a
+  callsite looking globally disabled, silently dropping the very event
+  a test installed its subscriber to see. This module stays for
+  `logging.rs`, which only ever runs one connection at a time and
+  doesn't hit that race in practice, and for any future test that needs
+  to inspect log *content* (fields, message text) rather than merely
+  count an occurrence, which a counter can't substitute for.
 - `captured_events(buf) -> Vec<serde_json::Value>` - parses every non-empty
   line written into a `CaptureBuf` as one JSON object (`tracing_subscriber`'s
   `.json()` formatter emits one event per line) and returns them in
@@ -52,9 +62,6 @@ let events = captured_events(&capture);
 assert!(events.iter().any(|event| event["fields"]["message"] == "database opened"));
 ```
 
-`crates/engine/tests/logging.rs` and `crates/engine/tests/sessions.rs` both
-declare `mod support;` and drive this exact sequence - install the
-subscriber, open (or connect another session against) a `Database`, then
-inspect `captured_events` for the specific fields under test - so a
-capturing subscriber only ever sees events from the one test that installed
-it, not from tests running in other threads of the same binary.
+`crates/engine/tests/logging.rs` declares `mod support;` and drives this
+exact sequence - install the subscriber, open a `Database`, then inspect
+`captured_events` for the specific fields under test.

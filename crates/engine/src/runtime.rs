@@ -109,6 +109,10 @@ enum EngineMessage {
     },
     #[cfg(any(test, feature = "test-util"))]
     Shutdown,
+    #[cfg(any(test, feature = "test-util"))]
+    Stats {
+        reply: mpsc::SyncSender<EngineStats>,
+    },
 }
 
 fn engine_unavailable() -> Error {
@@ -252,6 +256,13 @@ impl SessionHandle {
     pub(crate) fn kill_engine_for_test(&self) {
         let _ = self.engine.send(EngineMessage::Shutdown);
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn stats(&self) -> Result<EngineStats> {
+        let (reply, reply_rx) = mpsc::sync_channel(1);
+        self.engine.send(EngineMessage::Stats { reply })?;
+        reply_rx.recv().map_err(|_| engine_unavailable())
+    }
 }
 
 impl Drop for SessionHandle {
@@ -311,6 +322,10 @@ fn dispatch_message(
         }
         #[cfg(any(test, feature = "test-util"))]
         EngineMessage::Shutdown => return false,
+        #[cfg(any(test, feature = "test-util"))]
+        EngineMessage::Stats { reply } => {
+            let _ = reply.send(state.stats());
+        }
     }
     true
 }
@@ -486,10 +501,17 @@ struct EngineState {
     txn_manager: TransactionManager,
     checkpoint_byte_threshold: u64,
     bytes_at_last_checkpoint: u64,
+    checkpoints_written: u64,
     slow_query_warn_threshold_ms: u64,
     current_txn: Option<(SessionId, TxnId)>,
     lock_wait_timeout: Duration,
     idle_in_transaction_timeout: Duration,
+}
+
+#[cfg(any(test, feature = "test-util"))]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EngineStats {
+    pub checkpoints_written: u64,
 }
 
 impl EngineState {
@@ -534,6 +556,7 @@ impl EngineState {
             txn_manager,
             checkpoint_byte_threshold: config.checkpoint_byte_threshold,
             bytes_at_last_checkpoint,
+            checkpoints_written: 0,
             slow_query_warn_threshold_ms: config.slow_query_warn_threshold_ms,
             current_txn: None,
             lock_wait_timeout: Duration::from_millis(config.lock_wait_timeout_ms),
@@ -545,10 +568,21 @@ impl EngineState {
 
     fn checkpoint_and_flush(&mut self) -> Result<()> {
         write_checkpoint(&self.buffer_pool, &mut self.txn_manager)?;
+        self.record_checkpoint_written();
         self.buffer_pool.flush_log_all()?;
         self.buffer_pool.flush_all()?;
         self.buffer_pool.sync()?;
         Ok(())
+    }
+
+    fn record_checkpoint_written(&mut self) {
+        self.checkpoints_written += 1;
+        metrics::counter!("checkpoints_written_total").increment(1);
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    fn stats(&self) -> EngineStats {
+        EngineStats { checkpoints_written: self.checkpoints_written }
     }
 
     fn best_effort_flush(&self) {
@@ -571,6 +605,7 @@ impl EngineState {
         match result {
             Ok(_) => {
                 self.bytes_at_last_checkpoint = self.buffer_pool.log_bytes_appended();
+                self.record_checkpoint_written();
             }
             Err(err) => {
                 let err = Error::from(err);
