@@ -163,7 +163,9 @@ sweep). `tests/smoke.rs` is the minimum-viable compile-and-construct
 check. A `#[cfg(test)] mod tests` block in `src/` is reserved for private,
 pure functions that need no `BufferPool`/`DiskManager`/device/temp
 directory (see CLAUDE.md's testing section) - `btree.rs`'s split-point and
-binary-search helpers are the current example. Run just this crate with:
+binary-search helpers and `dwb.rs`'s header `encode_header`/`decode_header`
+codec (round trip, corrupted-magic/CRC/count rejection, a `proptest`
+property) are the current examples. Run just this crate with:
 
 ```sh
 cargo test -p storage

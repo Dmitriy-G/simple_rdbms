@@ -76,20 +76,29 @@ for the precise durability claim this mechanism makes.
   page in the batch has been written to its real location and that write
   is itself durable (step 5) - after this, the slot images are stale and
   no longer needed.
-- `DoubleWriteBuffer::encode_header(&self, entries) -> [u8; PAGE_SIZE]` -
-  private. Builds the header page bytes for `write_batch`/`clear_batch`
-  from an iterator of `(PageId, u32)` entries.
+- `encode_header(entries) -> [u8; PAGE_SIZE]` - private free function (not
+  a `&self` method - it never touched `self`, and pulling it out lets
+  `mod tests` below build a header without constructing a whole
+  `DoubleWriteBuffer` and the device it would otherwise need). Builds the
+  header page bytes for `write_batch`/`clear_batch`/
+  `write_raw_header_entries` from an iterator of `(PageId, u32)` entries.
+- `decode_header(header, capacity) -> Option<Vec<(PageId, u32)>>` -
+  private free function, the pure codec half of `read_batch` below,
+  pulled out the same way and for the same reason as `encode_header`.
+  Returns the batch's `(page_id, slot_crc)` entries in slot order, or
+  `None` if there is nothing to recover - bad magic (including an
+  old-format header, since its magic never matches `MAGIC`), an
+  `entry_count` of `0` or above `capacity`, an `entry_count` whose
+  entries would run past the end of the page, or a header CRC mismatch
+  are all treated alike, as "invalid," per the recovery protocol: none of
+  them are errors, since a header can legitimately be caught mid-write by
+  the very crash recovery is running to clean up after - the "all-zero
+  pages are valid" invariant (`CLAUDE.md`) applies here too, since a
+  never-written header is all zeros and trivially fails the magic check
+  the same way a torn one would.
 - `DoubleWriteBuffer::read_batch(&self) -> Result<Option<Vec<(PageId, u32)>>, StorageError>` -
-  recovery: decodes the header page, returning the batch's
-  `(page_id, slot_crc)` entries in slot order, or `None` if there is
-  nothing to recover - bad magic (including an old-format header, since
-  its magic never matches `MAGIC`), an `entry_count` of `0` or above
-  `capacity`, or a header CRC mismatch are all treated alike, as
-  "invalid," per the recovery protocol: none of them are errors, since a
-  header can legitimately be caught mid-write by the very crash recovery
-  is running to clean up after - the "all-zero pages are valid" invariant
-  (`CLAUDE.md`) applies here too, since a never-written header is all
-  zeros and trivially fails the magic check the same way a torn one would.
+  recovery: reads the header page off the device and hands it to
+  `decode_header`.
 - `DoubleWriteBuffer::read_slot(&self, index) -> Result<[u8; PAGE_SIZE], StorageError>` -
   recovery: the raw bytes of slot `index` (0-based, matching the order
   `read_batch` returned entries in), whether or not they pass their own
@@ -97,8 +106,8 @@ for the precise durability claim this mechanism makes.
   (`recovery::recover_double_write`) is the one that decides what a bad
   copy means.
 - `DoubleWriteBuffer::write_raw_slot(&self, index, content)`/
-  `write_raw_header_entries(&self, entries)` - `#[cfg(any(test, feature =
-  "test-util"))]`. Write a slot's raw bytes, or an arbitrary
+  `write_raw_header_entries(&self, entries)` - `#[cfg(feature =
+  "test-util")]`. Write a slot's raw bytes, or an arbitrary
   `(page_id, slot_crc)` entry list as a well-formed (correct magic,
   count, and header CRC) header, bypassing `write_batch`'s automatic
   slot/entry pairing entirely. Exist so `crates/storage/tests/double_write_buffer.rs`
@@ -108,6 +117,18 @@ for the precise durability claim this mechanism makes.
   holds a different entry's content than the header claims - without the
   test needing to know this module's private byte offsets itself.
 - `read_u32(buf, at) -> u32` - private helper.
+- `#[cfg(test)] mod tests` - unit tests over `encode_header`/`decode_header`
+  directly (CLAUDE.md's pure-private-function carve-out: no I/O, no
+  `BlockDevice` needed), covering the round trip (including a `proptest`
+  property over arbitrary entry lists), that `clear_batch`'s zero-entry
+  encoding decodes as "nothing to recover" rather than an empty batch, an
+  all-zero header, bad magic, a count above `capacity`, a count whose
+  entries would overflow the page (hand-built, since `encode_header`
+  itself cannot construct that state without panicking), a corrupted
+  overall CRC, and two slots' CRCs swapped with each other - the last one
+  specifically checks that a swap landing two individually-valid-looking
+  CRC values on the wrong slots is still caught, since the header's own
+  CRC covers the whole entry list, not each entry independently.
 
 ## Usage Example
 
