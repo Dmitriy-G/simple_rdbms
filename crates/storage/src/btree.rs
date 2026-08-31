@@ -846,3 +846,133 @@ impl Iterator for BTreeRangeIterator<'_, '_> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    fn page_bytes_from_payloads(payloads: &[Vec<u8>]) -> Vec<u8> {
+        let mut buf = vec![0u8; crate::page::PAGE_SIZE];
+        buf[NODE_TYPE_RANGE.start] = LEAF_TAG;
+        buf[SLOT_COUNT_RANGE].copy_from_slice(&(payloads.len() as u16).to_le_bytes());
+        let mut end = crate::page::PAGE_SIZE;
+        for (i, payload) in payloads.iter().enumerate() {
+            end -= payload.len();
+            buf[end..end + payload.len()].copy_from_slice(payload);
+            let slot_at = slot_offset(i as u16);
+            buf[slot_at..slot_at + 2].copy_from_slice(&(end as u16).to_le_bytes());
+            buf[slot_at + 2..slot_at + 4].copy_from_slice(&(payload.len() as u16).to_le_bytes());
+        }
+        buf[DATA_USED_RANGE]
+            .copy_from_slice(&((crate::page::PAGE_SIZE - end) as u16).to_le_bytes());
+        buf
+    }
+
+    fn uniform_entries(count: usize, len: usize) -> Vec<Vec<u8>> {
+        vec![vec![0u8; len]; count]
+    }
+
+    #[test]
+    fn leaf_split_point_stays_in_bounds_for_the_duplicate_key_workload_that_once_corrupted_the_tree()
+     {
+        let entries = uniform_entries(240, 13);
+        let split = leaf_split_point(&entries);
+        assert!(split > 0 && split < entries.len(), "split {split} out of bounds");
+    }
+
+    #[test]
+    fn internal_split_point_stays_in_bounds_for_the_duplicate_key_workload_that_once_corrupted_the_tree()
+     {
+        let entries = uniform_entries(240, 13);
+        let split = internal_split_point(&entries);
+        assert!(split > 0 && split < entries.len(), "split {split} out of bounds");
+    }
+
+    proptest! {
+        #[test]
+        fn byte_balanced_split_point_always_indexes_within_entries(
+            lens in proptest::collection::vec(1usize..200, 1..300)
+        ) {
+            let entries: Vec<Vec<u8>> = lens.into_iter().map(|len| vec![0u8; len]).collect();
+            let split = byte_balanced_split_point(&entries);
+            prop_assert!(split < entries.len());
+        }
+
+        #[test]
+        fn leaf_split_point_produces_two_nonempty_halves(
+            lens in proptest::collection::vec(1usize..200, 2..300)
+        ) {
+            let entries: Vec<Vec<u8>> = lens.into_iter().map(|len| vec![0u8; len]).collect();
+            let split = leaf_split_point(&entries);
+            prop_assert!(split >= 1);
+            prop_assert!(split < entries.len());
+        }
+
+        #[test]
+        fn internal_split_point_leaves_a_key_on_both_sides(
+            lens in proptest::collection::vec(1usize..200, 3..300)
+        ) {
+            let entries: Vec<Vec<u8>> = lens.into_iter().map(|len| vec![0u8; len]).collect();
+            let split = internal_split_point(&entries);
+            prop_assert!(split >= 1);
+            prop_assert!(split <= entries.len() - 2);
+        }
+    }
+
+    #[test]
+    fn upper_bound_in_returns_the_count_when_every_entry_shares_the_search_key() {
+        let key: &[u8] = b"k";
+        let entries: Vec<Vec<u8>> =
+            (0..16).map(|_| build_internal_payload(key, PageId(1))).collect();
+        assert_eq!(upper_bound_in(&entries, key), entries.len());
+    }
+
+    #[test]
+    fn upper_bound_in_skips_every_duplicate_and_lands_on_the_first_greater_key() {
+        let mut entries: Vec<Vec<u8>> =
+            (0..8).map(|_| build_internal_payload(b"a", PageId(1))).collect();
+        entries.push(build_internal_payload(b"b", PageId(2)));
+        assert_eq!(upper_bound_in(&entries, b"a"), 8);
+    }
+
+    #[test]
+    fn upper_bound_in_leaf_returns_the_count_when_every_entry_shares_the_sort_key() {
+        let payload = build_leaf_payload(b"k", Rid::new(PageId(1), 0));
+        let sort_key = leaf_sort_key(&payload).to_vec();
+        let entries: Vec<Vec<u8>> = (0..16).map(|_| payload.clone()).collect();
+        assert_eq!(upper_bound_in_leaf(&entries, &sort_key), entries.len());
+    }
+
+    #[test]
+    fn upper_bound_on_a_page_returns_the_slot_count_when_every_key_is_a_duplicate() {
+        let payloads: Vec<Vec<u8>> =
+            (0..10).map(|_| build_internal_payload(b"dup", PageId(1))).collect();
+        let bytes = page_bytes_from_payloads(&payloads);
+        let count = upper_bound(&bytes, b"dup", PageId(0)).expect("well-formed page");
+        assert_eq!(count as usize, payloads.len());
+    }
+
+    #[test]
+    fn lower_bound_leaf_finds_the_first_of_a_run_of_duplicate_sort_keys() {
+        let dup_payload = build_leaf_payload(b"dup", Rid::new(PageId(1), 0));
+        let sort_key = leaf_sort_key(&dup_payload).to_vec();
+        let mut payloads = vec![build_leaf_payload(b"aaa", Rid::new(PageId(1), 0))];
+        payloads.extend((0..5).map(|_| dup_payload.clone()));
+        let bytes = page_bytes_from_payloads(&payloads);
+        let idx = lower_bound_leaf(&bytes, &sort_key, PageId(0)).expect("well-formed page");
+        assert_eq!(idx, 1);
+    }
+
+    #[test]
+    fn upper_bound_leaf_finds_one_past_the_last_of_a_run_of_duplicate_sort_keys() {
+        let dup_payload = build_leaf_payload(b"dup", Rid::new(PageId(1), 0));
+        let sort_key = leaf_sort_key(&dup_payload).to_vec();
+        let mut payloads: Vec<Vec<u8>> = (0..5).map(|_| dup_payload.clone()).collect();
+        payloads.push(build_leaf_payload(b"zzz", Rid::new(PageId(1), 0)));
+        let bytes = page_bytes_from_payloads(&payloads);
+        let idx = upper_bound_leaf(&bytes, &sort_key, PageId(0)).expect("well-formed page");
+        assert_eq!(idx, 5);
+    }
+}
