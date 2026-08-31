@@ -4,6 +4,7 @@ pub struct SqlState(pub [u8; 5]);
 impl SqlState {
     pub const SUCCESSFUL_COMPLETION: SqlState = SqlState(*b"00000");
 
+    pub const CONNECTION_DOES_NOT_EXIST: SqlState = SqlState(*b"08003");
     pub const CONNECTION_FAILURE: SqlState = SqlState(*b"08006");
 
     pub const NUMERIC_VALUE_OUT_OF_RANGE: SqlState = SqlState(*b"22003");

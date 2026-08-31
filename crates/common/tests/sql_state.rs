@@ -80,7 +80,7 @@ fn expected_sql_state(err: &Error) -> SqlState {
         Error::EngineUnavailable { .. } => SqlState::CONNECTION_FAILURE,
         Error::LockTimeout { .. } => SqlState::LOCK_NOT_AVAILABLE,
         Error::IdleInTransactionTimeout => SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
-        Error::UnknownSession { .. } => SqlState::CONNECTION_FAILURE,
+        Error::UnknownSession { .. } => SqlState::CONNECTION_DOES_NOT_EXIST,
     }
 }
 

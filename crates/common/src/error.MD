@@ -153,12 +153,16 @@ had to change, from stringifying to matching.
     `DbConfig::idle_in_transaction_timeout_ms` - surfaced on the next
     statement the session sends, the same way `TransactionAborted` reports
     a transaction that failed for a different reason.
-  - `UnknownSession` -> `CONNECTION_FAILURE` (08006), Fatal. An `Execute`
-    or `TableNames` request named a `SessionId` the engine's session map no
-    longer has - the session already disconnected, or never existed. Fatal
-    because there is no session left to continue; distinct from
-    `EngineUnavailable` so a caller (and a future wire protocol) can tell
-    "your session is gone" from "the whole engine is gone" apart.
+  - `UnknownSession` -> `CONNECTION_DOES_NOT_EXIST` (08003), Fatal. An
+    `Execute` or `TableNames` request named a `SessionId` the engine's
+    session map no longer has - the session already disconnected, or never
+    existed. Fatal because there is no session left to continue on this
+    connection; its own SQLSTATE, distinct from `EngineUnavailable`'s
+    `CONNECTION_FAILURE` (08006), is what actually lets a caller (and a
+    future wire protocol) tell "your session is gone, but the server is
+    fine - reconnect" apart from "the whole engine is gone" - sharing one
+    code between the two would defeat the reason this variant exists
+    separately from `EngineUnavailable` in the first place.
 - `Error::sql_state(&self) -> SqlState` - the exhaustive match described
   above: every variant maps to exactly one `SqlState` constant, and a new
   variant fails to compile here until it's given one.

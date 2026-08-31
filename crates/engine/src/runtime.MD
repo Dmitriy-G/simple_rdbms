@@ -253,6 +253,25 @@ rediscover by watching a test go quiet.
   delivers everything queued before a channel's last sender disconnects,
   so the engine thread always sees this session's `Disconnect` before the
   receive loop ends.
+
+  **Why this send is a blocking `send`, not `try_send`.** `EngineHandle::send`
+  calls `mpsc::SyncSender::send`, which blocks if `REQUEST_CHANNEL_CAPACITY`
+  (64) outstanding messages are already queued. A full queue plus a busy
+  engine therefore makes dropping a session block, and - since `EngineHandle`'s
+  own `Drop` joins the engine thread (see above) - dropping the last
+  `Database` sharing that engine blocks behind it too. This is a deliberate
+  choice, not an oversight: `run_engine`'s loop never blocks waiting on a
+  client (`recv_timeout(TICK_INTERVAL)`, see the file-level note above), so
+  the queue always drains and this can only ever be a brief wait, never a
+  deadlock; switching to `try_send` would trade that brief wait for a
+  silent message loss on a full queue, and `Disconnect` has no reply
+  channel for a caller to notice the loss or retry - the dropped session's
+  `SessionState` would leak in `sessions` forever, which is worse than
+  blocking. This stops being the right tradeoff once M14.2 turns
+  connections into tokio tasks: a blocking `send` inside a `Drop` running
+  on an async runtime's worker thread stalls that worker rather than just
+  the one dropping thread, and the fix at that point needs to be an async
+  disconnect path, not `try_send` (which would still lose the message).
 - `run_engine(state, receiver)` - private free function, the engine
   thread's entire body. Owns the `HashMap<SessionId, SessionState>` and
   the `VecDeque<ParkedRequest>` waiter queue no other thread ever touches,

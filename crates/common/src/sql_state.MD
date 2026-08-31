@@ -37,7 +37,14 @@ correct, standard-sanctioned choice rather than inventing a Postgres-style
 `IDLE_IN_TRANSACTION_SESSION_TIMEOUT` (`25P03`) is Postgres's own extension
 code for exactly this condition - an explicit transaction the engine aborts
 on its own because no statement arrived before `DbConfig::idle_in_transaction_timeout_ms`
-elapsed - and maps to `Error::IdleInTransactionTimeout`.
+elapsed - and maps to `Error::IdleInTransactionTimeout`. `CONNECTION_DOES_NOT_EXIST`
+(`08003`) is the standard's own code, distinct from `CONNECTION_FAILURE`
+(`08006`), for "this specific connection is gone" as opposed to "the
+connection attempt itself failed" - it maps to `Error::UnknownSession`
+specifically so that code and `EngineUnavailable`'s `CONNECTION_FAILURE`
+stay two different codes; collapsing both onto one would leave a future
+wire-protocol client no way to tell "your session was torn down, open a
+new one" apart from "the server process itself is gone."
 
 ## Key Components
 
@@ -58,6 +65,7 @@ elapsed - and maps to `Error::IdleInTransactionTimeout`.
   | Constant | Code | Class |
   | --- | --- | --- |
   | `SUCCESSFUL_COMPLETION` | `00000` | 00 - successful completion |
+  | `CONNECTION_DOES_NOT_EXIST` | `08003` | 08 - connection exception |
   | `CONNECTION_FAILURE` | `08006` | 08 - connection exception |
   | `NUMERIC_VALUE_OUT_OF_RANGE` | `22003` | 22 - data exception |
   | `NULL_VALUE_NOT_ALLOWED` | `22004` | 22 - data exception |

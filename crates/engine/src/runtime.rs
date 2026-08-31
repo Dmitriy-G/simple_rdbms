@@ -267,6 +267,8 @@ impl SessionHandle {
 
 impl Drop for SessionHandle {
     fn drop(&mut self) {
+        // TODO(M14.2): this blocking send stalls a runtime worker once
+        // connections are tokio tasks; revisit then (see runtime.MD).
         let _ = self.engine.send(EngineMessage::Disconnect { session_id: self.session_id });
     }
 }
