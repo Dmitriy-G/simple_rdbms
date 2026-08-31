@@ -117,6 +117,15 @@ pub enum Error {
 
     #[error("the database engine is not running: {detail}")]
     EngineUnavailable { detail: String },
+
+    #[error("timed out waiting for the engine's transaction slot: {detail}")]
+    LockTimeout { detail: String },
+
+    #[error("the previous transaction was aborted after sitting idle past the configured timeout")]
+    IdleInTransactionTimeout,
+
+    #[error("the requested session is no longer registered with the engine: {detail}")]
+    UnknownSession { detail: String },
 }
 
 impl Error {
@@ -154,6 +163,9 @@ impl Error {
             Error::DatabaseLocked { .. } => SqlState::LOCK_NOT_AVAILABLE,
             Error::FlushPoisoned => SqlState::IO_ERROR,
             Error::EngineUnavailable { .. } => SqlState::CONNECTION_FAILURE,
+            Error::LockTimeout { .. } => SqlState::LOCK_NOT_AVAILABLE,
+            Error::IdleInTransactionTimeout => SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+            Error::UnknownSession { .. } => SqlState::CONNECTION_FAILURE,
         }
     }
 
@@ -171,7 +183,8 @@ impl Error {
             | Error::Internal { .. }
             | Error::DatabaseLocked { .. }
             | Error::FlushPoisoned
-            | Error::EngineUnavailable { .. } => Severity::Fatal,
+            | Error::EngineUnavailable { .. }
+            | Error::UnknownSession { .. } => Severity::Fatal,
 
             Error::BufferPoolExhausted
             | Error::BufferPoolWaitTimedOut { .. }
@@ -191,7 +204,9 @@ impl Error {
             | Error::NestedTransaction
             | Error::NoActiveTransaction { .. }
             | Error::TransactionAborted
-            | Error::NotSupported(_) => Severity::Error,
+            | Error::NotSupported(_)
+            | Error::LockTimeout { .. }
+            | Error::IdleInTransactionTimeout => Severity::Error,
         }
     }
 
@@ -232,7 +247,10 @@ impl Error {
             | Error::NotSupported(_)
             | Error::DatabaseLocked { .. }
             | Error::FlushPoisoned
-            | Error::EngineUnavailable { .. } => self.to_string(),
+            | Error::EngineUnavailable { .. }
+            | Error::LockTimeout { .. }
+            | Error::IdleInTransactionTimeout
+            | Error::UnknownSession { .. } => self.to_string(),
 
             Error::Syntax { offset, .. } => format!("syntax error at offset {offset}: ?"),
 

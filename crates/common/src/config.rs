@@ -8,6 +8,8 @@ pub struct DbConfig {
     pub checkpoint_byte_threshold: u64,
     pub dwb_capacity: usize,
     pub slow_query_warn_threshold_ms: u64,
+    pub lock_wait_timeout_ms: u64,
+    pub idle_in_transaction_timeout_ms: u64,
 }
 
 impl DbConfig {
@@ -21,6 +23,10 @@ impl DbConfig {
 
     pub const DEFAULT_SLOW_QUERY_WARN_THRESHOLD_MS: u64 = 100;
 
+    pub const DEFAULT_LOCK_WAIT_TIMEOUT_MS: u64 = 5_000;
+
+    pub const DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS: u64 = 60_000;
+
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
@@ -29,6 +35,8 @@ impl DbConfig {
             checkpoint_byte_threshold: Self::DEFAULT_CHECKPOINT_BYTE_THRESHOLD,
             dwb_capacity: Self::DEFAULT_DWB_CAPACITY,
             slow_query_warn_threshold_ms: Self::DEFAULT_SLOW_QUERY_WARN_THRESHOLD_MS,
+            lock_wait_timeout_ms: Self::DEFAULT_LOCK_WAIT_TIMEOUT_MS,
+            idle_in_transaction_timeout_ms: Self::DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
         }
     }
 }

@@ -6,25 +6,13 @@ subscriber that captures its JSON records instead of discarding them and
 parsing them back out with `serde_json` - the same technique
 `storage/tests/recovery_logging.rs` uses for `recovery::recover`'s summary
 event, applied here to the connection/transaction/statement span
-hierarchy and the literal-redaction rule.
+hierarchy and the literal-redaction rule. `CaptureBuf`/`captured_events`/
+`set_capturing_subscriber` themselves live in `tests/support/mod.MD` now,
+shared with `sessions.rs`, which needs the identical capture-and-inspect
+pattern to observe checkpoint completion events.
 
 ## Key Components
 
-- `CaptureBuf` - a `Clone`able `Write` implementation backed by a shared
-  `Arc<Mutex<Vec<u8>>>`, so a `tracing_subscriber::fmt` layer's writer
-  closure can hand out clones that all append to the same buffer. Its
-  `Write` impl and `captured_events` below both carry `#[cfg(test)]` so
-  `clippy.toml`'s `allow-unwrap-in-tests`/`allow-expect-in-tests` apply to
-  them - see `storage/tests/recovery_logging.MD` for why a free function
-  in a `tests/` file needs the attribute spelled out explicitly rather
-  than inheriting it from the file only ever compiling as a test binary.
-- `captured_events(buf) -> Vec<serde_json::Value>` - splits the captured
-  bytes into lines and parses each non-empty one as a JSON event.
-- `set_capturing_subscriber(capture) -> tracing::subscriber::DefaultGuard`
-  - installs a JSON `fmt` subscriber at `TRACE` (so even `fetch_page`'s
-  hot-path event is captured) writing into `capture`, as the default for
-  the current thread; dropping the returned guard restores whatever was
-  there before.
 - `a_successful_statement_is_logged_at_info_with_no_literal_values` - runs
   an `INSERT` carrying both a numeric and a string literal, finds the
   `info`-level "statement executed" event, and asserts its `fingerprint`

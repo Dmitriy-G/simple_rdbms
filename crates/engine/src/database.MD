@@ -52,14 +52,22 @@ as they always have, with no idea an engine thread exists underneath.
   the file synced, run on the engine thread and awaited here so errors
   are still reported to the caller exactly as before - see
   `runtime.MD`'s `EngineState::checkpoint_and_flush`.
+- `Database::connect(&self) -> Result<Self>` - opens a second session on
+  the same engine thread via `SessionHandle::connect`, sharing the same
+  `Arc<runtime::EngineHandle>` and therefore the same catalog, buffer pool,
+  and transaction manager. This is how `crates/engine/tests/sessions.rs`
+  drives more than one connection against one database without exposing
+  `runtime::EngineHandle`/`SessionHandle` directly, and the shape M14.2's
+  network listener needs to turn an accepted socket into a session.
 - `Database::table_names(&self) -> Vec<String>`/`table_schema(&self, name)
   -> Result<Schema>` - forward to the same-named `SessionHandle` methods,
   which read the engine's live catalog through the same request/reply
   channel. `table_names` can't report an engine failure without changing
-  its return type, so it answers with an empty `Vec` in that case rather
-  than panicking or blocking forever - a real gap only if the engine has
-  already died, which `execute`'s own `EngineUnavailable` would have
-  surfaced first on any real workload.
+  its return type, so it collapses `SessionHandle::table_names`'s
+  `Result<Vec<String>>` to an empty `Vec` on error rather than panicking or
+  blocking forever - a real gap only if the engine has already died, which
+  `execute`'s own `EngineUnavailable` would have surfaced first on any real
+  workload.
 - `impl Drop for Database` - forwards to `SessionHandle::best_effort_flush`,
   which blocks on the engine thread's reply so the flush this used to do
   synchronously (before any thread existed to hand it to) still completes
@@ -74,6 +82,12 @@ as they always have, with no idea an engine thread exists underneath.
   close has somewhere to report a failure to and a destructor does not.
   Dropping `session` right after (an ordinary field drop, not this
   method) sends `runtime::EngineMessage::Disconnect` - see `runtime.MD`.
+- `Database::kill_engine_for_test(&self)` - `#[cfg(any(test, feature =
+  "test-util"))]`. Forwards to `SessionHandle::kill_engine_for_test`,
+  sending `runtime::EngineMessage::Shutdown` to stop the engine thread
+  without going through a real panic or process exit, so a test can assert
+  every session's next request fails with `Error::EngineUnavailable`
+  instead of hanging.
 
 ## Usage Example
 

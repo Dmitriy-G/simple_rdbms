@@ -139,6 +139,26 @@ had to change, from stringifying to matching.
     arrive. `detail` is an internal diagnostic string, never
     user-supplied, so `redacted()` includes it verbatim like every other
     non-literal-carrying variant.
+  - `LockTimeout` -> `LOCK_NOT_AVAILABLE` (55P03), Error. A `BEGIN` or
+    autocommit statement parked behind another session's open explicit
+    transaction (`engine::runtime.MD`'s waiter queue) and the holder
+    neither committed nor rolled back before `DbConfig::lock_wait_timeout_ms`
+    elapsed. Same SQLSTATE as `DatabaseLocked` since both mean "this
+    resource is held elsewhere," but `Error` rather than `Fatal`: the
+    connection that timed out waiting is still fine, only the statement
+    failed.
+  - `IdleInTransactionTimeout` -> `IDLE_IN_TRANSACTION_SESSION_TIMEOUT`
+    (25P03), Error. The engine aborted this session's own explicit
+    transaction because no statement arrived within
+    `DbConfig::idle_in_transaction_timeout_ms` - surfaced on the next
+    statement the session sends, the same way `TransactionAborted` reports
+    a transaction that failed for a different reason.
+  - `UnknownSession` -> `CONNECTION_FAILURE` (08006), Fatal. An `Execute`
+    or `TableNames` request named a `SessionId` the engine's session map no
+    longer has - the session already disconnected, or never existed. Fatal
+    because there is no session left to continue; distinct from
+    `EngineUnavailable` so a caller (and a future wire protocol) can tell
+    "your session is gone" from "the whole engine is gone" apart.
 - `Error::sql_state(&self) -> SqlState` - the exhaustive match described
   above: every variant maps to exactly one `SqlState` constant, and a new
   variant fails to compile here until it's given one.

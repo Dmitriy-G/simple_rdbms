@@ -15,6 +15,7 @@ impl SqlState {
 
     pub const NO_ACTIVE_SQL_TRANSACTION: SqlState = SqlState(*b"25P01");
     pub const IN_FAILED_SQL_TRANSACTION: SqlState = SqlState(*b"25P02");
+    pub const IDLE_IN_TRANSACTION_SESSION_TIMEOUT: SqlState = SqlState(*b"25P03");
 
     pub const LOCK_NOT_AVAILABLE: SqlState = SqlState(*b"55P03");
 

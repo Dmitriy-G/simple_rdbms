@@ -40,6 +40,10 @@ impl Database {
         Ok(Self { session })
     }
 
+    pub fn connect(&self) -> Result<Self> {
+        Ok(Self { session: self.session.connect()? })
+    }
+
     pub fn execute(&mut self, sql: &str) -> Result<ResultSet> {
         self.session.execute(sql)
     }
@@ -49,11 +53,16 @@ impl Database {
     }
 
     pub fn table_names(&self) -> Vec<String> {
-        self.session.table_names()
+        self.session.table_names().unwrap_or_default()
     }
 
     pub fn table_schema(&self, name: &str) -> Result<Schema> {
         self.session.table_schema(name)
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn kill_engine_for_test(&self) {
+        self.session.kill_engine_for_test();
     }
 }
 

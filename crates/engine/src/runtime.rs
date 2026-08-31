@@ -1,7 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use catalog::{Catalog, Column, Schema};
 use common::{DbConfig, Error, Result, Severity, TxnId};
@@ -28,6 +29,7 @@ use crate::result_set::ResultSet;
 
 const REPLACER_K: usize = 2;
 const REQUEST_CHANNEL_CAPACITY: usize = 64;
+const TICK_INTERVAL: Duration = Duration::from_millis(50);
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -39,42 +41,92 @@ enum TxnSlot {
     None,
     Active(TxnId),
     Aborted(TxnId),
+    TimedOut,
 }
 
 impl TxnSlot {
     fn txn_id(self) -> Option<TxnId> {
         match self {
-            TxnSlot::None => None,
+            TxnSlot::None | TxnSlot::TimedOut => None,
             TxnSlot::Active(txn_id) | TxnSlot::Aborted(txn_id) => Some(txn_id),
         }
     }
 }
 
 struct SessionState {
+    session_id: SessionId,
     txn_slot: TxnSlot,
     txn_span: Option<tracing::Span>,
     conn_span: tracing::Span,
     next_stmt_id: u64,
+    idle_since: Option<Instant>,
 }
 
 impl SessionState {
-    fn new(conn_span: tracing::Span) -> Self {
-        Self { txn_slot: TxnSlot::None, txn_span: None, conn_span, next_stmt_id: 1 }
+    fn new(session_id: SessionId, conn_span: tracing::Span) -> Self {
+        Self {
+            session_id,
+            txn_slot: TxnSlot::None,
+            txn_span: None,
+            conn_span,
+            next_stmt_id: 1,
+            idle_since: None,
+        }
     }
 }
 
+struct ParkedRequest {
+    session_id: SessionId,
+    sql: String,
+    reply: mpsc::SyncSender<Result<ResultSet>>,
+    deadline: Instant,
+}
+
 enum EngineMessage {
-    Connect { reply: mpsc::SyncSender<SessionId> },
-    Execute { session_id: SessionId, sql: String, reply: mpsc::SyncSender<Result<ResultSet>> },
-    TableNames { reply: mpsc::SyncSender<Vec<String>> },
-    TableSchema { name: String, reply: mpsc::SyncSender<Result<Schema>> },
-    Checkpoint { reply: mpsc::SyncSender<Result<()>> },
-    BestEffortFlush { reply: mpsc::SyncSender<()> },
-    Disconnect { session_id: SessionId },
+    Connect {
+        reply: mpsc::SyncSender<SessionId>,
+    },
+    Execute {
+        session_id: SessionId,
+        sql: String,
+        reply: mpsc::SyncSender<Result<ResultSet>>,
+    },
+    TableNames {
+        reply: mpsc::SyncSender<Vec<String>>,
+    },
+    TableSchema {
+        name: String,
+        reply: mpsc::SyncSender<Result<Schema>>,
+    },
+    Checkpoint {
+        reply: mpsc::SyncSender<Result<()>>,
+    },
+    BestEffortFlush {
+        reply: mpsc::SyncSender<()>,
+    },
+    Disconnect {
+        session_id: SessionId,
+    },
+    #[cfg(any(test, feature = "test-util"))]
+    Shutdown,
 }
 
 fn engine_unavailable() -> Error {
     Error::EngineUnavailable { detail: "the engine thread's reply channel is closed".to_string() }
+}
+
+fn unknown_session(session_id: SessionId) -> Error {
+    Error::UnknownSession {
+        detail: format!("session {} may have already disconnected", session_id.0),
+    }
+}
+
+fn lock_timeout() -> Error {
+    Error::LockTimeout {
+        detail: "the session already holding an explicit transaction did not commit or roll \
+                  back before the deadline"
+            .to_string(),
+    }
 }
 
 pub(crate) struct EngineHandle {
@@ -156,6 +208,10 @@ pub(crate) struct SessionHandle {
 }
 
 impl SessionHandle {
+    pub(crate) fn connect(&self) -> Result<SessionHandle> {
+        self.engine.connect()
+    }
+
     pub(crate) fn execute(&self, sql: &str) -> Result<ResultSet> {
         let (reply, reply_rx) = mpsc::sync_channel(1);
         self.engine.send(EngineMessage::Execute {
@@ -166,12 +222,10 @@ impl SessionHandle {
         reply_rx.recv().map_err(|_| engine_unavailable())?
     }
 
-    pub(crate) fn table_names(&self) -> Vec<String> {
+    pub(crate) fn table_names(&self) -> Result<Vec<String>> {
         let (reply, reply_rx) = mpsc::sync_channel(1);
-        if self.engine.send(EngineMessage::TableNames { reply }).is_err() {
-            return Vec::new();
-        }
-        reply_rx.recv().unwrap_or_default()
+        self.engine.send(EngineMessage::TableNames { reply })?;
+        reply_rx.recv().map_err(|_| engine_unavailable())
     }
 
     pub(crate) fn table_schema(&self, name: &str) -> Result<Schema> {
@@ -192,6 +246,11 @@ impl SessionHandle {
             let _ = reply_rx.recv();
         }
     }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub(crate) fn kill_engine_for_test(&self) {
+        let _ = self.engine.send(EngineMessage::Shutdown);
+    }
 }
 
 impl Drop for SessionHandle {
@@ -202,40 +261,222 @@ impl Drop for SessionHandle {
 
 fn run_engine(mut state: EngineState, receiver: mpsc::Receiver<EngineMessage>) {
     let mut sessions: HashMap<SessionId, SessionState> = HashMap::new();
+    let mut waiters: VecDeque<ParkedRequest> = VecDeque::new();
 
-    for message in receiver {
-        match message {
-            EngineMessage::Connect { reply } => {
-                let session_id = SessionId(NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed));
-                let conn_span = new_connection_span(session_id);
-                sessions.insert(session_id, SessionState::new(conn_span));
-                let _ = reply.send(session_id);
+    loop {
+        match receiver.recv_timeout(TICK_INTERVAL) {
+            Ok(message) => {
+                if !dispatch_message(&mut state, &mut sessions, &mut waiters, message) {
+                    break;
+                }
             }
-            EngineMessage::Execute { session_id, sql, reply } => {
-                let result = match sessions.get_mut(&session_id) {
-                    Some(session) => state.execute(session, &sql),
-                    None => Err(engine_unavailable()),
-                };
-                let _ = reply.send(result);
-            }
-            EngineMessage::TableNames { reply } => {
-                let _ = reply.send(state.table_names());
-            }
-            EngineMessage::TableSchema { name, reply } => {
-                let _ = reply.send(state.table_schema(&name));
-            }
-            EngineMessage::Checkpoint { reply } => {
-                let _ = reply.send(state.checkpoint_and_flush());
-            }
-            EngineMessage::BestEffortFlush { reply } => {
-                state.best_effort_flush();
-                let _ = reply.send(());
-            }
-            EngineMessage::Disconnect { session_id } => {
-                sessions.remove(&session_id);
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => tick(&mut state, &mut sessions, &mut waiters),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
+}
+
+fn dispatch_message(
+    state: &mut EngineState,
+    sessions: &mut HashMap<SessionId, SessionState>,
+    waiters: &mut VecDeque<ParkedRequest>,
+    message: EngineMessage,
+) -> bool {
+    match message {
+        EngineMessage::Connect { reply } => {
+            let session_id = SessionId(NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed));
+            let conn_span = new_connection_span(session_id);
+            sessions.insert(session_id, SessionState::new(session_id, conn_span));
+            let _ = reply.send(session_id);
+        }
+        EngineMessage::Execute { session_id, sql, reply } => {
+            admit_execute(state, sessions, waiters, session_id, sql, reply);
+        }
+        EngineMessage::TableNames { reply } => {
+            let _ = reply.send(state.table_names());
+        }
+        EngineMessage::TableSchema { name, reply } => {
+            let _ = reply.send(state.table_schema(&name));
+        }
+        EngineMessage::Checkpoint { reply } => {
+            let _ = reply.send(state.checkpoint_and_flush());
+        }
+        EngineMessage::BestEffortFlush { reply } => {
+            state.best_effort_flush();
+            let _ = reply.send(());
+        }
+        EngineMessage::Disconnect { session_id } => {
+            disconnect(state, sessions, waiters, session_id);
+        }
+        #[cfg(any(test, feature = "test-util"))]
+        EngineMessage::Shutdown => return false,
+    }
+    true
+}
+
+fn tick(
+    state: &mut EngineState,
+    sessions: &mut HashMap<SessionId, SessionState>,
+    waiters: &mut VecDeque<ParkedRequest>,
+) {
+    expire_waiters(waiters);
+    expire_idle_transaction(state, sessions);
+    try_admit_waiters(state, sessions, waiters);
+}
+
+fn peek_needs_txn_slot(sql: &str, session: &SessionState) -> bool {
+    if session.txn_slot.txn_id().is_some() {
+        return false;
+    }
+    let Ok(tokens) = Lexer::new(sql).tokenize() else { return false };
+    let Ok(statement) = Parser::new(tokens).parse() else { return false };
+    !matches!(statement, Statement::Commit | Statement::Rollback | Statement::Explain { .. })
+}
+
+fn must_park(
+    current_txn: Option<(SessionId, TxnId)>,
+    session_id: SessionId,
+    session: &SessionState,
+    sql: &str,
+) -> bool {
+    match current_txn {
+        Some((holder, _)) if holder != session_id => peek_needs_txn_slot(sql, session),
+        _ => false,
+    }
+}
+
+fn admit_execute(
+    state: &mut EngineState,
+    sessions: &mut HashMap<SessionId, SessionState>,
+    waiters: &mut VecDeque<ParkedRequest>,
+    session_id: SessionId,
+    sql: String,
+    reply: mpsc::SyncSender<Result<ResultSet>>,
+) {
+    let Some(session) = sessions.get_mut(&session_id) else {
+        let _ = reply.send(Err(unknown_session(session_id)));
+        return;
+    };
+
+    if must_park(state.current_txn, session_id, session, &sql) {
+        waiters.push_back(ParkedRequest {
+            session_id,
+            sql,
+            reply,
+            deadline: Instant::now() + state.lock_wait_timeout,
+        });
+        return;
+    }
+
+    let result = state.execute(session, &sql);
+    let _ = reply.send(result);
+    try_admit_waiters(state, sessions, waiters);
+}
+
+fn try_admit_waiters(
+    state: &mut EngineState,
+    sessions: &mut HashMap<SessionId, SessionState>,
+    waiters: &mut VecDeque<ParkedRequest>,
+) {
+    while state.current_txn.is_none() {
+        let Some(front_deadline) = waiters.front().map(|waiter| waiter.deadline) else { break };
+        if front_deadline <= Instant::now() {
+            if let Some(expired) = waiters.pop_front() {
+                let _ = expired.reply.send(Err(lock_timeout()));
+            }
+            continue;
+        }
+
+        let Some(granted) = waiters.pop_front() else { break };
+        let Some(session) = sessions.get_mut(&granted.session_id) else { continue };
+        let result = state.execute(session, &granted.sql);
+        let _ = granted.reply.send(result);
+    }
+}
+
+fn expire_waiters(waiters: &mut VecDeque<ParkedRequest>) {
+    let now = Instant::now();
+    while matches!(waiters.front(), Some(waiter) if waiter.deadline <= now) {
+        if let Some(expired) = waiters.pop_front() {
+            let _ = expired.reply.send(Err(lock_timeout()));
+        }
+    }
+}
+
+fn expire_idle_transaction(
+    state: &mut EngineState,
+    sessions: &mut HashMap<SessionId, SessionState>,
+) {
+    let Some((session_id, txn_id)) = state.current_txn else { return };
+    let Some(session) = sessions.get_mut(&session_id) else { return };
+    let Some(idle_since) = session.idle_since else { return };
+    if idle_since.elapsed() < state.idle_in_transaction_timeout {
+        return;
+    }
+
+    if let Err(err) = state.txn_manager.abort(txn_id, &state.buffer_pool) {
+        let err = Error::from(err);
+        tracing::warn!(
+            sql_state = %err.sql_state(),
+            error = %err.redacted(),
+            "idle-in-transaction abort failed"
+        );
+    }
+    if let Err(err) = state.reload_catalog() {
+        tracing::warn!(
+            sql_state = %err.sql_state(),
+            error = %err.redacted(),
+            "catalog reload after idle-in-transaction abort failed"
+        );
+    }
+
+    state.current_txn = None;
+    session.txn_slot = TxnSlot::TimedOut;
+    session.txn_span = None;
+    session.idle_since = None;
+    tracing::warn!(
+        session_id = session_id.0,
+        txn_id = txn_id.0,
+        "idle-in-transaction timeout; transaction aborted"
+    );
+}
+
+fn disconnect(
+    state: &mut EngineState,
+    sessions: &mut HashMap<SessionId, SessionState>,
+    waiters: &mut VecDeque<ParkedRequest>,
+    session_id: SessionId,
+) {
+    waiters.retain(|waiter| waiter.session_id != session_id);
+
+    if let Some(session) = sessions.get_mut(&session_id) {
+        if let Some(txn_id) = session.txn_slot.txn_id() {
+            if let Err(err) = state.txn_manager.abort(txn_id, &state.buffer_pool) {
+                let err = Error::from(err);
+                tracing::warn!(
+                    sql_state = %err.sql_state(),
+                    error = %err.redacted(),
+                    "abort on disconnect failed"
+                );
+            }
+            if let Err(err) = state.reload_catalog() {
+                tracing::warn!(
+                    sql_state = %err.sql_state(),
+                    error = %err.redacted(),
+                    "catalog reload on disconnect failed"
+                );
+            }
+            state.current_txn = None;
+            tracing::warn!(
+                session_id = session_id.0,
+                txn_id = txn_id.0,
+                "session disconnected with an open transaction; rolled back"
+            );
+        }
+    }
+
+    sessions.remove(&session_id);
+    try_admit_waiters(state, sessions, waiters);
 }
 
 struct EngineState {
@@ -245,6 +486,9 @@ struct EngineState {
     checkpoint_byte_threshold: u64,
     bytes_at_last_checkpoint: u64,
     slow_query_warn_threshold_ms: u64,
+    current_txn: Option<(SessionId, TxnId)>,
+    lock_wait_timeout: Duration,
+    idle_in_transaction_timeout: Duration,
 }
 
 impl EngineState {
@@ -290,6 +534,11 @@ impl EngineState {
             checkpoint_byte_threshold: config.checkpoint_byte_threshold,
             bytes_at_last_checkpoint,
             slow_query_warn_threshold_ms: config.slow_query_warn_threshold_ms,
+            current_txn: None,
+            lock_wait_timeout: Duration::from_millis(config.lock_wait_timeout_ms),
+            idle_in_transaction_timeout: Duration::from_millis(
+                config.idle_in_transaction_timeout_ms,
+            ),
         })
     }
 
@@ -298,7 +547,6 @@ impl EngineState {
         self.buffer_pool.flush_log_all()?;
         self.buffer_pool.flush_all()?;
         self.buffer_pool.sync()?;
-        tracing::info!("connection closed");
         Ok(())
     }
 
@@ -391,6 +639,13 @@ impl EngineState {
                 }
             }
         }
+
+        session.idle_since = if session.txn_slot.txn_id().is_some() {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+
         result
     }
 
@@ -404,6 +659,12 @@ impl EngineState {
         sql: &str,
         stmt_id: u64,
     ) -> Result<ResultSet> {
+        if matches!(session.txn_slot, TxnSlot::TimedOut) {
+            session.txn_slot = TxnSlot::None;
+            session.txn_span = None;
+            return Err(Error::IdleInTransactionTimeout);
+        }
+
         tracing::debug!(sql, "parsing statement");
         let tokens = Lexer::new(sql).tokenize().map_err(|err| syntax_error(&err, sql))?;
         let statement = Parser::new(tokens).parse().map_err(|err| syntax_error(&err, sql))?;
@@ -459,17 +720,21 @@ impl EngineState {
         session.txn_span = Some(
             tracing::info_span!("transaction", txn_id = txn_id.0, isolation = ?isolation_level),
         );
+        self.current_txn = Some((session.session_id, txn_id));
         Ok(ResultSet::rows_affected(0))
     }
 
     fn handle_commit(&mut self, session: &mut SessionState) -> Result<ResultSet> {
         match session.txn_slot {
-            TxnSlot::None => Err(Error::NoActiveTransaction { statement: "COMMIT".to_string() }),
+            TxnSlot::None | TxnSlot::TimedOut => {
+                Err(Error::NoActiveTransaction { statement: "COMMIT".to_string() })
+            }
             TxnSlot::Aborted(txn_id) => {
                 self.txn_manager.abort(txn_id, &self.buffer_pool)?;
                 self.reload_catalog()?;
                 session.txn_slot = TxnSlot::None;
                 session.txn_span = None;
+                self.current_txn = None;
                 self.maybe_checkpoint();
                 Ok(ResultSet::RolledBack)
             }
@@ -477,6 +742,7 @@ impl EngineState {
                 self.txn_manager.commit(txn_id, &self.buffer_pool)?;
                 session.txn_slot = TxnSlot::None;
                 session.txn_span = None;
+                self.current_txn = None;
                 self.maybe_checkpoint();
                 Ok(ResultSet::rows_affected(0))
             }
@@ -493,6 +759,7 @@ impl EngineState {
 
         session.txn_slot = TxnSlot::None;
         session.txn_span = None;
+        self.current_txn = None;
         self.maybe_checkpoint();
         Ok(ResultSet::rows_affected(0))
     }
@@ -535,7 +802,7 @@ impl EngineState {
         match session.txn_slot {
             TxnSlot::Active(txn_id) => Ok((txn_id, false)),
             TxnSlot::Aborted(_) => Err(Error::TransactionAborted),
-            TxnSlot::None => {
+            TxnSlot::None | TxnSlot::TimedOut => {
                 let txn_id =
                     self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
                 Ok((txn_id, true))

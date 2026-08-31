@@ -38,6 +38,9 @@ fn sample_errors() -> Vec<Error> {
         Error::DatabaseLocked { path: "test.db".to_string() },
         Error::FlushPoisoned,
         Error::EngineUnavailable { detail: "the engine thread's channel is closed".to_string() },
+        Error::LockTimeout { detail: "waited past the deadline".to_string() },
+        Error::IdleInTransactionTimeout,
+        Error::UnknownSession { detail: "session 3 may have already disconnected".to_string() },
     ]
 }
 
@@ -75,6 +78,9 @@ fn expected_sql_state(err: &Error) -> SqlState {
         Error::DatabaseLocked { .. } => SqlState::LOCK_NOT_AVAILABLE,
         Error::FlushPoisoned => SqlState::IO_ERROR,
         Error::EngineUnavailable { .. } => SqlState::CONNECTION_FAILURE,
+        Error::LockTimeout { .. } => SqlState::LOCK_NOT_AVAILABLE,
+        Error::IdleInTransactionTimeout => SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
+        Error::UnknownSession { .. } => SqlState::CONNECTION_FAILURE,
     }
 }
 

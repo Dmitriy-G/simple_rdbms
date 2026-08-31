@@ -21,12 +21,18 @@ resolved rather than reaching back up to ask for them.
   into more than one. `slow_query_warn_threshold_ms` is how long a
   statement may run before `Database::execute` logs it at `warn` instead
   of the ordinary `debug` per-statement line - see CLAUDE.md's logging
-  section.
+  section. `lock_wait_timeout_ms` bounds how long a `BEGIN` or autocommit
+  statement parks waiting for another session's open explicit transaction
+  to finish before failing with `55P03`. `idle_in_transaction_timeout_ms`
+  bounds how long an explicit transaction may sit with no statement
+  arriving before the engine aborts it on its own.
 - `DbConfig::DEFAULT_PAGE_SIZE` - 4 KiB, matching common OS page sizes.
 - `DbConfig::DEFAULT_BUFFER_POOL_SIZE` - 64 frames.
 - `DbConfig::DEFAULT_CHECKPOINT_BYTE_THRESHOLD` - 4 MiB of log growth.
 - `DbConfig::DEFAULT_DWB_CAPACITY` - 64 page-image slots.
 - `DbConfig::DEFAULT_SLOW_QUERY_WARN_THRESHOLD_MS` - 100ms.
+- `DbConfig::DEFAULT_LOCK_WAIT_TIMEOUT_MS` - 5,000ms.
+- `DbConfig::DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS` - 60,000ms.
 - `DbConfig::new(db_path) -> Self` - builds a config pointing at `db_path`
   with every other field left at its default.
 

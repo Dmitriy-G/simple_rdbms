@@ -34,6 +34,10 @@ standard has no class-42 code specific to an index (unlike `_TABLE`), so
 Postgres itself uses for `DROP INDEX`/`CREATE INDEX` errors - are the
 correct, standard-sanctioned choice rather than inventing a Postgres-style
 `42P`-prefixed extension code for something the standard already covers.
+`IDLE_IN_TRANSACTION_SESSION_TIMEOUT` (`25P03`) is Postgres's own extension
+code for exactly this condition - an explicit transaction the engine aborts
+on its own because no statement arrived before `DbConfig::idle_in_transaction_timeout_ms`
+elapsed - and maps to `Error::IdleInTransactionTimeout`.
 
 ## Key Components
 
@@ -62,6 +66,7 @@ correct, standard-sanctioned choice rather than inventing a Postgres-style
   | `UNIQUE_VIOLATION` | `23505` | 23 - integrity constraint violation |
   | `NO_ACTIVE_SQL_TRANSACTION` | `25P01` | 25 - invalid transaction state |
   | `IN_FAILED_SQL_TRANSACTION` | `25P02` | 25 - invalid transaction state |
+  | `IDLE_IN_TRANSACTION_SESSION_TIMEOUT` | `25P03` | 25 - invalid transaction state |
   | `LOCK_NOT_AVAILABLE` | `55P03` | 55 - object not in prerequisite state |
   | `SERIALIZATION_FAILURE` | `40001` | 40 - transaction rollback |
   | `STATEMENT_COMPLETION_UNKNOWN` | `40003` | 40 - transaction rollback |
