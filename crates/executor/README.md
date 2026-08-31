@@ -58,7 +58,8 @@ cost-based choice among join algorithms would come from. See
 
 Workspace: `common`, `types`, `catalog`, `storage`, `txn`, `planner`.
 External: `thiserror`, for `ExecutorError`. Dev-only: `storage` again, with
-its `test-util` feature enabled, plus `tempfile`.
+its `test-util` feature enabled, plus `tempfile` and `test-support`
+(`crates/test-support/README.md`) for shared pool-opening fixtures.
 
 ## Configuration
 

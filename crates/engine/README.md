@@ -135,8 +135,11 @@ Dev-only: this crate again with its `test-util` feature enabled (for
 `Database::open_with_devices`, used by the crash-injection harness to open
 against fault-injecting `BlockDevice`s and a fault-injecting
 `storage::wal::SegmentStore` instead of real files), plus
-`tempfile` and `proptest` (for `tests/index_equivalence.rs`'s randomized
-index-vs-sequential-scan comparison).
+`tempfile`, `proptest` (for `tests/index_equivalence.rs`'s randomized
+index-vs-sequential-scan comparison), `tracing-subscriber`/`serde_json`
+(for `tests/logging.rs`'s capturing subscriber), and `test-support`
+(`crates/test-support/README.md`) for the shared fault-injecting-device
+and crash-injection-sweep fixtures `tests/crash_injection.rs` builds on.
 
 ## Configuration
 

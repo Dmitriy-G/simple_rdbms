@@ -20,8 +20,9 @@ or disk.
   small enough that a few hundred filler records reliably span three or
   more segments.
 - `open_counting(path, target_segment_size) -> (LogManager, calls, bytes)` -
-  opens a `LogManager` through a fresh `support::CountingSegmentStore`
-  (`support/mod.MD`), returning the shared call/byte counters alongside it
+  opens a `LogManager` through a fresh `test_support::CountingSegmentStore`
+  (`crates/test-support/src/devices.MD`), returning the shared call/byte
+  counters alongside it
   - the mechanism `opening_a_long_log_reads_only_the_live_tail` uses to
   prove `open` reads a bounded number of bytes rather than one
   proportional to total history. Passes a throwaway, never-read `opens`

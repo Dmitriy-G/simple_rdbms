@@ -3,23 +3,16 @@ use std::path::Path;
 
 use common::{Lsn, PageId, TxnId};
 use storage::buffer::BufferPool;
-use storage::disk::DiskManager;
-use storage::dwb::DoubleWriteBuffer;
-use storage::page::PAGE_SIZE;
 use storage::recovery;
-use storage::replacer::LruKReplacer;
 use storage::wal::{
     FileSegmentStore, HEADER_LEN, LogManager, LogRecord, LogRecordKind, SegmentStore, segment_path,
 };
+use test_support::PoolOptions;
 
 const SMALL_SEGMENT: u64 = 512;
 
 fn open_pool(dir: &Path, target_segment_size: u64) -> Result<BufferPool, Box<dyn Error>> {
-    let disk = DiskManager::open(dir.join("test.db"), PAGE_SIZE)?;
-    let dwb =
-        DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    let log = LogManager::open_with_segment_size(dir.join("test.db.wal"), target_segment_size)?;
-    Ok(BufferPool::new(disk, dwb, log, 8, Box::new(LruKReplacer::new(8, 2))))
+    test_support::open_pool(dir, PoolOptions::new(8).segment_size(target_segment_size))
 }
 
 fn filler(log: &LogManager, txn_id: TxnId) -> Result<Lsn, Box<dyn Error>> {

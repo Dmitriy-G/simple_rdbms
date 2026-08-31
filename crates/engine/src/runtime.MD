@@ -369,7 +369,7 @@ rediscover by watching a test go quiet.
   indefinitely. Finally removes the session from `sessions` and calls
   `try_admit_waiters`, since freeing the slot here (unlike a `COMMIT`)
   has no statement-completion path of its own to do it.
-- `EngineStats` - `pub`, `#[cfg(any(test, feature = "test-util"))]`,
+- `EngineStats` - `pub`, `#[cfg(feature = "test-util")]`,
   `Debug + Clone + Copy + Default`. A snapshot of engine-wide counters a
   test can assert on without going through tracing at all -
   `checkpoints_written: u64` today, read via `EngineState::stats()`.

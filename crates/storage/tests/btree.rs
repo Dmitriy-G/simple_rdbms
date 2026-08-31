@@ -7,20 +7,13 @@ use rand::seq::SliceRandom;
 use storage::StorageError;
 use storage::btree::{BTreeIndex, LeafScan, MAX_KEY_SIZE};
 use storage::buffer::BufferPool;
-use storage::disk::DiskManager;
-use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
-use storage::replacer::LruKReplacer;
-use storage::wal::LogManager;
+use test_support::PoolOptions;
 
 const TXN: TxnId = TxnId(0);
 
 fn open_pool(dir: &Path, pool_size: usize) -> Result<BufferPool, Box<dyn Error>> {
-    let disk = DiskManager::open(dir.join("test.db"), PAGE_SIZE)?;
-    let dwb =
-        DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    let log = LogManager::open(dir.join("test.db.wal"))?;
-    Ok(BufferPool::new(disk, dwb, log, pool_size, Box::new(LruKReplacer::new(pool_size, 2))))
+    test_support::open_pool(dir, PoolOptions::new(pool_size))
 }
 
 fn key_of(i: i32) -> Vec<u8> {

@@ -1,8 +1,6 @@
 use common::DbConfig;
 use engine::Database;
-
-mod support;
-use support::{CaptureBuf, captured_events, set_capturing_subscriber};
+use test_support::{CaptureBuf, captured_events, set_capturing_subscriber};
 
 #[test]
 fn a_successful_statement_is_logged_at_info_with_no_literal_values() {

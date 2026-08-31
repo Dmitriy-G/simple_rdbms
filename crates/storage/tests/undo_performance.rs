@@ -10,10 +10,7 @@ use storage::page::PAGE_SIZE;
 use storage::recovery::undo_transaction;
 use storage::replacer::LruKReplacer;
 use storage::wal::{DEFAULT_SEGMENT_SIZE, FileSegmentStore, LogManager, SegmentStore};
-
-mod support;
-
-use support::CountingSegmentStore;
+use test_support::CountingSegmentStore;
 
 const SMALL_SEGMENT: u64 = 512;
 

@@ -1,0 +1,19 @@
+[package]
+name = "test-support"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No [lints] workspace = true here: the only two lints the workspace adds
+# beyond clippy's own defaults are unwrap_used/expect_used, and every
+# helper in this crate exists to let a test panic loudly on its own setup
+# failure, the same as the test files it replaces already did.
+
+[dependencies]
+common = { workspace = true }
+storage = { workspace = true, features = ["test-util"] }
+tempfile = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json = { workspace = true }

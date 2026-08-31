@@ -29,6 +29,7 @@ metrics = { workspace = true }
 # they link against a normal (non-`--cfg test`) build of this library, the
 # same as any other crate's tests would.
 storage = { workspace = true, features = ["test-util"] }
+test-support = { workspace = true }
 tempfile = { workspace = true }
 proptest = { workspace = true }
 tracing-subscriber = { workspace = true }

@@ -86,10 +86,11 @@ exactly one connection.
 - `checkpoint_count(threshold, drive, statements) -> Result<u64>` -
   private helper. Opens a `Database`, creates a table, runs `drive`
   against it, and reads `Database::stats()?.checkpoints_written`
-  (`database.MD`, `#[cfg(any(test, feature = "test-util"))]`) - a real
+  (`database.MD`, `#[cfg(feature = "test-util")]`) - a real
   counter on the engine rather than a count of "checkpoint complete" log
-  events. This file used to capture that log line through
-  `tests/support/mod.MD`'s subscriber, but a thread-local
+  events. This file used to capture that log line through the same
+  thread-local capturing subscriber `crates/test-support/src/logging.MD`
+  now provides (then a local `tests/support/mod.rs`), but a thread-local
   `tracing::subscriber::set_default` only guarantees isolation from other
   *threads*; tracing's callsite-interest cache is process-wide, so a
   concurrently-running test on another thread with no subscriber of its

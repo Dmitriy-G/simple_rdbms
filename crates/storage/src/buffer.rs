@@ -14,7 +14,7 @@ use crate::page::{Page, PageReadGuard, PageWriteGuard};
 use crate::replacer::Replacer;
 use crate::wal::{LogManager, LogRecord, LogRecordKind};
 
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(feature = "test-util")]
 use std::sync::atomic::AtomicUsize;
 
 #[cfg(debug_assertions)]
@@ -66,7 +66,7 @@ struct PoolIndex {
     evicting: std::collections::HashSet<PageId>,
 }
 
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(feature = "test-util")]
 type InstallHook = dyn Fn(FrameId) + Send + Sync;
 
 pub struct BufferPool {
@@ -80,17 +80,17 @@ pub struct BufferPool {
     frame_wait_timeout: Duration,
     flush_poisoned: AtomicBool,
     flush_sequence: Mutex<()>,
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     fetch_count: AtomicUsize,
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     write_observations: Mutex<Vec<WriteObservation>>,
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     install_hook: Mutex<Option<Box<InstallHook>>>,
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     frame_wait_count: AtomicUsize,
 }
 
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(feature = "test-util")]
 #[derive(Debug, Clone, Copy)]
 pub struct WriteObservation {
     pub page_id: PageId,
@@ -138,13 +138,13 @@ impl BufferPool {
             frame_wait_timeout: Self::DEFAULT_FRAME_WAIT_TIMEOUT,
             flush_poisoned: AtomicBool::new(false),
             flush_sequence: Mutex::new(()),
-            #[cfg(any(test, feature = "test-util"))]
+            #[cfg(feature = "test-util")]
             fetch_count: AtomicUsize::new(0),
-            #[cfg(any(test, feature = "test-util"))]
+            #[cfg(feature = "test-util")]
             write_observations: Mutex::new(Vec::new()),
-            #[cfg(any(test, feature = "test-util"))]
+            #[cfg(feature = "test-util")]
             install_hook: Mutex::new(None),
-            #[cfg(any(test, feature = "test-util"))]
+            #[cfg(feature = "test-util")]
             frame_wait_count: AtomicUsize::new(0),
         }
     }
@@ -154,27 +154,27 @@ impl BufferPool {
         self
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn fetch_count(&self) -> usize {
         self.fetch_count.load(Ordering::Relaxed)
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn reset_fetch_count(&self) {
         self.fetch_count.store(0, Ordering::Relaxed);
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn frame_wait_count(&self) -> usize {
         self.frame_wait_count.load(Ordering::Relaxed)
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn write_observations(&self) -> Vec<WriteObservation> {
         recover_lock(self.write_observations.lock(), "BufferPool.write_observations").clone()
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn frame_count_for(&self, page_id: PageId) -> usize {
         recover_lock(self.index.lock(), "BufferPool.index")
             .frame_page
@@ -183,17 +183,17 @@ impl BufferPool {
             .count()
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn set_install_hook(&self, hook: impl Fn(FrameId) + Send + Sync + 'static) {
         *recover_lock(self.install_hook.lock(), "BufferPool.install_hook") = Some(Box::new(hook));
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn clear_install_hook(&self) {
         *recover_lock(self.install_hook.lock(), "BufferPool.install_hook") = None;
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     fn call_install_hook(&self, frame_id: FrameId) {
         let hook = recover_lock(self.install_hook.lock(), "BufferPool.install_hook");
         if let Some(hook) = hook.as_deref() {
@@ -201,7 +201,7 @@ impl BufferPool {
         }
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn assert_frame_accounting(&self) {
         let index = recover_lock(self.index.lock(), "BufferPool.index");
 
@@ -262,7 +262,7 @@ impl BufferPool {
 
     fn fetch_frame(&self, page_id: PageId) -> Result<FrameId, StorageError> {
         tracing::trace!(page_id = page_id.0, "fetch_page");
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(feature = "test-util")]
         self.fetch_count.fetch_add(1, Ordering::Relaxed);
 
         if let Some(frame_id) = self.pin_if_cached(page_id) {
@@ -307,7 +307,7 @@ impl BufferPool {
         let result = (|| {
             metrics::counter!("buffer_pool_misses_total").increment(1);
             let frame_id = self.acquire_free_frame()?;
-            #[cfg(any(test, feature = "test-util"))]
+            #[cfg(feature = "test-util")]
             self.call_install_hook(frame_id);
             let mut page = Page::new(page_id);
             match self.disk_manager.read_page(page_id, &mut page) {
@@ -342,7 +342,7 @@ impl BufferPool {
         let page_id = self.disk_manager.allocate_page()?;
         let lsn = self.append_log(txn_id, LogRecordKind::AllocPage { page_id })?;
         let frame_id = self.acquire_free_frame()?;
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(feature = "test-util")]
         self.call_install_hook(frame_id);
         let frame_id = self.try_install(frame_id, page_id, Page::new(page_id), Some(lsn));
         Ok((page_id, self.write_guard(page_id, frame_id)))
@@ -493,7 +493,7 @@ impl BufferPool {
             }
 
             metrics::counter!("buffer_pool_frame_waits_total").increment(1);
-            #[cfg(any(test, feature = "test-util"))]
+            #[cfg(feature = "test-util")]
             self.frame_wait_count.fetch_add(1, Ordering::Relaxed);
             let wait_start = Instant::now();
             let (guard, _timed_out) = recover_lock(
@@ -653,7 +653,7 @@ impl BufferPool {
             "batch reached disk with max page_lsn {max_page_lsn:?} ahead of durable_lsn \
              {durable_lsn:?}"
         );
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(feature = "test-util")]
         {
             let mut observations =
                 recover_lock(self.write_observations.lock(), "BufferPool.write_observations");

@@ -68,7 +68,8 @@ isolate. See `docs/ROADMAP.md` and `docs/adr/0004-acid-scope.md`.
 Workspace: `common`, `storage` (locks and log records are keyed by
 `storage`'s `Rid`/`PageId`/`TxnId`, and `write_checkpoint`/`begin`/`commit`/
 `abort` all append to a live `BufferPool`'s WAL). External: `thiserror`,
-for `TxnError`. Dev-only: `tempfile`.
+for `TxnError`. Dev-only: `tempfile` and `test-support`
+(`crates/test-support/README.md`) for its shared pool-opening fixture.
 
 ## Configuration
 

@@ -1,13 +1,10 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
-use std::fs::OpenOptions;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use common::{PageId, Rid, TxnId};
 use storage::StorageError;
-use storage::block_device::{BlockDevice, DurabilityModel, FaultyDevice, FileDevice};
+use storage::block_device::DurabilityModel;
 use storage::btree::BTreeIndex;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
@@ -15,46 +12,11 @@ use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
-use storage::wal::{
-    DEFAULT_SEGMENT_SIZE, FaultySegmentStore, LogManager, LogRecordKind, SegmentStore,
-};
+use storage::wal::{DEFAULT_SEGMENT_SIZE, LogManager, LogRecordKind};
+use test_support::{CrashWorkload, DeviceTriple, assert_workload_is_crash_safe};
 
-type DeviceTriple = (Box<dyn BlockDevice>, Arc<dyn SegmentStore>, Box<dyn BlockDevice>);
-
-fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
-    OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
-}
-
-fn faulty_devices(
-    dir: &Path,
-    counter: &Arc<AtomicU64>,
-    fail_at: u64,
-    model: DurabilityModel,
-) -> Result<DeviceTriple, Box<dyn Error>> {
-    let db_file = open_file(&dir.join("test.db"))?;
-    let dwb_file = open_file(&dir.join("test.db.dwb"))?;
-    let db_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
-        Box::new(FileDevice::new(db_file)),
-        counter.clone(),
-        fail_at,
-        model,
-    ));
-    let wal_store: Arc<dyn SegmentStore> =
-        Arc::new(FaultySegmentStore::new(dir.join("test.db.wal"), counter.clone(), fail_at, model));
-    let dwb_device: Box<dyn BlockDevice> = Box::new(FaultyDevice::with_model(
-        Box::new(FileDevice::new(dwb_file)),
-        counter.clone(),
-        fail_at,
-        model,
-    ));
-    Ok((db_device, wal_store, dwb_device))
-}
-
-fn open_recovered_pool(
-    db_device: Box<dyn BlockDevice>,
-    wal_store: Arc<dyn SegmentStore>,
-    dwb_device: Box<dyn BlockDevice>,
-) -> Result<BufferPool, StorageError> {
+fn open_recovered_pool(devices: DeviceTriple) -> Result<BufferPool, StorageError> {
+    let (db_device, wal_store, dwb_device) = devices;
     let disk_manager = DiskManager::open_with_device(db_device, PAGE_SIZE, None)?;
     let log_manager = LogManager::open_with_segment_store(wal_store, DEFAULT_SEGMENT_SIZE)?;
     let dwb = DoubleWriteBuffer::open_with_device(dwb_device, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
@@ -96,139 +58,114 @@ fn commit(pool: &BufferPool, txn_id: TxnId) -> Result<(), StorageError> {
     Ok(())
 }
 
-fn run_until_crash(
-    db_device: Box<dyn BlockDevice>,
-    wal_store: Arc<dyn SegmentStore>,
-    dwb_device: Box<dyn BlockDevice>,
-    keys: &[Vec<u8>],
-) -> usize {
-    let Ok(pool) = open_recovered_pool(db_device, wal_store, dwb_device) else {
-        return 0;
-    };
-    let pool = &pool;
-
-    let create: Result<PageId, StorageError> = (|| {
-        let index = BTreeIndex::create(pool, TxnId(0))?;
-        pool.set_catalog_first_page(TxnId(0), index.root_page_id())?;
-        commit(pool, TxnId(0))?;
-        Ok(index.root_page_id())
-    })();
-    let Ok(mut root_page_id) = create else {
-        return 0;
-    };
-
-    let mut committed = 0usize;
-    for (i, key) in keys.iter().enumerate() {
-        let txn_id = TxnId(i as u64 + 1);
-        let result: Result<PageId, StorageError> = (|| {
-            let mut index = BTreeIndex::open(pool, root_page_id);
-            index.insert(txn_id, key, Rid::new(PageId(1), i as u16))?;
-            pool.set_catalog_first_page(txn_id, index.root_page_id())?;
-            commit(pool, txn_id)?;
-            Ok(index.root_page_id())
-        })();
-        match result {
-            Ok(new_root) => {
-                root_page_id = new_root;
-                committed += 1;
-            }
-            Err(_) => break,
-        }
-    }
-    committed
+struct BTreeWorkload<'a> {
+    keys: &'a [Vec<u8>],
 }
 
-fn assert_workload_is_crash_safe(
-    model: DurabilityModel,
-    keys: &[Vec<u8>],
-) -> Result<(), Box<dyn Error>> {
-    let total_writes = {
-        let dir = tempfile::tempdir()?;
-        let counter = Arc::new(AtomicU64::new(0));
-        let (db, wal, dwb) = faulty_devices(dir.path(), &counter, u64::MAX, model)?;
-        let committed = run_until_crash(db, wal, dwb, keys);
-        assert_eq!(committed, keys.len(), "an unfaulted run must commit every key");
-        counter.load(Ordering::Relaxed)
-    };
-    assert!(total_writes > 0, "workload must perform at least one write");
+impl CrashWorkload for BTreeWorkload<'_> {
+    type Handle = BufferPool;
+    type State = BTreeMap<Vec<u8>, Vec<Rid>>;
 
-    for fail_at in 1..=total_writes {
-        let dir = tempfile::tempdir()?;
-        let db_path_dir = dir.path();
+    fn item_count(&self) -> usize {
+        self.keys.len()
+    }
 
-        let safe_prefix = {
-            let counter = Arc::new(AtomicU64::new(0));
-            let (db, wal, dwb) = faulty_devices(db_path_dir, &counter, fail_at, model)?;
-            run_until_crash(db, wal, dwb, keys)
-        };
+    fn open(&self, _dir: &Path, devices: DeviceTriple) -> Result<Self::Handle, Box<dyn Error>> {
+        Ok(open_recovered_pool(devices)?)
+    }
 
-        for recovery_fail_at in [1u64, 2] {
-            let counter = Arc::new(AtomicU64::new(0));
-            if let Ok((db, wal, dwb)) =
-                faulty_devices(db_path_dir, &counter, recovery_fail_at, model)
-            {
-                let _ = open_recovered_pool(db, wal, dwb);
+    fn drive(&self, pool: &mut Self::Handle) -> usize {
+        let pool: &BufferPool = pool;
+        let create: Result<PageId, StorageError> = (|| {
+            let index = BTreeIndex::create(pool, TxnId(0))?;
+            pool.set_catalog_first_page(TxnId(0), index.root_page_id())?;
+            commit(pool, TxnId(0))?;
+            Ok(index.root_page_id())
+        })();
+        let Ok(mut root_page_id) = create else { return 0 };
+
+        let mut committed = 0usize;
+        for (i, key) in self.keys.iter().enumerate() {
+            let txn_id = TxnId(i as u64 + 1);
+            let result: Result<PageId, StorageError> = (|| {
+                let mut index = BTreeIndex::open(pool, root_page_id);
+                index.insert(txn_id, key, Rid::new(PageId(1), i as u16))?;
+                pool.set_catalog_first_page(txn_id, index.root_page_id())?;
+                commit(pool, txn_id)?;
+                Ok(index.root_page_id())
+            })();
+            match result {
+                Ok(new_root) => {
+                    root_page_id = new_root;
+                    committed += 1;
+                }
+                Err(_) => break,
             }
         }
+        committed
+    }
 
-        let counter = Arc::new(AtomicU64::new(0));
-        let (db, wal, dwb) = faulty_devices(db_path_dir, &counter, u64::MAX, model)?;
-        let recovered = open_recovered_pool(db, wal, dwb)?;
+    fn expected_state(&self, safe_prefix: usize) -> Result<Self::State, Box<dyn Error>> {
+        let mut map: BTreeMap<Vec<u8>, Vec<Rid>> = BTreeMap::new();
+        for (i, key) in self.keys.iter().enumerate() {
+            let entry = map.entry(key.clone()).or_default();
+            if i < safe_prefix {
+                entry.push(Rid::new(PageId(1), i as u16));
+            }
+        }
+        for rids in map.values_mut() {
+            rids.sort_by_key(|rid| (rid.page_id, rid.slot));
+        }
+        Ok(map)
+    }
 
-        let root_page_id = recovered.catalog_first_page()?;
-        assert!(
-            safe_prefix == 0 || root_page_id.is_some(),
-            "model={model:?}, fail_at={fail_at}: at least one key was safely committed, so its \
-             transaction's commit made the tree's creation durable too - a durable root pointer \
-             must exist"
-        );
+    fn observed_state(
+        &self,
+        safe_prefix: usize,
+        pool: &mut Self::Handle,
+    ) -> Result<Self::State, Box<dyn Error>> {
+        let root_page_id = pool.catalog_first_page()?;
+        if safe_prefix > 0 && root_page_id.is_none() {
+            return Err("at least one key was safely committed, so its transaction's commit \
+                         made the tree's creation durable too - a durable root pointer must exist"
+                .into());
+        }
 
-        let Some(root_page_id) = root_page_id else {
-            continue;
-        };
-        let index = BTreeIndex::open(&recovered, root_page_id);
-        index.check_invariants(None).map_err(|reason| -> Box<dyn Error> {
-            format!(
-                "model={model:?}, fail_at={fail_at}, safe_prefix={safe_prefix}/{}: {reason}",
-                keys.len()
-            )
-            .into()
-        })?;
-
-        let mut checked_keys: HashSet<&[u8]> = HashSet::new();
-        for key in keys {
-            if !checked_keys.insert(key.as_slice()) {
+        let mut map: BTreeMap<Vec<u8>, Vec<Rid>> = BTreeMap::new();
+        let mut seen: HashSet<&[u8]> = HashSet::new();
+        for key in self.keys {
+            if !seen.insert(key.as_slice()) {
                 continue;
             }
-            let mut expected: Vec<Rid> = keys
-                .iter()
-                .enumerate()
-                .filter(|(i, k)| *k == key && *i < safe_prefix)
-                .map(|(i, _)| Rid::new(PageId(1), i as u16))
-                .collect();
-            let mut rids = index.get(key)?;
-            expected.sort_by_key(|rid| (rid.page_id, rid.slot));
-            rids.sort_by_key(|rid| (rid.page_id, rid.slot));
-            assert_eq!(
-                rids,
-                expected,
-                "model={model:?}, fail_at={fail_at}, safe_prefix={safe_prefix}/{}: recovered \
-                 rids for a key must be exactly those whose insert transaction committed \
-                 before the crash",
-                keys.len()
-            );
+            let rids = match root_page_id {
+                Some(root_page_id) => {
+                    let index = BTreeIndex::open(pool, root_page_id);
+                    index
+                        .check_invariants(None)
+                        .map_err(|reason| -> Box<dyn Error> { reason.into() })?;
+                    let mut rids = index.get(key)?;
+                    rids.sort_by_key(|rid| (rid.page_id, rid.slot));
+                    rids
+                }
+                None => Vec::new(),
+            };
+            map.insert(key.clone(), rids);
         }
+        Ok(map)
     }
-    Ok(())
 }
 
 #[test]
 fn workload_keys_actually_force_a_root_split() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let counter = Arc::new(AtomicU64::new(0));
-    let (db, wal, dwb) =
-        faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
-    let pool = open_recovered_pool(db, wal, dwb)?;
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let devices = test_support::faulty_devices(
+        dir.path(),
+        &counter,
+        u64::MAX,
+        DurabilityModel::write_is_durable(),
+    )?;
+    let pool = open_recovered_pool(devices)?;
     let original_root = BTreeIndex::create(&pool, TxnId(0))?.root_page_id();
 
     let mut index = BTreeIndex::open(&pool, original_root);
@@ -246,10 +183,14 @@ fn workload_keys_actually_force_a_root_split() -> Result<(), Box<dyn Error>> {
 #[test]
 fn duplicate_workload_keys_actually_force_a_split_from_duplicates() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let counter = Arc::new(AtomicU64::new(0));
-    let (db, wal, dwb) =
-        faulty_devices(dir.path(), &counter, u64::MAX, DurabilityModel::write_is_durable())?;
-    let pool = open_recovered_pool(db, wal, dwb)?;
+    let counter = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let devices = test_support::faulty_devices(
+        dir.path(),
+        &counter,
+        u64::MAX,
+        DurabilityModel::write_is_durable(),
+    )?;
+    let pool = open_recovered_pool(devices)?;
     let original_root = BTreeIndex::create(&pool, TxnId(0))?.root_page_id();
 
     let mut index = BTreeIndex::open(&pool, original_root);
@@ -273,49 +214,66 @@ fn duplicate_workload_keys_actually_force_a_split_from_duplicates() -> Result<()
 #[test]
 fn enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::write_is_durable(), &workload_keys())
+    let keys = workload_keys();
+    assert_workload_is_crash_safe(
+        &BTreeWorkload { keys: &keys },
+        DurabilityModel::write_is_durable(),
+    )
 }
 
 #[test]
 fn enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::requires_sync(), &workload_keys())
+    let keys = workload_keys();
+    assert_workload_is_crash_safe(&BTreeWorkload { keys: &keys }, DurabilityModel::requires_sync())
 }
 
 #[test]
 fn enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::torn_write(), &workload_keys())
+    let keys = workload_keys();
+    assert_workload_is_crash_safe(&BTreeWorkload { keys: &keys }, DurabilityModel::torn_write())
 }
 
 #[test]
 fn enough_inserts_to_force_a_root_split_survive_a_crash_at_every_write_with_torn_and_unsynced_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::torn_write_requires_sync(), &workload_keys())
+    let keys = workload_keys();
+    assert_workload_is_crash_safe(
+        &BTreeWorkload { keys: &keys },
+        DurabilityModel::torn_write_requires_sync(),
+    )
 }
 
 #[test]
 fn duplicate_heavy_workload_survives_a_crash_at_every_write() -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::write_is_durable(), &duplicate_workload_keys())
+    let keys = duplicate_workload_keys();
+    assert_workload_is_crash_safe(
+        &BTreeWorkload { keys: &keys },
+        DurabilityModel::write_is_durable(),
+    )
 }
 
 #[test]
 fn duplicate_heavy_workload_survives_a_crash_at_every_write_with_unsynced_writes_lost()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::requires_sync(), &duplicate_workload_keys())
+    let keys = duplicate_workload_keys();
+    assert_workload_is_crash_safe(&BTreeWorkload { keys: &keys }, DurabilityModel::requires_sync())
 }
 
 #[test]
 fn duplicate_heavy_workload_survives_a_crash_at_every_write_with_torn_writes()
 -> Result<(), Box<dyn Error>> {
-    assert_workload_is_crash_safe(DurabilityModel::torn_write(), &duplicate_workload_keys())
+    let keys = duplicate_workload_keys();
+    assert_workload_is_crash_safe(&BTreeWorkload { keys: &keys }, DurabilityModel::torn_write())
 }
 
 #[test]
 fn duplicate_heavy_workload_survives_a_crash_at_every_write_with_torn_and_unsynced_writes()
 -> Result<(), Box<dyn Error>> {
+    let keys = duplicate_workload_keys();
     assert_workload_is_crash_safe(
+        &BTreeWorkload { keys: &keys },
         DurabilityModel::torn_write_requires_sync(),
-        &duplicate_workload_keys(),
     )
 }

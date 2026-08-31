@@ -2,7 +2,7 @@ use catalog::Schema;
 use common::{DbConfig, Result};
 
 use crate::result_set::ResultSet;
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(feature = "test-util")]
 use crate::runtime::EngineStats;
 use crate::runtime::{EngineHandle, SessionHandle};
 
@@ -23,7 +23,7 @@ impl Database {
         Ok(Self { session })
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn open_with_devices(
         config: DbConfig,
         db_device: Box<dyn storage::block_device::BlockDevice>,
@@ -62,12 +62,12 @@ impl Database {
         self.session.table_schema(name)
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn kill_engine_for_test(&self) {
         self.session.kill_engine_for_test();
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn stats(&self) -> Result<EngineStats> {
         self.session.stats()
     }

@@ -1,6 +1,3 @@
-use std::io::Write;
-use std::sync::{Arc, Mutex};
-
 use common::TxnId;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
@@ -9,31 +6,7 @@ use storage::page::PAGE_SIZE;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
 use storage::wal::{LogManager, LogRecordKind};
-
-#[derive(Clone, Default)]
-struct CaptureBuf(Arc<Mutex<Vec<u8>>>);
-
-#[cfg(test)]
-impl Write for CaptureBuf {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-fn captured_events(buf: &CaptureBuf) -> Vec<serde_json::Value> {
-    let bytes = buf.0.lock().unwrap();
-    String::from_utf8_lossy(&bytes)
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("captured line is valid JSON"))
-        .collect()
-}
+use test_support::{CaptureBuf, captured_events};
 
 #[test]
 fn recovery_summary_event_reports_winners_losers_and_record_count() {

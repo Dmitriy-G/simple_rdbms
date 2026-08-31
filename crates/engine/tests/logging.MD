@@ -7,9 +7,14 @@ parsing them back out with `serde_json` - the same technique
 `storage/tests/recovery_logging.rs` uses for `recovery::recover`'s summary
 event, applied here to the connection/transaction/statement span
 hierarchy and the literal-redaction rule. `CaptureBuf`/`captured_events`/
-`set_capturing_subscriber` themselves live in `tests/support/mod.MD` now,
-shared with `sessions.rs`, which needs the identical capture-and-inspect
-pattern to observe checkpoint completion events.
+`set_capturing_subscriber` themselves live in the shared `test-support`
+crate now (`crates/test-support/src/logging.MD`) - this file is the
+legitimate use CLAUDE.md's testing rules carve out for asserting on log
+output, since logging itself is exactly the behavior under test here.
+`sessions.rs` used the identical capture-and-inspect pattern to observe
+checkpoint completion events once; it has since moved to a real counter
+(`crates/engine/tests/sessions.MD`), since that was a proxy for a
+different behavior, not a test of logging itself.
 
 ## Key Components
 

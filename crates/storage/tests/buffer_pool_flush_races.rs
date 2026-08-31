@@ -1,7 +1,5 @@
 use std::error::Error;
-use std::fs::OpenOptions;
 use std::io;
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -10,21 +8,13 @@ use std::time::Duration;
 use common::{PageId, TxnId};
 use storage::StorageError;
 use storage::block_device::{BlockDevice, FileDevice};
-use storage::buffer::BufferPool;
-use storage::disk::DiskManager;
-use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
-use storage::replacer::LruKReplacer;
-use storage::wal::LogManager;
+use test_support::{PoolOptions, open_file};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 const PAUSE_SAFETY_NET: Duration = Duration::from_secs(10);
 const SHORT_FRAME_WAIT_TIMEOUT: Duration = Duration::from_millis(100);
 const PAYLOAD_OFFSET: usize = 100;
-
-fn open_file(path: &Path) -> io::Result<std::fs::File> {
-    OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
-}
 
 fn recv_within<T>(rx: &mpsc::Receiver<T>, timeout: Duration, what: &str) -> T {
     rx.recv_timeout(timeout)
@@ -117,32 +107,6 @@ impl BlockDevice for PausingDevice {
     }
 }
 
-struct OpenPool {
-    pool: BufferPool,
-}
-
-fn open_pool(dir: &Path, pool_size: usize) -> Result<OpenPool, Box<dyn Error>> {
-    let disk = DiskManager::open(dir.join("test.db"), PAGE_SIZE)?;
-    let dwb =
-        DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    let log = LogManager::open(dir.join("test.db.wal"))?;
-    let replacer = Box::new(LruKReplacer::new(pool_size, 2));
-    Ok(OpenPool { pool: BufferPool::new(disk, dwb, log, pool_size, replacer) })
-}
-
-fn open_pool_with_data_device(
-    dir: &Path,
-    pool_size: usize,
-    data_device: Box<dyn BlockDevice>,
-) -> Result<OpenPool, Box<dyn Error>> {
-    let disk = DiskManager::open_with_device(data_device, PAGE_SIZE, None)?;
-    let dwb =
-        DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    let log = LogManager::open(dir.join("test.db.wal"))?;
-    let replacer = Box::new(LruKReplacer::new(pool_size, 2));
-    Ok(OpenPool { pool: BufferPool::new(disk, dwb, log, pool_size, replacer) })
-}
-
 fn page_offset(page_id: PageId) -> u64 {
     page_id.0 as u64 * PAGE_SIZE as u64
 }
@@ -152,7 +116,7 @@ fn a_failed_eviction_does_not_leak_the_frame() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     const POOL_SIZE: usize = 1;
 
-    drop(open_pool(dir.path(), POOL_SIZE)?);
+    drop(test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE))?);
 
     let db_file = open_file(&dir.path().join("test.db"))?;
     let data_device: Box<dyn BlockDevice> = Box::new(FailOnceDevice {
@@ -160,7 +124,8 @@ fn a_failed_eviction_does_not_leak_the_frame() -> Result<(), Box<dyn Error>> {
         write_count: AtomicUsize::new(0),
         fail_on_write: 1,
     });
-    let pool = open_pool_with_data_device(dir.path(), POOL_SIZE, data_device)?.pool;
+    let pool =
+        test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE).data_device(data_device))?;
 
     let (_p0, guard) = pool.new_page(TxnId(0))?;
     drop(guard);
@@ -201,11 +166,11 @@ fn a_write_during_a_flush_leaves_the_frame_dirty() -> Result<(), Box<dyn Error>>
     const POOL_SIZE: usize = 2;
 
     let page_id = {
-        let opened = open_pool(dir.path(), POOL_SIZE)?;
-        let (page_id, mut guard) = opened.pool.new_page(TxnId(0))?;
+        let pool = test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE))?;
+        let (page_id, mut guard) = pool.new_page(TxnId(0))?;
         guard.write(TxnId(0), PAYLOAD_OFFSET, &[1])?;
         drop(guard);
-        opened.pool.flush_all()?;
+        pool.flush_all()?;
         page_id
     };
 
@@ -219,7 +184,10 @@ fn a_write_during_a_flush_leaves_the_frame_dirty() -> Result<(), Box<dyn Error>>
         reached_tx,
         release_rx,
     ));
-    let pool = Arc::new(open_pool_with_data_device(dir.path(), POOL_SIZE, data_device)?.pool);
+    let pool = Arc::new(test_support::open_pool(
+        dir.path(),
+        PoolOptions::new(POOL_SIZE).data_device(data_device),
+    )?);
 
     let mut guard = pool.fetch_page(page_id)?;
     guard.write(TxnId(1), PAYLOAD_OFFSET, &[2])?;
@@ -253,7 +221,7 @@ fn a_write_during_a_flush_leaves_the_frame_dirty() -> Result<(), Box<dyn Error>>
     pool.sync()?;
     drop(pool);
 
-    let reopened = open_pool(dir.path(), POOL_SIZE)?.pool;
+    let reopened = test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE))?;
     let guard = reopened.fetch_page_read(page_id)?;
     assert_eq!(
         guard.page().data()[PAYLOAD_OFFSET],
@@ -270,10 +238,10 @@ fn a_fetch_during_an_eviction_flush_never_sees_the_stale_page() -> Result<(), Bo
     const POOL_SIZE: usize = 1;
 
     let page_id = {
-        let opened = open_pool(dir.path(), POOL_SIZE)?;
-        let (page_id, guard) = opened.pool.new_page(TxnId(0))?;
+        let pool = test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE))?;
+        let (page_id, guard) = pool.new_page(TxnId(0))?;
         drop(guard);
-        opened.pool.flush_all()?;
+        pool.flush_all()?;
         page_id
     };
 
@@ -287,7 +255,10 @@ fn a_fetch_during_an_eviction_flush_never_sees_the_stale_page() -> Result<(), Bo
         reached_tx,
         release_rx,
     ));
-    let pool = Arc::new(open_pool_with_data_device(dir.path(), POOL_SIZE, data_device)?.pool);
+    let pool = Arc::new(test_support::open_pool(
+        dir.path(),
+        PoolOptions::new(POOL_SIZE).data_device(data_device),
+    )?);
 
     let mut guard = pool.fetch_page(page_id)?;
     guard.write(TxnId(1), 0, &[9])?;
@@ -339,10 +310,10 @@ fn a_fetch_blocked_on_a_stuck_eviction_times_out_rather_than_hanging() -> Result
     const POOL_SIZE: usize = 1;
 
     let page_id = {
-        let opened = open_pool(dir.path(), POOL_SIZE)?;
-        let (page_id, guard) = opened.pool.new_page(TxnId(0))?;
+        let pool = test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE))?;
+        let (page_id, guard) = pool.new_page(TxnId(0))?;
         drop(guard);
-        opened.pool.flush_all()?;
+        pool.flush_all()?;
         page_id
     };
 
@@ -356,7 +327,8 @@ fn a_fetch_blocked_on_a_stuck_eviction_times_out_rather_than_hanging() -> Result
         reached_tx,
         release_rx,
     ));
-    let OpenPool { pool } = open_pool_with_data_device(dir.path(), POOL_SIZE, data_device)?;
+    let pool =
+        test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE).data_device(data_device))?;
     let pool = Arc::new(pool.with_frame_wait_timeout(SHORT_FRAME_WAIT_TIMEOUT));
 
     let mut guard = pool.fetch_page(page_id)?;

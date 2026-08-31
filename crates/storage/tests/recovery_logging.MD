@@ -4,24 +4,21 @@ Proves `recovery::recover`'s `info!` "recovery complete" summary event
 (see `recovery.MD`) actually carries the fields CLAUDE.md's logging
 section promises, by installing a real `tracing` subscriber that captures
 its JSON output instead of discarding it, then parsing that output back
-out with `serde_json`.
+out with `serde_json`. `CaptureBuf`/`captured_events` themselves live in
+the shared `test-support` crate now (`crates/test-support/src/logging.MD`);
+this file used to carry its own inline copy, `#[cfg(test)]`-gated on both
+the `Write` impl and the free function because `clippy.toml`'s
+`allow-unwrap-in-tests`/`allow-expect-in-tests` only recognize an
+`.unwrap()`/`.expect()` call as "in a test" when it sits inside a
+`#[test]` function or a `#[cfg(test)]`-attributed item, not merely inside
+a file under `tests/` - a free helper function or trait impl needed the
+attribute spelled out explicitly, redundant as that was in a file that
+only ever compiled as a test binary. `test-support` sidesteps the whole
+question: it disables `unwrap_used`/`expect_used` for itself directly in
+its own `Cargo.toml`, so nothing in it needs `#[cfg(test)]` at all.
 
 ## Key Components
 
-- `CaptureBuf` - a `Clone`able `Write` implementation backed by a shared
-  `Arc<Mutex<Vec<u8>>>`, so a `tracing_subscriber::fmt` layer's writer
-  closure can hand out clones that all append to the same buffer. Its
-  `Write` impl carries `#[cfg(test)]`, and `captured_events` below is
-  itself marked `#[cfg(test)]`, even though this whole file only ever
-  compiles as a test binary: `clippy.toml`'s `allow-unwrap-in-tests`/
-  `allow-expect-in-tests` only recognize an `#[unwrap()]`/`.expect()` call
-  as "in a test" when it sits inside a `#[test]` function or a
-  `#[cfg(test)]`-attributed item, not merely inside a file under
-  `tests/` - a free helper function or trait impl needs the attribute
-  spelled out explicitly, redundant as that is here, or the lint still
-  fires.
-- `captured_events(buf) -> Vec<serde_json::Value>` - splits the captured
-  bytes into lines and parses each non-empty one as a JSON event.
 - `recovery_summary_event_reports_winners_losers_and_record_count` -
   builds a log directly against a `BufferPool` (bypassing `txn`, which
   this crate can't depend on): one transaction with a durable `Commit` but

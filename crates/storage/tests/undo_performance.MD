@@ -3,15 +3,15 @@
 `storage::recovery::undo_transaction`'s I/O cost under a long undo chain,
 exercised entirely through public API (`undo_transaction`, `BufferPool`,
 `DiskManager`, `LogManager`, `DoubleWriteBuffer`, `LruKReplacer`) plus the
-`CountingDevice`/`CountingSegmentStore` helpers from `tests/support/mod.rs`.
-Formerly an inline `#[cfg(test)] mod tests` in
-`crates/storage/src/recovery.rs`; moved here once `CountingDevice` itself
-moved out from behind `#[cfg(test)]`, since nothing in this test touches a
-private item. `CountingSegmentStore` used to be a private copy local to
-this file (identical in shape to one `wal_segments.rs` also kept), unified
-into `support/mod.rs` once both needed the same wrapper - see that file's
-`.MD` for what it counts and why `opens` exists as a separate counter from
-`calls`/`bytes`.
+`CountingDevice`/`CountingSegmentStore` helpers from the shared
+`test-support` crate (`crates/test-support/src/devices.MD`) - see that
+crate's docs for what each counter counts and why `opens` exists
+separately from `calls`/`bytes`. Formerly an inline `#[cfg(test)] mod
+tests` in `crates/storage/src/recovery.rs`; moved here once `CountingDevice`
+itself moved out from behind `#[cfg(test)]`, since nothing in this test
+touches a private item, and later moved again (along with `wal_segments.rs`'s
+identical copy) into `test-support` so `catalog`, `executor`, `txn`, and
+`engine`'s own `tests/` could reach the same wrapper too.
 
 ## Key Components
 

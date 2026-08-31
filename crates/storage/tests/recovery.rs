@@ -3,19 +3,12 @@ use std::path::Path;
 
 use common::{Lsn, TxnId};
 use storage::buffer::BufferPool;
-use storage::disk::DiskManager;
-use storage::dwb::DoubleWriteBuffer;
-use storage::page::PAGE_SIZE;
 use storage::recovery;
-use storage::replacer::LruKReplacer;
-use storage::wal::{CHECKPOINT_TXN, LogManager, LogRecordKind};
+use storage::wal::{CHECKPOINT_TXN, LogRecordKind};
+use test_support::PoolOptions;
 
 fn open_pool(dir: &Path, pool_size: usize) -> Result<BufferPool, Box<dyn Error>> {
-    let disk = DiskManager::open(dir.join("test.db"), PAGE_SIZE)?;
-    let dwb =
-        DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    let log = LogManager::open(dir.join("test.db.wal"))?;
-    Ok(BufferPool::new(disk, dwb, log, pool_size, Box::new(LruKReplacer::new(pool_size, 2))))
+    test_support::open_pool(dir, PoolOptions::new(pool_size))
 }
 
 #[test]

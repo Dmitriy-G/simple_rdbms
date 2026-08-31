@@ -122,6 +122,7 @@ dependencies = [
  "common",
  "storage",
  "tempfile",
+ "test-support",
  "thiserror",
  "types",
 ]
@@ -268,6 +269,7 @@ dependencies = [
  "sql",
  "storage",
  "tempfile",
+ "test-support",
  "tracing",
  "tracing-subscriber",
  "txn",
@@ -310,6 +312,7 @@ dependencies = [
  "planner",
  "storage",
  "tempfile",
+ "test-support",
  "thiserror",
  "txn",
  "types",
@@ -955,6 +958,7 @@ dependencies = [
  "serde_json",
  "storage",
  "tempfile",
+ "test-support",
  "thiserror",
  "tracing",
  "tracing-subscriber",
@@ -1000,6 +1004,18 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys",
+]
+
+[[package]]
+name = "test-support"
+version = "0.1.0"
+dependencies = [
+ "common",
+ "serde_json",
+ "storage",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1113,6 +1129,7 @@ dependencies = [
  "metrics",
  "storage",
  "tempfile",
+ "test-support",
  "thiserror",
  "tracing",
 ]

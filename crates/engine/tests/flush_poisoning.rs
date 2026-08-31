@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::fs::OpenOptions;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -8,15 +7,12 @@ use common::{DbConfig, Error as DbError};
 use engine::Database;
 use storage::block_device::{BlockDevice, DurabilityModel, FaultyDevice, FileDevice};
 use storage::wal::{DEFAULT_SEGMENT_SIZE, FileSegmentStore, SegmentStore};
+use test_support::open_file;
 
 const SETUP_STATEMENT: &str = "CREATE TABLE t (a INTEGER)";
 
-fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
-    OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
-}
-
 fn config(dir: &Path) -> DbConfig {
-    DbConfig { checkpoint_byte_threshold: 1, ..DbConfig::new(dir.join("test.db")) }
+    DbConfig { checkpoint_byte_threshold: 1, ..test_support::db_config(dir) }
 }
 
 fn open_with_counted_data_device(

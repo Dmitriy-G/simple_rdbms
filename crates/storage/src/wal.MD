@@ -111,6 +111,14 @@ noticed the resulting hole in the LSN space.
   Result<(), StorageError>`. The seam between "how a segment's bytes are
   addressed" and everything else in this module, so `LogManager` itself
   never has to know whether a segment is a real file or something else.
+  `test_support::devices::FaultySegmentStore` (`crates/test-support/src/devices.MD`)
+  is the third implementation, wrapping a real `FileSegmentStore` so every
+  segment it opens comes back fault-injecting - it used to live here,
+  gated `#[cfg(feature = "test-util")]`, since a Rust test
+  module can't reach into another crate's `tests/` directory and this was
+  the only way `engine`'s and `storage`'s own crash-injection harnesses
+  could share one implementation; `test-support` existing now is what let
+  it move out to a crate composed entirely of this module's own public API.
 - `segment_path(base, id) -> PathBuf` - the file-family naming scheme:
   `base` with `.NNNNNN` (a zero-padded, unbounded-width decimal id)
   appended. Exposed (not just used internally by `FileSegmentStore`) so a
@@ -124,24 +132,6 @@ noticed the resulting hole in the LSN space.
   file at `segment_path(base, id)`; `remove` deletes it, treating "already
   gone" as success rather than an error, since `truncate_below` racing a
   half-completed prior truncation should not itself fail.
-- `FaultySegmentStore` - `#[cfg(any(test, feature = "test-util"))]`. A
-  `SegmentStore` that wraps a real `FileSegmentStore` and hands back every
-  segment device wrapped in a `block_device::FaultyDevice`, all sharing one
-  `counter`/`fail_at`/`DurabilityModel`. There is exactly one on-disk log
-  layout (the paragraph above) - a numbered segment family - so this is the
-  only way a crash-injection harness gets fault injection into the log at
-  all; there is no single-device constructor left to hand it a lone faulty
-  device instead. `open(id)` wraps *that specific segment's* device freshly
-  on every call rather than wrapping once at construction, which matters
-  because segments are opened lazily by id as the log rolls - a harness
-  that only wrapped the first segment would silently stop injecting faults
-  into every segment after the first roll. Lives here rather than in
-  `crates/storage/tests/support/` because `mod support;` only resolves
-  within the crate whose `tests/` directory declares it - `engine` and
-  `catalog`'s own crash-injection harnesses need this too, and a Rust test
-  module can't reach into another crate's `tests/` directory, so a helper
-  meant to be shared *across* crates has to be part of the library itself,
-  gated the same way `open_with_segment_store` already is.
 - `write_segment_header(device, start_lsn)`/`read_segment_header(device) ->
   Result<u64, StorageError>` - private. Write/read a segment's fixed
   16-byte header (`SEGMENT_MAGIC` then `start_lsn`, little-endian).
@@ -315,12 +305,12 @@ noticed the resulting hole in the LSN space.
   segmented log at `path`, using `FileSegmentStore` and
   `DEFAULT_SEGMENT_SIZE`, after `reject_legacy_single_file_log`.
 - `LogManager::open_with_segment_size(path, target_segment_size)` -
-  `#[cfg(any(test, feature = "test-util"))]`. Same as `open`, but with a
+  `#[cfg(feature = "test-util")]`. Same as `open`, but with a
   caller-chosen roll threshold instead of `DEFAULT_SEGMENT_SIZE` - the only
   way a test can actually exercise rollover/truncation without appending
   16 MiB of records first.
 - `LogManager::open_with_segment_store(store, target_segment_size)` -
-  `#[cfg(any(test, feature = "test-util"))]`. Same as `open_with_segment_size`,
+  `#[cfg(feature = "test-util")]`. Same as `open_with_segment_size`,
   but with a caller-supplied `SegmentStore` instead of a real
   `FileSegmentStore` - lets a test wrap every segment device it opens
   (e.g. in a byte-counting `BlockDevice`, or `FaultySegmentStore`) to
@@ -332,7 +322,7 @@ noticed the resulting hole in the LSN space.
   `FaultySegmentStore`) rather than the log growing a second on-disk
   shape to accommodate it.
 - `LogManager::segment_ids(&self) -> Vec<u64>` -
-  `#[cfg(any(test, feature = "test-util"))]`. Every segment id this log
+  `#[cfg(feature = "test-util")]`. Every segment id this log
   currently has open or sealed, active id last. Test-only introspection
   for asserting a truncation actually dropped the segments it should have.
 - `LogManager::open_with_store(store, target_segment_size)` - private.

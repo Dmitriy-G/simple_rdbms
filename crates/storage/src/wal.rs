@@ -314,46 +314,6 @@ impl SegmentStore for FileSegmentStore {
     }
 }
 
-#[cfg(any(test, feature = "test-util"))]
-pub struct FaultySegmentStore {
-    inner: FileSegmentStore,
-    counter: Arc<AtomicU64>,
-    fail_at: u64,
-    model: crate::block_device::DurabilityModel,
-}
-
-#[cfg(any(test, feature = "test-util"))]
-impl FaultySegmentStore {
-    pub fn new(
-        base: impl Into<PathBuf>,
-        counter: Arc<AtomicU64>,
-        fail_at: u64,
-        model: crate::block_device::DurabilityModel,
-    ) -> Self {
-        Self { inner: FileSegmentStore::new(base), counter, fail_at, model }
-    }
-}
-
-#[cfg(any(test, feature = "test-util"))]
-impl SegmentStore for FaultySegmentStore {
-    fn existing_segments(&self) -> Result<Vec<u64>, StorageError> {
-        self.inner.existing_segments()
-    }
-
-    fn open(&self, id: u64) -> Result<Box<dyn BlockDevice>, StorageError> {
-        Ok(Box::new(crate::block_device::FaultyDevice::with_model(
-            self.inner.open(id)?,
-            self.counter.clone(),
-            self.fail_at,
-            self.model,
-        )))
-    }
-
-    fn remove(&self, id: u64) -> Result<(), StorageError> {
-        self.inner.remove(id)
-    }
-}
-
 fn write_segment_header(device: &dyn BlockDevice, start_lsn: u64) -> Result<(), StorageError> {
     let mut buf = [0u8; SEGMENT_HEADER_LEN as usize];
     buf[0..8].copy_from_slice(SEGMENT_MAGIC);
@@ -500,7 +460,7 @@ impl LogManager {
         Self::open_with_store(store, DEFAULT_SEGMENT_SIZE)
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn open_with_segment_size(
         path: impl Into<PathBuf>,
         target_segment_size: u64,
@@ -511,7 +471,7 @@ impl LogManager {
         Self::open_with_store(store, target_segment_size)
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn open_with_segment_store(
         store: Arc<dyn SegmentStore>,
         target_segment_size: u64,
@@ -519,7 +479,7 @@ impl LogManager {
         Self::open_with_store(store, target_segment_size)
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn segment_ids(&self) -> Vec<u64> {
         let inner = recover_lock(self.inner.lock(), "LogManager.inner");
         let mut ids: Vec<u64> = inner.sealed.iter().map(|s| s.id).collect();

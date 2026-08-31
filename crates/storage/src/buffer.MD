@@ -259,7 +259,7 @@ same thread.
 
 - `Frame` - private. See the field-by-field breakdown above.
 - `PoolIndex` - private. See above.
-- `InstallHook` - `#[cfg(any(test, feature = "test-util"))]`, private
+- `InstallHook` - `#[cfg(feature = "test-util")]`, private
   type alias for `dyn Fn(FrameId) + Send + Sync`, the shape of the
   closure `set_install_hook` accepts.
 - `BufferPool` - `disk_manager`, `dwb`, and `log_manager` need no

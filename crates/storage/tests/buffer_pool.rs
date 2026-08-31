@@ -6,36 +6,20 @@ use std::time::Duration;
 use common::TxnId;
 use storage::StorageError;
 use storage::buffer::BufferPool;
-use storage::disk::DiskManager;
-use storage::dwb::DoubleWriteBuffer;
-use storage::page::PAGE_SIZE;
-use storage::replacer::LruKReplacer;
-use storage::wal::LogManager;
+use test_support::PoolOptions;
 
 const MARKER_OFFSET: usize = 100;
 
 fn open_pool(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
-    let dwb = DoubleWriteBuffer::open(
-        dir.path().join("test.db.dwb"),
-        DoubleWriteBuffer::DEFAULT_CAPACITY,
-    )?;
-    let log = LogManager::open(dir.path().join("test.db.wal"))?;
-    let replacer = Box::new(LruKReplacer::new(pool_size, 2));
-    Ok((BufferPool::new(disk, dwb, log, pool_size, replacer), dir))
+    let pool = test_support::open_pool(dir.path(), PoolOptions::new(pool_size))?;
+    Ok((pool, dir))
 }
 
 fn open_pool_lru(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
-    let dwb = DoubleWriteBuffer::open(
-        dir.path().join("test.db.dwb"),
-        DoubleWriteBuffer::DEFAULT_CAPACITY,
-    )?;
-    let log = LogManager::open(dir.path().join("test.db.wal"))?;
-    let replacer = Box::new(LruKReplacer::new(pool_size, 1));
-    Ok((BufferPool::new(disk, dwb, log, pool_size, replacer), dir))
+    let pool = test_support::open_pool(dir.path(), PoolOptions::new(pool_size).replacer_k(1))?;
+    Ok((pool, dir))
 }
 
 fn apply_pressure(pool: &BufferPool, n: u8) -> Result<(), Box<dyn Error>> {

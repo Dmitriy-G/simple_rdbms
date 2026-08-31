@@ -12,6 +12,7 @@ members = [
     "crates/engine",
     "crates/cli",
     "crates/server",
+    "crates/test-support",
 ]
 
 [workspace.package]
@@ -32,6 +33,7 @@ txn = { path = "crates/txn" }
 planner = { path = "crates/planner" }
 executor = { path = "crates/executor" }
 engine = { path = "crates/engine" }
+test-support = { path = "crates/test-support" }
 
 thiserror = "2"
 anyhow = "1"

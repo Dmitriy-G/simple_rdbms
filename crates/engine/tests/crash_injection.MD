@@ -69,58 +69,50 @@ injection at the `write_at`/`sync_all` call boundary can express at all.
 
 ## Key Components
 
-- `DeviceTriple` - a `Database::open_with_devices` call's trio: the
-  database file's `BlockDevice`, the write-ahead log's `SegmentStore`, and
-  the double-write buffer's `BlockDevice`.
+`DeviceTriple`, `open_file`, and `faulty_devices` moved to the shared
+`test-support` crate (`crates/test-support/src/devices.MD`) - this file's
+own copy used to be byte-for-byte identical to
+`storage/tests/btree_crash_injection.rs`'s. So did the sweep algorithm
+itself: `run_until_crash` and `assert_workload_is_crash_safe` are now
+`test_support::CrashWorkload`/`test_support::assert_workload_is_crash_safe`
+(`crates/test-support/src/crash.MD`), generic over a trait this file
+implements for its own SQL-driven workload rather than owning a private
+copy of the sweep. What's left here is everything genuinely specific to
+driving SQL through an `engine::Database`:
+
 - `TableRows` - one table's name alongside every row in it, in the order
-  produced.
-- `open_file(path) -> std::io::Result<File>` - opens (creating if
-  necessary) the file at `path` for a `FileDevice`.
-- `faulty_devices(dir, counter, fail_at, model) -> Result<DeviceTriple,
-  _>` - builds the trio a `Database::open_with_devices` call needs, all
-  sharing `counter` and armed to fail at write `fail_at` under `model`, so
-  that "fail at write N" counts across the whole system rather than per
-  file - matching how a real crash lands mid-workload regardless of which
-  file the Nth write happened to target. The WAL side is a
-  `storage::wal::FaultySegmentStore` wrapping a real `FileSegmentStore`
-  rather than a single faulty device, so it faults every segment the log
-  ever opens (including ones created by a roll mid-workload), not just the
-  first.
-- `config(dir) -> DbConfig` - builds a `DbConfig` at `dir.join("test.db")`.
-- `total_write_count(workload) -> Result<u64, _>` - runs `workload` to
-  completion (including a clean `close`) against a counting-but-never-
-  failing device pair, returning the total number of writes performed -
-  the upper bound `K` for the crash-injection sweep. The call count is
-  identical under either `DurabilityModel` (the fault counter ticks on
-  every `write_at`/`set_len` call regardless of whether that call lands
-  immediately or waits for a `sync_all`), so which model this runs under
-  doesn't affect `K`.
+  produced; `SqlWorkload::State`.
+- `HarnessConfig` - the WAL segment size, checkpoint byte threshold, and
+  buffer pool size a given sweep opens its databases with; `DEFAULT`
+  matches `common::DbConfig`'s own defaults, `SEGMENT_ROLLING` shrinks all
+  three so a short workload still rolls and truncates a WAL segment.
+- `config(dir, harness) -> DbConfig` - `test_support::db_config(dir)` with
+  `harness`'s two `DbConfig` fields overlaid via struct update.
 - `observable_state(db) -> Result<Vec<TableRows>, _>` - every table's name
   (sorted) and every row in each, in the order produced - the "observable
   state" two databases are compared on.
-- `run_until_crash(config, db_device, wal_store, dwb_device, workload) ->
-  Result<usize, _>` - runs `workload` against a freshly opened database
-  backed by (typically fault-injecting) devices until a statement fails
-  or the workload finishes, returning how large a prefix of it is safe to
-  expect on the other side of a crash right afterward. `acked` (every
-  statement that returned `Ok`) is not the same as "safely committed": a
-  `BEGIN` and the inserts after it can each individually return `Ok`
-  while the fault then kills the process before the matching `COMMIT`
-  ever runs, in which case none of them should be in the reference
-  prefix. The returned count only advances at a point nothing is left
-  open - after an autocommit statement, or after a `COMMIT`/`ROLLBACK`
-  that actually returned `Ok`. `db` is dropped at the end without `close`:
-  it died wherever it died, exactly like a real crash.
-- `assert_workload_is_crash_safe(workload, model) -> Result<(), _>` - runs
-  the full crash-injection sweep for `workload` under `model`: every fail
-  point `1..=K`, plus (per fail point) a couple of secondary fault-
-  injected reopens that crash *during* recovery itself before the final
-  clean reopen - proving recovery resumes correctly rather than
-  restarting. Each secondary reopen must not panic (an `Err` is fine -
-  it's still a crash); what matters is that recovery is resumable, not
-  that any one attempt succeeds. The final clean reopen's observable state
-  must match a reference database built by replaying exactly the
-  acknowledged, safely-committed prefix.
+- `SqlWorkload<'a>` - `statements: &'a [String]`, `harness: HarnessConfig`;
+  the `CrashWorkload` implementor driving every single-generation sweep
+  below. `open` calls `Database::open_with_devices`. `drive` is the old
+  `run_until_crash` body verbatim: `acked` (every statement that returned
+  `Ok`) is not the same as "safely committed" - a `BEGIN` and the inserts
+  after it can each individually return `Ok` while the fault then kills
+  the process before the matching `COMMIT` ever runs, in which case none
+  of them should be in the reference prefix, so the returned safe prefix
+  only advances at a point nothing is left open (after an autocommit
+  statement, or after a `COMMIT`/`ROLLBACK` that actually returned `Ok`).
+  `expected_state` replays `statements[..safe_prefix]` into a fresh
+  `Database` in its own temp dir and snapshots it; `observed_state` just
+  snapshots the handle it's given (`safe_prefix` unused - a SQL database's
+  observable state needs no prefix argument to compute, unlike the B+tree
+  workload's, which uses it to decide whether a missing root pointer is
+  expected or a real recovery bug). `test_support::assert_workload_is_crash_safe`'s
+  fault-free first phase only requires the shared write counter to be
+  positive, not that `drive` returns `statements.len()` - `mid_transaction_kill`
+  deliberately ends mid-transaction, so every statement can return `Ok`
+  while the safe prefix still falls short of the full statement count;
+  see `crates/test-support/src/crash.MD` for the bug this shape once
+  caused when the sweep assumed the two were equal.
 - `many_small_inserts() -> Vec<String>` - many tiny single-column inserts
   into one table.
 - `page_boundary_inserts() -> Vec<String>` - wide rows, enough of them to

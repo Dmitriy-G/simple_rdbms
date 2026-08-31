@@ -139,7 +139,7 @@ impl DoubleWriteBuffer {
         Ok(buf)
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn write_raw_slot(
         &self,
         index: usize,
@@ -151,7 +151,7 @@ impl DoubleWriteBuffer {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub fn write_raw_header_entries(&self, entries: &[(PageId, u32)]) -> Result<(), StorageError> {
         let header = self.encode_header(entries.iter().copied());
         let device = recover_lock(self.device.lock(), "DoubleWriteBuffer.device");

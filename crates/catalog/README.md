@@ -67,10 +67,11 @@ means in this engine today.
 Workspace: `common`, `types`, `storage` (a table's catalog row is itself
 stored through a `TableHeap`/`BufferPool`, and `Catalog::create_table`/
 `open` take a `TxnId` for the WAL records that provisioning produces).
-External: `thiserror`, for `CatalogError`. Dev-only: `tempfile`, and
+External: `thiserror`, for `CatalogError`. Dev-only: `tempfile`,
 `storage` again with its `test-util` feature enabled (for
 `BufferPool::fetch_count`, used by `tests/index_persistence.rs`'s
-bounded-page-fetches test).
+bounded-page-fetches test), and `test-support` for shared pool-opening
+and device-faulting fixtures (`crates/test-support/README.md`).
 
 ## Configuration
 

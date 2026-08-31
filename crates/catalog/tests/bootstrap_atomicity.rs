@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::fs::OpenOptions;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -13,15 +12,10 @@ use storage::dwb::DoubleWriteBuffer;
 use storage::page::PAGE_SIZE;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
-use storage::wal::{
-    DEFAULT_SEGMENT_SIZE, FaultySegmentStore, LogManager, LogRecordKind, SegmentStore,
-};
+use storage::wal::{DEFAULT_SEGMENT_SIZE, LogManager, LogRecordKind, SegmentStore};
+use test_support::{FaultySegmentStore, open_file};
 
 const BOOTSTRAP_TXN: TxnId = TxnId(0);
-
-fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
-    OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
-}
 
 fn faulty_pool(
     dir: &Path,
@@ -47,11 +41,7 @@ fn faulty_pool(
 }
 
 fn real_pool(dir: &Path) -> Result<BufferPool, Box<dyn Error>> {
-    let disk = DiskManager::open(dir.join("test.db"), PAGE_SIZE)?;
-    let dwb =
-        DoubleWriteBuffer::open(dir.join("test.db.dwb"), DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    let log = LogManager::open(dir.join("test.db.wal"))?;
-    Ok(BufferPool::new(disk, dwb, log, 16, Box::new(LruKReplacer::new(16, 2))))
+    test_support::open_pool(dir, test_support::PoolOptions::new(16))
 }
 
 fn run_bootstrap(pool: &BufferPool) -> Result<(), Box<dyn Error>> {

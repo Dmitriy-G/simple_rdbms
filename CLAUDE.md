@@ -185,6 +185,17 @@ If a crate seems to need a dependency not on this list, that's a sign the
 change belongs in a different crate, or the edge list itself needs an ADR
 updating it — don't just add the dependency.
 
+`test-support -> common, storage` is the one exception to "no edge beyond
+this list," and it is a `dev-dependency` everywhere it appears rather than
+a normal dependency: `storage`, `catalog`, `executor`, `txn`, and `engine`
+each add it under `[dev-dependencies]` so their own `tests/` integration
+suites can share one copy of test-only fixtures (`crates/test-support/README.md`)
+instead of the twelve-plus copies `crates/test-support/src/lib.MD` replaced.
+Being dev-dependency-only means it never reaches a shipped binary and
+never participates in the normal-dependency cycle check the compiler
+already enforces for the table above, so it does not need its own row in
+that table — this paragraph is its edge instead.
+
 ## Documentation
 
 No comments in code. Every `crates/**/*.rs` file has a sibling `<stem>.MD`

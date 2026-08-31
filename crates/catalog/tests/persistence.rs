@@ -3,24 +3,13 @@ use std::error::Error;
 use catalog::{Catalog, CatalogError, Column, Schema};
 use common::TxnId;
 use storage::buffer::BufferPool;
-use storage::disk::DiskManager;
-use storage::dwb::DoubleWriteBuffer;
-use storage::page::PAGE_SIZE;
-use storage::replacer::LruKReplacer;
-use storage::wal::LogManager;
+use test_support::PoolOptions;
 use types::DataType;
 
 const TXN: TxnId = TxnId(0);
 
 fn open_pool(path: &std::path::Path) -> Result<BufferPool, Box<dyn Error>> {
-    let disk = DiskManager::open(path, PAGE_SIZE)?;
-    let mut wal_path = path.as_os_str().to_owned();
-    wal_path.push(".wal");
-    let log = LogManager::open(wal_path)?;
-    let mut dwb_path = path.as_os_str().to_owned();
-    dwb_path.push(".dwb");
-    let dwb = DoubleWriteBuffer::open(dwb_path, DoubleWriteBuffer::DEFAULT_CAPACITY)?;
-    Ok(BufferPool::new(disk, dwb, log, 16, Box::new(LruKReplacer::new(16, 2))))
+    test_support::open_pool_at_path(path, PoolOptions::new(16))
 }
 
 fn users_schema() -> Schema {

@@ -117,7 +117,11 @@ This crate also depends on itself with the `test-util` feature enabled
 (see Configuration) so its own `tests/` integration tests can see
 `BufferPool`'s test-only instrumentation through a normal, non-`--cfg test`
 build — the same situation any other crate's tests are in when they depend
-on `storage`.
+on `storage`. It also depends on `test-support` (dev-only), which is where
+`open_pool`, `open_file`, `faulty_devices`, `CountingDevice`/
+`CountingSegmentStore`, and the crash-injection sweep now live — moved out
+of a `tests/support/` module that only this crate's own `tests/` could
+reach (`crates/test-support/README.md`).
 
 ## Configuration
 
@@ -154,12 +158,12 @@ permutation insertion, variable-length keys, oversized-key rejection,
 root-height growth, duplicate keys spanning a split, ordered range scans),
 and `btree_crash_injection.rs` (a root split swept across every write
 point under every `DurabilityModel`, driving `BTreeIndex` directly against
-fault-injecting devices). `tests/smoke.rs` is the minimum-viable
-compile-and-construct check. A
-`#[cfg(test)]` unit test in `src/` is reserved for the rare case that
-needs access to something that should stay private (see CLAUDE.md's
-testing section); none of this crate's own `src/` currently does. Run
-just this crate with:
+fault-injecting devices, via the shared `test_support::CrashWorkload`
+sweep). `tests/smoke.rs` is the minimum-viable compile-and-construct
+check. A `#[cfg(test)] mod tests` block in `src/` is reserved for private,
+pure functions that need no `BufferPool`/`DiskManager`/device/temp
+directory (see CLAUDE.md's testing section) - `btree.rs`'s split-point and
+binary-search helpers are the current example. Run just this crate with:
 
 ```sh
 cargo test -p storage

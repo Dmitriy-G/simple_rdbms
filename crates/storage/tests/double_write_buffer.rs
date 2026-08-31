@@ -16,10 +16,7 @@ use storage::page::{PAGE_SIZE, Page};
 use storage::recovery;
 use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
-
-fn open_file(path: &std::path::Path) -> io::Result<std::fs::File> {
-    OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
-}
+use test_support::open_file;
 
 fn read_raw_page(
     db_path: &std::path::Path,

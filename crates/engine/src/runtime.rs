@@ -107,9 +107,9 @@ enum EngineMessage {
     Disconnect {
         session_id: SessionId,
     },
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     Shutdown,
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     Stats {
         reply: mpsc::SyncSender<EngineStats>,
     },
@@ -158,7 +158,7 @@ impl EngineHandle {
         Self::spawn(config, disk_manager, dwb, log_manager)
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub(crate) fn open_with_devices(
         config: &DbConfig,
         db_device: Box<dyn storage::block_device::BlockDevice>,
@@ -252,12 +252,12 @@ impl SessionHandle {
         }
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub(crate) fn kill_engine_for_test(&self) {
         let _ = self.engine.send(EngineMessage::Shutdown);
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     pub(crate) fn stats(&self) -> Result<EngineStats> {
         let (reply, reply_rx) = mpsc::sync_channel(1);
         self.engine.send(EngineMessage::Stats { reply })?;
@@ -322,9 +322,9 @@ fn dispatch_message(
         EngineMessage::Disconnect { session_id } => {
             disconnect(state, sessions, waiters, session_id);
         }
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(feature = "test-util")]
         EngineMessage::Shutdown => return false,
-        #[cfg(any(test, feature = "test-util"))]
+        #[cfg(feature = "test-util")]
         EngineMessage::Stats { reply } => {
             let _ = reply.send(state.stats());
         }
@@ -510,7 +510,7 @@ struct EngineState {
     idle_in_transaction_timeout: Duration,
 }
 
-#[cfg(any(test, feature = "test-util"))]
+#[cfg(feature = "test-util")]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EngineStats {
     pub checkpoints_written: u64,
@@ -582,7 +582,7 @@ impl EngineState {
         metrics::counter!("checkpoints_written_total").increment(1);
     }
 
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(feature = "test-util")]
     fn stats(&self) -> EngineStats {
         EngineStats { checkpoints_written: self.checkpoints_written }
     }

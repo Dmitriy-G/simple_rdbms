@@ -1,5 +1,4 @@
 use std::error::Error;
-use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -9,6 +8,7 @@ use common::{DbConfig, Error as CommonError, SqlState};
 use engine::{Database, ResultSet};
 use storage::block_device::{BlockDevice, FileDevice};
 use storage::wal::{FileSegmentStore, SegmentStore};
+use test_support::open_file;
 
 fn row_count(result: ResultSet) -> usize {
     match result {
@@ -127,10 +127,6 @@ fn dropping_a_session_mid_transaction_rolls_it_back() -> Result<(), Box<dyn Erro
     let rows = db1.execute("SELECT * FROM t")?;
     assert_eq!(row_count(rows), 0, "a session dropped mid-transaction must have its writes undone");
     Ok(())
-}
-
-fn open_file(path: &Path) -> std::io::Result<std::fs::File> {
-    OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path)
 }
 
 fn wal_base_path(dir: &Path) -> PathBuf {

@@ -6,25 +6,16 @@ use proptest::prelude::*;
 use proptest::test_runner::{Config, RngAlgorithm, TestCaseError, TestRng, TestRunner};
 use storage::StorageError;
 use storage::buffer::BufferPool;
-use storage::disk::DiskManager;
-use storage::dwb::DoubleWriteBuffer;
 use storage::heap::{MAX_SLOTS, MAX_TUPLE_SIZE, TableHeap};
 use storage::page::PAGE_SIZE;
-use storage::replacer::LruKReplacer;
-use storage::wal::LogManager;
+use test_support::PoolOptions;
 
 const TXN: TxnId = TxnId(0);
 
 fn open_pool(pool_size: usize) -> Result<(BufferPool, tempfile::TempDir), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let disk = DiskManager::open(dir.path().join("test.db"), PAGE_SIZE)?;
-    let dwb = DoubleWriteBuffer::open(
-        dir.path().join("test.db.dwb"),
-        DoubleWriteBuffer::DEFAULT_CAPACITY,
-    )?;
-    let log = LogManager::open(dir.path().join("test.db.wal"))?;
-    let replacer = Box::new(LruKReplacer::new(pool_size, 2));
-    Ok((BufferPool::new(disk, dwb, log, pool_size, replacer), dir))
+    let pool = test_support::open_pool(dir.path(), PoolOptions::new(pool_size))?;
+    Ok((pool, dir))
 }
 
 #[test]

@@ -4,7 +4,7 @@ use common::DbConfig;
 use engine::Database;
 
 fn config(dir: &std::path::Path) -> DbConfig {
-    DbConfig::new(dir.join("test.db"))
+    test_support::db_config(dir)
 }
 
 #[test]
