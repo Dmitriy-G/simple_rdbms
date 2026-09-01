@@ -106,10 +106,11 @@ impl<'a> Binder<'a> {
     fn bind_select(&self, select: sql::SelectStatement) -> Result<BoundSelect, PlannerError> {
         let table = self
             .catalog
-            .get_table(&select.from)
-            .map_err(|_| PlannerError::UnknownTable(select.from.clone()))?;
+            .get_table(&select.from.name)
+            .map_err(|_| PlannerError::UnknownTable(select.from.name.clone()))?;
         let table_id = table.table_id;
         let schema = &table.schema;
+        let table_scope = select.from.alias.as_deref().unwrap_or(select.from.name.as_str());
 
         let mut projections = Vec::new();
         let mut column_names = Vec::new();
@@ -123,9 +124,9 @@ impl<'a> Binder<'a> {
                     }
                 }
                 sql::SelectItem::Expr(expr) => {
-                    let (bound, _) = self.bind_expr(expr, schema)?;
+                    let (bound, _) = self.bind_expr(expr, schema, Some(table_scope))?;
                     column_names.push(match expr {
-                        sql::Expr::Column(name) => name.clone(),
+                        sql::Expr::Column { name, .. } => name.clone(),
                         _ => format!("column{}", column_names.len() + 1),
                     });
                     projections.push(bound);
@@ -135,7 +136,7 @@ impl<'a> Binder<'a> {
 
         let predicate = match &select.where_clause {
             Some(expr) => {
-                let (bound, data_type) = self.bind_expr(expr, schema)?;
+                let (bound, data_type) = self.bind_expr(expr, schema, Some(table_scope))?;
                 if let Some(data_type) = data_type {
                     if data_type != DataType::Boolean {
                         return Err(PlannerError::TypeMismatch(format!(
@@ -188,7 +189,7 @@ impl<'a> Binder<'a> {
                 (0..schema.columns().len()).map(|_| BoundExpr::Literal(Value::Null)).collect();
             for (expr, &col_index) in row.iter().zip(target_indices.iter()) {
                 let column = &schema.columns()[col_index];
-                let (bound, data_type) = self.bind_expr(expr, &empty_schema)?;
+                let (bound, data_type) = self.bind_expr(expr, &empty_schema, None)?;
                 let (bound, data_type) = match bound {
                     BoundExpr::Literal(value) => {
                         let coerced =
@@ -250,22 +251,28 @@ impl<'a> Binder<'a> {
         &self,
         expr: &sql::Expr,
         schema: &Schema,
+        table_scope: Option<&str>,
     ) -> Result<(BoundExpr, Option<DataType>), PlannerError> {
         match expr {
             sql::Expr::Literal(value) => Ok((BoundExpr::Literal(value.clone()), value.data_type())),
-            sql::Expr::Column(name) => {
+            sql::Expr::Column { table, name } => {
+                if let Some(qualifier) = table {
+                    if table_scope != Some(qualifier.as_str()) {
+                        return Err(PlannerError::UnknownTable(qualifier.clone()));
+                    }
+                }
                 let index = schema
                     .column_index(name)
                     .ok_or_else(|| PlannerError::UnknownColumn(name.clone()))?;
                 let data_type = schema.columns()[index].data_type;
                 Ok((BoundExpr::ColumnRef { index, data_type }, Some(data_type)))
             }
-            sql::Expr::UnaryOp { op, expr } => self.bind_unary_op(*op, expr, schema),
+            sql::Expr::UnaryOp { op, expr } => self.bind_unary_op(*op, expr, schema, table_scope),
             sql::Expr::BinaryOp { left, op, right } => {
-                self.bind_binary_op(left, *op, right, schema)
+                self.bind_binary_op(left, *op, right, schema, table_scope)
             }
             sql::Expr::IsNull { expr, negated } => {
-                let (bound, _operand_type) = self.bind_expr(expr, schema)?;
+                let (bound, _operand_type) = self.bind_expr(expr, schema, table_scope)?;
                 let bound = BoundExpr::IsNull { expr: Box::new(bound), negated: *negated };
                 Ok((bound, Some(DataType::Boolean)))
             }
@@ -277,8 +284,9 @@ impl<'a> Binder<'a> {
         op: sql::UnaryOperator,
         expr: &sql::Expr,
         schema: &Schema,
+        table_scope: Option<&str>,
     ) -> Result<(BoundExpr, Option<DataType>), PlannerError> {
-        let (bound, operand_type) = self.bind_expr(expr, schema)?;
+        let (bound, operand_type) = self.bind_expr(expr, schema, table_scope)?;
         match op {
             sql::UnaryOperator::Not => {
                 if let Some(data_type) = operand_type {
@@ -315,11 +323,12 @@ impl<'a> Binder<'a> {
         op: sql::BinaryOperator,
         right: &sql::Expr,
         schema: &Schema,
+        table_scope: Option<&str>,
     ) -> Result<(BoundExpr, Option<DataType>), PlannerError> {
         use sql::BinaryOperator::*;
 
-        let (left_bound, left_type) = self.bind_expr(left, schema)?;
-        let (right_bound, right_type) = self.bind_expr(right, schema)?;
+        let (left_bound, left_type) = self.bind_expr(left, schema, table_scope)?;
+        let (right_bound, right_type) = self.bind_expr(right, schema, table_scope)?;
         let (left_bound, left_type, right_bound, right_type) =
             coerce_comparison_operands(left_bound, left_type, right_bound, right_type, schema)?;
 

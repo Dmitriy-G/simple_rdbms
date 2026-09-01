@@ -1,8 +1,16 @@
 use sql::{
     BinaryOperator, ColumnDef, CreateIndexStatement, CreateTableStatement, Expr, InsertStatement,
-    Lexer, Parser, SelectItem, SelectStatement, SqlError, Statement, UnaryOperator,
+    Lexer, Parser, SelectItem, SelectStatement, SqlError, Statement, TableRef, UnaryOperator,
 };
 use types::{DataType, Value};
+
+fn col_expr(name: &str) -> Expr {
+    Expr::Column { table: None, name: name.to_string() }
+}
+
+fn table_ref(name: &str) -> TableRef {
+    TableRef { name: name.to_string(), alias: None }
+}
 
 fn try_parse(source: &str) -> Result<Statement, SqlError> {
     let tokens = Lexer::new(source).tokenize()?;
@@ -157,7 +165,7 @@ fn parses_select_wildcard() {
         stmt,
         Statement::Select(SelectStatement {
             items: vec![SelectItem::Wildcard],
-            from: "t".to_string(),
+            from: table_ref("t"),
             where_clause: None,
         })
     );
@@ -169,13 +177,10 @@ fn parses_select_list_and_where_clause() {
     assert_eq!(
         stmt,
         Statement::Select(SelectStatement {
-            items: vec![
-                SelectItem::Expr(Expr::Column("a".to_string())),
-                SelectItem::Expr(Expr::Column("b".to_string())),
-            ],
-            from: "t".to_string(),
+            items: vec![SelectItem::Expr(col_expr("a")), SelectItem::Expr(col_expr("b")),],
+            from: table_ref("t"),
             where_clause: Some(Expr::BinaryOp {
-                left: Box::new(Expr::Column("a".to_string())),
+                left: Box::new(col_expr("a")),
                 op: BinaryOperator::Eq,
                 right: Box::new(Expr::Literal(Value::BigInt(1))),
             }),
@@ -184,12 +189,54 @@ fn parses_select_list_and_where_clause() {
 }
 
 #[test]
+fn parses_qualified_column_reference() {
+    let stmt = parse("SELECT t.a FROM t WHERE t.b = 1");
+    assert_eq!(
+        stmt,
+        Statement::Select(SelectStatement {
+            items: vec![SelectItem::Expr(Expr::Column {
+                table: Some("t".to_string()),
+                name: "a".to_string(),
+            })],
+            from: table_ref("t"),
+            where_clause: Some(Expr::BinaryOp {
+                left: Box::new(Expr::Column {
+                    table: Some("t".to_string()),
+                    name: "b".to_string(),
+                }),
+                op: BinaryOperator::Eq,
+                right: Box::new(Expr::Literal(Value::BigInt(1))),
+            }),
+        })
+    );
+}
+
+#[test]
+fn parses_table_alias_with_and_without_as() {
+    let stmt = parse("SELECT * FROM t AS u");
+    let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
+    assert_eq!(select.from, TableRef { name: "t".to_string(), alias: Some("u".to_string()) });
+
+    let stmt = parse("SELECT * FROM t u");
+    let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
+    assert_eq!(select.from, TableRef { name: "t".to_string(), alias: Some("u".to_string()) });
+}
+
+#[test]
+fn from_without_an_alias_still_allows_a_where_clause() {
+    let stmt = parse("SELECT * FROM t WHERE a = 1");
+    let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
+    assert_eq!(select.from, table_ref("t"));
+    assert!(select.where_clause.is_some());
+}
+
+#[test]
 fn precedence_or_binds_looser_than_and() {
     let stmt = parse("SELECT * FROM t WHERE a = 1 OR b = 2 AND c = 3");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
 
     let eq = |col: &str, v: i64| Expr::BinaryOp {
-        left: Box::new(Expr::Column(col.to_string())),
+        left: Box::new(col_expr(col)),
         op: BinaryOperator::Eq,
         right: Box::new(Expr::Literal(Value::BigInt(v))),
     };
@@ -211,7 +258,7 @@ fn parentheses_override_precedence() {
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
 
     let eq = |col: &str, v: i64| Expr::BinaryOp {
-        left: Box::new(Expr::Column(col.to_string())),
+        left: Box::new(col_expr(col)),
         op: BinaryOperator::Eq,
         right: Box::new(Expr::Literal(Value::BigInt(v))),
     };
@@ -232,13 +279,10 @@ fn unary_not_and_negate() {
     let stmt = parse("SELECT * FROM t WHERE NOT a AND b = -1");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
     let expected = Expr::BinaryOp {
-        left: Box::new(Expr::UnaryOp {
-            op: UnaryOperator::Not,
-            expr: Box::new(Expr::Column("a".to_string())),
-        }),
+        left: Box::new(Expr::UnaryOp { op: UnaryOperator::Not, expr: Box::new(col_expr("a")) }),
         op: BinaryOperator::And,
         right: Box::new(Expr::BinaryOp {
-            left: Box::new(Expr::Column("b".to_string())),
+            left: Box::new(col_expr("b")),
             op: BinaryOperator::Eq,
             right: Box::new(Expr::UnaryOp {
                 op: UnaryOperator::Negate,
@@ -255,14 +299,14 @@ fn parses_is_null_and_is_not_null() {
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
     assert_eq!(
         select.where_clause,
-        Some(Expr::IsNull { expr: Box::new(Expr::Column("a".to_string())), negated: false })
+        Some(Expr::IsNull { expr: Box::new(col_expr("a")), negated: false })
     );
 
     let stmt = parse("SELECT * FROM t WHERE a IS NOT NULL");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
     assert_eq!(
         select.where_clause,
-        Some(Expr::IsNull { expr: Box::new(Expr::Column("a".to_string())), negated: true })
+        Some(Expr::IsNull { expr: Box::new(col_expr("a")), negated: true })
     );
 }
 
@@ -272,15 +316,12 @@ fn is_null_binds_tighter_than_and_but_looser_than_comparison() {
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
     let expected = Expr::BinaryOp {
         left: Box::new(Expr::BinaryOp {
-            left: Box::new(Expr::Column("a".to_string())),
+            left: Box::new(col_expr("a")),
             op: BinaryOperator::Eq,
             right: Box::new(Expr::Literal(Value::BigInt(1))),
         }),
         op: BinaryOperator::And,
-        right: Box::new(Expr::IsNull {
-            expr: Box::new(Expr::Column("b".to_string())),
-            negated: false,
-        }),
+        right: Box::new(Expr::IsNull { expr: Box::new(col_expr("b")), negated: false }),
     };
     assert_eq!(select.where_clause, Some(expected));
 }
@@ -298,7 +339,7 @@ fn string_literal_escapes_doubled_quote() {
     assert_eq!(
         select.where_clause,
         Some(Expr::BinaryOp {
-            left: Box::new(Expr::Column("a".to_string())),
+            left: Box::new(col_expr("a")),
             op: BinaryOperator::Eq,
             right: Box::new(Expr::Literal(Value::Varchar("it's a test".to_string()))),
         })
@@ -311,8 +352,8 @@ fn keywords_are_case_insensitive_identifiers_are_not() {
     assert_eq!(
         stmt,
         Statement::Select(SelectStatement {
-            items: vec![SelectItem::Expr(Expr::Column("Id".to_string()))],
-            from: "MyTable".to_string(),
+            items: vec![SelectItem::Expr(col_expr("Id"))],
+            from: table_ref("MyTable"),
             where_clause: None,
         })
     );
@@ -384,7 +425,7 @@ fn float_literal_parses_as_a_double_value() {
     assert_eq!(
         select.where_clause,
         Some(Expr::BinaryOp {
-            left: Box::new(Expr::Column("a".to_string())),
+            left: Box::new(col_expr("a")),
             op: BinaryOperator::Eq,
             right: Box::new(Expr::Literal(Value::Double(1.5))),
         })
@@ -428,7 +469,7 @@ fn parses_explain_select() {
             verbose: false,
             inner: Box::new(Statement::Select(SelectStatement {
                 items: vec![SelectItem::Wildcard],
-                from: "t".to_string(),
+                from: table_ref("t"),
                 where_clause: None,
             })),
         }
@@ -472,8 +513,8 @@ fn select_verbose_still_parses_verbose_as_a_column_reference() {
     assert_eq!(
         stmt,
         Statement::Select(SelectStatement {
-            items: vec![SelectItem::Expr(Expr::Column("verbose".to_string()))],
-            from: "t".to_string(),
+            items: vec![SelectItem::Expr(col_expr("verbose"))],
+            from: table_ref("t"),
             where_clause: None,
         })
     );

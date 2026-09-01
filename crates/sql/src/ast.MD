@@ -20,9 +20,17 @@ consumes.
   transaction-control statement or another `Explain` as the target is a
   parse error, not something that reaches this variant.
 - `SelectStatement` - a `SELECT` query: `SELECT <items> FROM <table>
-  [WHERE <expr>]`. No joins, `GROUP BY`, or `ORDER BY` yet. `items` are the
-  projected items, in output order. `from` is the single source table's
-  name. `where_clause` is the optional filter predicate.
+  [[AS] alias] [WHERE <expr>]`. No joins, `GROUP BY`, or `ORDER BY` yet.
+  `items` are the projected items, in output order. `from` is the single
+  source table, with its optional alias. `where_clause` is the optional
+  filter predicate.
+- `TableRef` - the single source table of a `FROM` clause: `name` is the
+  table as it exists in the catalog; `alias` is the optional `[AS]
+  alias` naming a range variable for it. This is the one place `M11`'s
+  eventual multi-table `FROM` list will extend from - see
+  `planner::binder.MD` for why an alias, once given, replaces `name` as
+  the only valid qualifier for `Expr::Column { table, .. }` inside this
+  statement, rather than both being accepted.
 - `SelectItem` - one item in a `SELECT` list: `Wildcard` (`*`, every
   column of the source table) or `Expr(Expr)` (a single projected
   expression).
@@ -43,10 +51,13 @@ consumes.
   `NULL`; true unless `NOT NULL` was given — though the current grammar
   never produces `NOT NULL`, so this is always `true` in practice).
 - `Expr` - a scalar SQL expression, as parsed (not yet bound to a schema).
-  `Literal(Value)` is a literal value. `Column(String)` is a bare column
-  reference. `BinaryOp { left, op, right }` applies a `BinaryOperator` to
-  two operands. `UnaryOp { op, expr }` applies a `UnaryOperator` to one
-  operand. `IsNull { expr, negated }` is `<expr> IS NULL` (`negated`
+  `Literal(Value)` is a literal value. `Column { table, name }` is a
+  column reference: `name` alone (`table: None`) for a bare `col`, or
+  `table` set for a qualified `t.col` - `table` names a range variable
+  (a `TableRef`'s `name` or `alias`), not necessarily the literal table
+  name once an alias is in play (`planner::binder.MD`). `BinaryOp { left,
+  op, right }` applies a `BinaryOperator` to two operands. `UnaryOp { op,
+  expr }` applies a `UnaryOperator` to one operand. `IsNull { expr, negated }` is `<expr> IS NULL` (`negated`
   false) or `<expr> IS NOT NULL` (`negated` true) - the only way to test
   for `NULL` that actually returns a `Boolean`: `<expr> = NULL` parses as
   an ordinary `BinaryOp` and, under three-valued logic, evaluates to
@@ -66,7 +77,7 @@ use sql::{BinaryOperator, Expr};
 use types::Value;
 
 let predicate = Expr::BinaryOp {
-    left: Box::new(Expr::Column("a".to_string())),
+    left: Box::new(Expr::Column { table: None, name: "a".to_string() }),
     op: BinaryOperator::Eq,
     right: Box::new(Expr::Literal(Value::BigInt(1))),
 };

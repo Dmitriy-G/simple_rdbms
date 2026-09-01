@@ -27,6 +27,13 @@ pipeline, against a real (tempfile-backed) database file.
   NULL` finds exactly the row with a `NULL` `b`, and `WHERE b IS NOT NULL`
   finds exactly the rows without one - the case `= NULL` can never handle
   under three-valued logic (`sql::ast.MD`'s `Expr::IsNull` entry).
+- `select_resolves_qualified_columns_against_a_table_alias` - `SELECT u.a
+  FROM t u WHERE u.b = 20` resolves both qualified references against the
+  alias `u`, not the real table name `t`.
+- `qualifying_a_column_with_the_original_name_after_aliasing_is_an_error` -
+  once `FROM t u` gives `t` an alias, `t.a` (the original name) is no
+  longer in scope and `Database::execute` returns a `common::Error` whose
+  `sql_state()` is `SqlState::UNDEFINED_TABLE`.
 - `insert_spanning_multiple_pages_is_all_readable_back` - 1000 single-
   column rows (enough to span several heap pages) all round-trip through
   `INSERT` then `SELECT`.

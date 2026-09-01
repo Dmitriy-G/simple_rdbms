@@ -70,16 +70,26 @@ becomes "semantically valid against this database's schema".
   statement or another `Explain` (`sql::parser.MD`'s `parse_explain`), so
   this recursive call can never hit the unreachable arm above.
 - `Binder::bind_select(&self, select) -> Result<BoundSelect, PlannerError>` -
-  private. Resolves the source table, expands `*` or binds each selected
+  private. Resolves the source table by `select.from.name` (always the
+  real catalog name, never the alias), expands `*` or binds each selected
   expression, and type-checks the optional `WHERE` predicate as `Boolean`.
+  Computes `table_scope` as `select.from.alias`, falling back to
+  `select.from.name` when there is no alias, and passes it to every
+  `bind_expr` call so a qualified column reference (`sql::Expr::Column {
+  table: Some(_), .. }`) can be checked against it. Once an alias is
+  given, it - not the original table name - is the only valid qualifier;
+  this mirrors Postgres, where an aliased table's original name goes out
+  of scope for qualification inside that statement.
 - `Binder::bind_insert(&self, insert) -> Result<BoundInsert, PlannerError>` -
   private. Resolves the destination table and target column indices
   (every column, in schema order, if no explicit list was given), checks
   each row's value count against the target list, and binds each value
-  against an empty schema — values in an `INSERT` have no source row to
-  resolve column references against, so binding against an empty schema
-  turns any bare column reference into an `UnknownColumn` error. Columns
-  not covered by a row default to `BoundExpr::Literal(Value::Null)`.
+  against an empty schema with no table scope (`table_scope: None`) —
+  values in an `INSERT` have no source row to resolve column references
+  against, so a bare column reference becomes `UnknownColumn` and a
+  qualified one becomes `UnknownTable` (nothing is in scope to qualify
+  against). Columns not covered by a row default to
+  `BoundExpr::Literal(Value::Null)`.
 - `Binder::bind_create_table(&self, create) -> BoundCreateTable` - private.
   Converts each parsed `ColumnDef` into a `BoundColumnDef` directly, with
   no catalog lookup (the table doesn't exist yet).
@@ -88,20 +98,33 @@ becomes "semantically valid against this database's schema".
   `create.column` via `Schema::column_index`, the same patterns
   `bind_select`/`bind_insert` already use, raising `UnknownTable`/
   `UnknownColumn` for either miss.
-- `Binder::bind_expr(&self, expr, schema) -> Result<(BoundExpr, Option<DataType>), PlannerError>` -
+- `Binder::bind_expr(&self, expr, schema, table_scope) -> Result<(BoundExpr, Option<DataType>), PlannerError>` -
   private. Binds an expression against `schema`, resolving column
   references to ordinals and type-checking every operator application.
-  Returns the bound expression along with its resolved type, or `None` if
-  the expression is a `NULL` literal (which has no type of its own and is
-  treated as compatible with any type it's checked against).
-  `sql::Expr::IsNull { expr, negated }` binds its operand against no type
-  restriction at all (any type, including an untyped `NULL` literal, can
-  be tested for nullness) and always resolves to `Boolean`.
-- `Binder::bind_unary_op(&self, op, expr, schema) -> Result<(BoundExpr, Option<DataType>), PlannerError>` -
+  `table_scope` is the one range-variable name (a `TableRef`'s alias or
+  name; `None` where there is no table in scope at all, as in
+  `bind_insert`) a qualified column reference is allowed to name -
+  `sql::Expr::Column { table: Some(qualifier), name }` is rejected with
+  `PlannerError::UnknownTable(qualifier)` unless `table_scope ==
+  Some(qualifier)`; `table: None` resolves `name` against `schema`
+  exactly as before, regardless of `table_scope`. `table_scope` is
+  threaded unchanged through every recursive call - it names the one
+  table a qualifier may refer to, not a type to check an operand against,
+  so it never varies within one statement the way `schema` conceptually
+  could once joins exist (M11). Returns the bound expression along with
+  its resolved type, or `None` if the expression is a `NULL` literal
+  (which has no type of its own and is treated as compatible with any
+  type it's checked against). `sql::Expr::IsNull { expr, negated }` binds
+  its operand against no type restriction at all (any type, including an
+  untyped `NULL` literal, can be tested for nullness) and always resolves
+  to `Boolean`.
+- `Binder::bind_unary_op(&self, op, expr, schema, table_scope) -> Result<(BoundExpr, Option<DataType>), PlannerError>` -
   private. Type-checks `NOT` (operand must be `Boolean`) and unary `-`
-  (operand must be numeric and non-`NULL`).
-- `Binder::bind_binary_op(&self, left, op, right, schema) -> Result<(BoundExpr, Option<DataType>), PlannerError>` -
-  private. Binds both operands, applies `coerce_comparison_operands` to
+  (operand must be numeric and non-`NULL`); `table_scope` passes straight
+  through to the recursive `bind_expr` call.
+- `Binder::bind_binary_op(&self, left, op, right, schema, table_scope) -> Result<(BoundExpr, Option<DataType>), PlannerError>` -
+  private. Binds both operands (each against the same `table_scope`),
+  applies `coerce_comparison_operands` to
   let a literal narrow towards a compared column's type, then type-checks
   by operator family: `AND`/`OR` require `Boolean` operands;
   `=`/`<>`/`<`/`<=`/`>`/`>=` require matching operand types; arithmetic

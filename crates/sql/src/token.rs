@@ -6,6 +6,7 @@ pub enum TokenKind {
     Insert,
     Into,
     Values,
+    As,
     Create,
     Table,
     Index,

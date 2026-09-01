@@ -2,7 +2,7 @@ use types::{DataType, Value};
 
 use crate::ast::{
     BinaryOperator, ColumnDef, CreateIndexStatement, CreateTableStatement, Expr, InsertStatement,
-    SelectItem, SelectStatement, Statement, UnaryOperator,
+    SelectItem, SelectStatement, Statement, TableRef, UnaryOperator,
 };
 use crate::error::SqlError;
 use crate::token::{Token, TokenKind};
@@ -88,7 +88,7 @@ impl Parser {
         self.expect_kind(TokenKind::Select, "SELECT")?;
         let items = self.parse_select_list()?;
         self.expect_kind(TokenKind::From, "FROM")?;
-        let from = self.expect_identifier()?;
+        let from = self.parse_table_ref()?;
         let where_clause = if matches!(self.current().kind, TokenKind::Where) {
             self.advance();
             Some(self.parse_expr()?)
@@ -96,6 +96,25 @@ impl Parser {
             None
         };
         Ok(SelectStatement { items, from, where_clause })
+    }
+
+    fn parse_table_ref(&mut self) -> Result<TableRef, SqlError> {
+        let name = self.expect_identifier()?;
+        let alias = self.parse_optional_table_alias()?;
+        Ok(TableRef { name, alias })
+    }
+
+    fn parse_optional_table_alias(&mut self) -> Result<Option<String>, SqlError> {
+        if matches!(self.current().kind, TokenKind::As) {
+            self.advance();
+            Ok(Some(self.expect_identifier()?))
+        } else if let TokenKind::Identifier(name) = &self.current().kind {
+            let name = name.clone();
+            self.advance();
+            Ok(Some(name))
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_select_list(&mut self) -> Result<Vec<SelectItem>, SqlError> {
@@ -315,7 +334,13 @@ impl Parser {
             }
             TokenKind::Identifier(name) => {
                 self.advance();
-                Ok(Expr::Column(name))
+                if matches!(self.current().kind, TokenKind::Dot) {
+                    self.advance();
+                    let column = self.expect_identifier()?;
+                    Ok(Expr::Column { table: Some(name), name: column })
+                } else {
+                    Ok(Expr::Column { table: None, name })
+                }
             }
             TokenKind::LParen => {
                 self.advance();

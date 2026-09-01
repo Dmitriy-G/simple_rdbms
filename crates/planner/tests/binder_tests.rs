@@ -237,6 +237,47 @@ fn is_null_accepts_any_operand_type_without_coercion() {
 }
 
 #[test]
+fn qualified_column_matches_the_table_name_when_no_alias_is_given() {
+    let catalog = catalog_with_users();
+    let result = bind(&catalog, "SELECT users.id FROM users WHERE users.active = TRUE");
+    assert!(result.is_ok(), "expected bind to succeed, got {result:?}");
+}
+
+#[test]
+fn qualified_column_matches_the_alias_once_one_is_given() {
+    let catalog = catalog_with_users();
+    let result = bind(&catalog, "SELECT u.id FROM users u WHERE u.active = TRUE");
+    assert!(result.is_ok(), "expected bind to succeed, got {result:?}");
+}
+
+#[test]
+fn qualified_column_using_the_original_name_after_aliasing_is_unknown_table() {
+    let catalog = catalog_with_users();
+    match bind(&catalog, "SELECT users.id FROM users u") {
+        Err(PlannerError::UnknownTable(name)) => assert_eq!(name, "users"),
+        other => panic!("expected UnknownTable, got {other:?}"),
+    }
+}
+
+#[test]
+fn qualified_column_with_an_unknown_table_prefix_is_unknown_table() {
+    let catalog = catalog_with_users();
+    match bind(&catalog, "SELECT bogus.id FROM users") {
+        Err(PlannerError::UnknownTable(name)) => assert_eq!(name, "bogus"),
+        other => panic!("expected UnknownTable, got {other:?}"),
+    }
+}
+
+#[test]
+fn qualified_column_in_insert_values_is_unknown_table() {
+    let catalog = catalog_with_users();
+    match bind(&catalog, "INSERT INTO users (id) VALUES (t.id)") {
+        Err(PlannerError::UnknownTable(name)) => assert_eq!(name, "t"),
+        other => panic!("expected UnknownTable, got {other:?}"),
+    }
+}
+
+#[test]
 fn binds_create_table() {
     let catalog = catalog_with_users();
     let BoundStatement::CreateTable(create) =

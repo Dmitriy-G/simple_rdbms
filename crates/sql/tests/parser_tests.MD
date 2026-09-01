@@ -17,6 +17,10 @@ parse error (not a panic).
   `needle`'s first occurrence in `source`, panicking if absent; used to
   compute the expected offset in error-location assertions without
   hand-counting bytes.
+- `col_expr(name) -> Expr` - private. `Expr::Column { table: None, name }`,
+  shorthand for the bare-column case every pre-B-2 test still exercises.
+- `table_ref(name) -> TableRef` - private. `TableRef { name, alias: None }`,
+  shorthand for an unaliased `FROM` target.
 - `parses_create_table` - a `CREATE TABLE` with `INTEGER`, `TEXT`, and
   `BOOLEAN` columns parses to the expected AST.
 - `create_table_type_names_are_case_insensitive` - lowercase `create
@@ -39,6 +43,15 @@ parse error (not a panic).
   `SelectItem::Wildcard`.
 - `parses_select_list_and_where_clause` - a `SELECT` with an explicit
   column list and a `WHERE` clause parses to the expected AST.
+- `parses_qualified_column_reference` - `t.a` in the select list and `t.b`
+  in the `WHERE` clause both parse to `Expr::Column { table: Some("t"),
+  .. }`.
+- `parses_table_alias_with_and_without_as` - `FROM t AS u` and `FROM t u`
+  both parse to the same `TableRef { name: "t", alias: Some("u") }`.
+- `from_without_an_alias_still_allows_a_where_clause` - `FROM t WHERE a =
+  1` parses `from` with `alias: None` and still finds the `WHERE`
+  clause - proving `parse_optional_table_alias` correctly declines to
+  consume `WHERE` as a bare alias.
 - `precedence_or_binds_looser_than_and` - `a = 1 OR b = 2 AND c = 3`
   parses as `a=1 OR (b=2 AND c=3)`.
 - `parentheses_override_precedence` - `(a = 1 OR b = 2) AND c = 3` parses

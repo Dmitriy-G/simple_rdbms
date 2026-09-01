@@ -90,6 +90,30 @@ fn where_is_null_and_is_not_null_find_and_exclude_null_rows() {
 }
 
 #[test]
+fn select_resolves_qualified_columns_against_a_table_alias() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER, b INTEGER)").expect("create table");
+    db.execute("INSERT INTO t VALUES (1, 10), (2, 20)").expect("insert");
+
+    let (columns, rows) =
+        rows_and_columns_of(db.execute("SELECT u.a FROM t u WHERE u.b = 20").expect("select"));
+    assert_eq!(columns, vec!["a"]);
+    assert_eq!(rows, vec![vec![Value::Integer(2)]]);
+}
+
+#[test]
+fn qualifying_a_column_with_the_original_name_after_aliasing_is_an_error() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER)").expect("create table");
+    let err = db.execute("SELECT t.a FROM t u").expect_err("expected a bind error");
+    assert_eq!(err.sql_state(), SqlState::UNDEFINED_TABLE);
+}
+
+#[test]
 fn insert_spanning_multiple_pages_is_all_readable_back() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let mut db = open(&dir);

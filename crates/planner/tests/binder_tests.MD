@@ -68,6 +68,22 @@ unknown columns/tables and type mismatches are rejected.
   NULL` on a `Varchar` column and a `Boolean` column both bind
   successfully, since nullness testing places no type restriction on its
   operand.
+- `qualified_column_matches_the_table_name_when_no_alias_is_given` -
+  `users.id`/`users.active` qualified by the real table name bind
+  successfully when `FROM users` carries no alias.
+- `qualified_column_matches_the_alias_once_one_is_given` - `u.id`/`u.active`
+  qualified by the alias bind successfully against `FROM users u`.
+- `qualified_column_using_the_original_name_after_aliasing_is_unknown_table` -
+  once `FROM users u` gives `users` an alias, `users.id` (the original
+  name) is no longer a valid qualifier and returns
+  `PlannerError::UnknownTable("users")`.
+- `qualified_column_with_an_unknown_table_prefix_is_unknown_table` -
+  `bogus.id` against `FROM users` returns
+  `PlannerError::UnknownTable("bogus")`.
+- `qualified_column_in_insert_values_is_unknown_table` - a qualified
+  column inside an `INSERT ... VALUES` row, which has no `FROM` and so no
+  table in scope to qualify against at all, returns
+  `PlannerError::UnknownTable`.
 - `binds_create_table` - `CREATE TABLE t (a INTEGER, b TEXT)` binds to a
   `BoundCreateTable` with the given name and two columns.
 

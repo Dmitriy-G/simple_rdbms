@@ -115,6 +115,7 @@ impl<'a> Lexer<'a> {
             "INSERT" => TokenKind::Insert,
             "INTO" => TokenKind::Into,
             "VALUES" => TokenKind::Values,
+            "AS" => TokenKind::As,
             "CREATE" => TokenKind::Create,
             "TABLE" => TokenKind::Table,
             "INDEX" => TokenKind::Index,

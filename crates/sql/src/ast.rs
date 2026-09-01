@@ -15,8 +15,14 @@ pub enum Statement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectStatement {
     pub items: Vec<SelectItem>,
-    pub from: String,
+    pub from: TableRef,
     pub where_clause: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableRef {
+    pub name: String,
+    pub alias: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,7 +61,7 @@ pub struct ColumnDef {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Value),
-    Column(String),
+    Column { table: Option<String>, name: String },
     BinaryOp { left: Box<Expr>, op: BinaryOperator, right: Box<Expr> },
     UnaryOp { op: UnaryOperator, expr: Box<Expr> },
     IsNull { expr: Box<Expr>, negated: bool },

@@ -51,6 +51,15 @@ cursor rather than by recursing over the input text.
 - `Parser::parse_select_list(&mut self) -> Result<Vec<SelectItem>, SqlError>` -
   private. Parses a `select_list`: either a bare `*` or a comma-separated
   list of expressions.
+- `Parser::parse_table_ref(&mut self) -> Result<TableRef, SqlError>` -
+  private. Parses a `FROM` clause's single source table: a required table
+  name followed by `parse_optional_table_alias`.
+- `Parser::parse_optional_table_alias(&mut self) -> Result<Option<String>, SqlError>` -
+  private. Consumes `AS ident` if the current token is `AS`; otherwise, if
+  the current token is a bare `Identifier` (not `WHERE`, `;`, or `EOF` -
+  none of which lex as `Identifier`), consumes it as an alias with no
+  `AS`; otherwise leaves the cursor untouched and returns `None`. Mirrors
+  Postgres's optional-`AS` table alias grammar.
 - `Parser::parse_insert(&mut self) -> Result<InsertStatement, SqlError>` -
   private. Parses an `INSERT INTO` statement.
 - `Parser::parse_value_row(&mut self) -> Result<Vec<Expr>, SqlError>` -
@@ -75,7 +84,11 @@ cursor rather than by recursing over the input text.
   `parse_primary` - private. The precedence-climbing ladder `parse_expr`
   sits on top of, each one level tighter than the last; `parse_primary`
   is the base case, matching literals, column references, and
-  parenthesized sub-expressions. `parse_comparison` parses its operands
+  parenthesized sub-expressions - a bare identifier becomes
+  `Expr::Column { table: None, name }`, and one immediately followed by
+  `.` and a second identifier becomes `Expr::Column { table: Some(first),
+  name: second }`, a qualified reference the binder resolves against the
+  `FROM` clause's `TableRef` (`planner::binder.MD`). `parse_comparison` parses its operands
   through `parse_is_null_operand` rather than `parse_unary` directly, so
   `IS [NOT] NULL` binds to one comparison operand the same way a
   Postgres-style grammar treats it - tighter than `=`/`<`/etc, looser
