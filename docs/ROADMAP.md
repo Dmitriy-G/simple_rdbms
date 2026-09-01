@@ -9,7 +9,9 @@ flush path before B+tree splits start writing several related pages per
 operation — see M12's entry), and M14 no longer depends on M10 (the
 single-threaded engine thread removes the dependency — see M14's entry).
 Read each entry's Problem/Solution for what it actually depends on rather
-than assuming strict numeric order.
+than assuming strict numeric order. Each heading also carries a status:
+✅ Done (shipped), 🚧 In Progress (actively being built), or 🆕 New (not
+started).
 
 ## M1 — Durable, fixed-size storage ✅ Done
 **Problem:** a database needs a way to persist bytes to disk in units the
@@ -112,7 +114,7 @@ touch a small fraction of a table still pay for reading all of it.
 choose over a sequential scan, built against the durable, recoverable
 storage layer M6–M8 provide rather than the pre-WAL one — see ADR 0003.
 
-## M10 — Concurrent transactions without corrupting each other
+## M10 — Concurrent transactions without corrupting each other 🆕 New
 **Problem:** multiple transactions running at once can interleave their
 reads and writes in ways that violate isolation, from lost updates to
 dirty reads, on top of the atomicity M8 already guarantees for each one
@@ -120,7 +122,7 @@ individually.
 **Solution:** a lock manager enforcing two-phase locking first, then MVCC
 for snapshot isolation so readers stop blocking writers.
 
-## M11 — Answering multi-table queries efficiently
+## M11 — Answering multi-table queries efficiently 🆕 New
 **Problem:** multi-table queries cannot be expressed at all today —
 `FROM` accepts exactly one table (`crates/sql/src/parser.rs` has no
 `JOIN` production and no comma-separated `FROM` list), so any question
@@ -184,7 +186,7 @@ distinct from the interactive `cli` REPL; and container packaging
 file on a named volume, and `SIGTERM` handled as a graceful checkpoint
 -and-close instead of every restart paying for a full crash recovery.
 
-## M14 — Speaking SQL over the network
+## M14 — Speaking SQL over the network 🆕 New
 **Problem:** every milestone through M13 still requires an in-process
 `Database` handle - `cli`'s REPL and `server`'s metrics/health endpoints
 both open the database directly in the same process that uses it. Nothing
@@ -223,7 +225,7 @@ would use to relax the single engine thread into genuine multi-threaded
 execution - but are no longer a prerequisite for shipping a network
 frontend.
 
-### M14.1 — Many connections against a single-threaded engine
+### M14.1 — Many connections against a single-threaded engine 🆕 New
 **Problem:** a wire listener needs to serve many concurrent connections,
 each of which may submit a statement at any time, but letting each
 connection's statements run against a shared `Database` from its own
@@ -237,7 +239,7 @@ isolation stays genuinely serializable rather than merely untested. At
 most one explicit transaction is open at a time; a second `BEGIN` waits,
 then fails with `55P03`.
 
-### M14.2 — PostgreSQL wire protocol, simple query
+### M14.2 — PostgreSQL wire protocol, simple query 🆕 New
 **Problem:** M14.1 gives the engine a single-threaded entry point reached
 by message passing, but nothing yet speaks the bytes a Postgres client
 actually sends - startup negotiation, parameter/status exchange, and the
@@ -248,7 +250,7 @@ simple query flow all have to work before any real client can connect.
 extra_float_digits` during handshake and the connection dies without it).
 Target: `psql` works end to end.
 
-### M14.3 — Extended query protocol
+### M14.3 — Extended query protocol 🆕 New
 **Problem:** simple query (M14.2) inlines literals into full SQL text on
 every execution, which is what `psql` does but not what real drivers do -
 JDBC and most connection-pooled clients prepare a statement once and
@@ -259,7 +261,7 @@ as a new grammar element, parameter type inference, binary format for
 numerics, and `PortalSuspended` for fetch limits. Target: pgjdbc
 `PreparedStatement` works. Simple query alone gets a demo, not a driver.
 
-### M14.4 — `pg_catalog` for real SQL clients
+### M14.4 — `pg_catalog` for real SQL clients 🆕 New
 **Problem:** ODBC needs no separate driver work - psqlODBC speaks the
 same protocol as M14.2/M14.3 - but every real SQL client, ODBC or
 otherwise, runs introspection queries against `pg_class`, `pg_namespace`,
@@ -271,7 +273,7 @@ never fabricate a result. Track what works in
 `docs/CLIENT-COMPATIBILITY.md`. See datafusion-postgres (linked above) as
 a reference `pg_catalog` implementation.
 
-## M15 — Changing and removing rows
+## M15 — Changing and removing rows 🚧 In Progress
 **Problem:** rows can be inserted and read but never modified or removed.
 `DELETE` and `UPDATE` do not exist in the token list, the AST or the
 grammar; `TableHeap::delete_tuple` and `update_tuple_in_place` are
@@ -283,7 +285,7 @@ rebalancing, index maintenance on both paths, and the `// TODO(M5): vacuum`
 compaction in `heap.rs` so tombstoned space is actually reclaimed. Note
 that this is a hard prerequisite for M18.
 
-## M16 — Column constraints that hold
+## M16 — Column constraints that hold 🆕 New
 **Problem:** `Column::nullable` is parsed as a hardcoded `true`, plumbed
 through the binder into the catalog, persisted to disk, and never checked
 - a schema field that no SQL can set and no code enforces.
@@ -293,7 +295,7 @@ with `23502`, plus `DEFAULT <expr>` and `CHECK (<expr>)`. Add `23514
 check_violation` to `SqlState`. No index work required, so this is the
 cheapest of the four.
 
-## M17 — Identity and uniqueness
+## M17 — Identity and uniqueness 🆕 New
 **Problem:** no table can declare a primary key, and the B+tree
 deliberately permits duplicates - `get` walks the leaf sibling chain to
 collect them. `SqlState::UNIQUE_VIOLATION` is defined and unreachable.
@@ -305,7 +307,7 @@ constraint kind in the index catalog row so it survives a restart. Note
 the interaction with M15: uniqueness must be re-checked on `UPDATE`, not
 only on `INSERT`.
 
-## M18 — Referential integrity
+## M18 — Referential integrity 🆕 New
 **Problem:** no way to express that one table's column references
 another's, so the application has to enforce it and nothing stops an
 orphan row.
@@ -319,3 +321,120 @@ M17 because the referenced column must be backed by a unique index for
 the check to be a lookup rather than a scan. Record deferred constraint
 checking (`SET CONSTRAINTS DEFERRED`) as explicitly out of scope, since it
 needs statement-level rather than row-level checking.
+
+## M19 — Predicates a real query needs 🆕 New
+**Problem:** `WHERE` supports comparison, `AND`/`OR`/`NOT` and arithmetic
+and nothing else. `IN`, `BETWEEN` and `LIKE` have no tokens, no AST and
+no grammar, so the most common filters an application writes cannot be
+expressed. `IN` in particular is what an ORM emits for every
+fetch-by-many.
+**Solution:** `IN (list)`, `NOT IN`, `BETWEEN ... AND ...`, and `LIKE`
+with `%`/`_` and `ESCAPE`. `IN` over a literal list lowers to a
+disjunction; leave `IN (subquery)` out of scope, since subqueries do not
+exist. Extend `IndexScanRule` so `IN` over an indexed column becomes a
+set of range scans rather than a full scan with a filter. (`IS NULL` is
+not here — it is B-1, folded into M16.)
+
+## M20 — Shaping the result set 🆕 New
+**Problem:** results come back in physical heap order with no way to
+sort, limit, page or deduplicate them, and no way to name a computed
+column. `SelectItem` has no alias field. Any application that shows a
+list of anything has to fetch the whole table and sort in memory.
+**Solution:** `ORDER BY` with `ASC`/`DESC` and `NULLS FIRST`/`LAST`,
+`LIMIT`/`OFFSET`, `DISTINCT`, and `AS` aliases in the select list.
+`ORDER BY` is where the executor first has to handle a result larger than
+memory: implement an external merge sort that spills runs through the
+buffer pool rather than assuming everything fits. Teach the optimizer to
+skip the sort when an index already provides the requested order.
+
+## M21 — Aggregation 🆕 New
+**Problem:** there are no aggregate functions and no `GROUP BY`, so
+`SELECT COUNT(*) FROM t` — the single most common query anyone writes
+against a new database — is a parse error.
+**Solution:** `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` including `COUNT(*)`
+and `COUNT(DISTINCT ...)`, `GROUP BY`, `HAVING`, and the NULL semantics
+that go with them (aggregates skip NULLs; `COUNT(*)` does not; an empty
+group yields `NULL` except `COUNT`, which yields 0). Hash aggregation
+with a spill path when the group table exceeds its memory budget, and a
+grouping-key check that rejects a select-list column that is neither
+grouped nor aggregated with `42803`.
+
+## M22 — Dates, times and exact numerics 🆕 New
+**Problem:** `DataType` is `Boolean`, `Integer`, `BigInt`, `Double`,
+`Varchar` — no date or time type of any kind, and no exact decimal.
+Money cannot be stored without rounding error and a timestamp cannot be
+stored at all, which rules out most real schemas.
+**Solution:** `DATE`, `TIME`, `TIMESTAMP`, `TIMESTAMPTZ` and `INTERVAL`,
+plus `NUMERIC(p, s)`/`DECIMAL` with exact arithmetic. Memcomparable
+encodings for each so they can be indexed, `now()`/`current_timestamp`,
+date arithmetic against `INTERVAL`, and a text format matching Postgres's
+so clients parse it. Do this before M14.2: every column in a
+`RowDescription` needs a real Postgres type OID, and mapping a type
+system that is still growing means doing that work twice.
+
+## M23 — Generated identity 🆕 New
+**Problem:** every row's primary key has to be supplied by the client.
+There are no sequences and no `SERIAL`, so two concurrent inserts cannot
+agree on the next id without an external coordinator. M17 gives tables a
+primary key but no way to generate one.
+**Solution:** sequences as catalog objects with their own durable
+counter, `nextval`/`currval`/`setval`, `SERIAL` and `BIGSERIAL` as column
+shorthands, and `GENERATED BY DEFAULT AS IDENTITY`. Sequence advances are
+non-transactional by design — a rolled-back insert does not return its
+id — and that must be stated in the milestone, in the catalog docs and in
+an ADR, because it is the one place in the system where a rollback
+deliberately does not undo something. ORMs depend on this heavily; expect
+every insert from one to end in `RETURNING id`, which means `RETURNING`
+belongs here too.
+
+## M24 — Removing and altering schema objects 🆕 New
+**Problem:** a table, once created, exists forever. There is no `DROP`,
+`ALTER` or `TRUNCATE` in the token list, and `Catalog::drop_table` is a
+`todo!()`. A schema mistake means deleting the database file.
+**Solution:** `DROP TABLE`, `DROP INDEX`, `TRUNCATE`, and `ALTER TABLE`
+with `ADD COLUMN`, `DROP COLUMN` and `RENAME`. `DROP` has to reclaim
+every page the table's heap and indexes owned, which needs the free-space
+map the allocator does not have — `DiskManager::allocate_page` only ever
+appends. That free list is the real work in this milestone. `IF EXISTS`
+and `IF NOT EXISTS` throughout, since every migration tool emits them.
+
+## M25 — Authentication and access control 🆕 New
+**Problem:** anything that can reach the port is a superuser. There are
+no users, no roles and no privileges, and M14.2 opens a socket without
+addressing it.
+**Solution:** SCRAM-SHA-256 in the startup handler (pgjdbc and psycopg
+both negotiate it by default; cleartext and md5 as fallbacks), `CREATE
+ROLE`/`ALTER ROLE`/`DROP ROLE`, `GRANT`/`REVOKE` on tables, an owner per
+object in the catalog, and a `host`/`user`/`method` access rules file.
+Until this lands, the M14.2 listener must bind to `127.0.0.1` by default
+and require an explicit opt-in to bind anywhere else — record that as a
+constraint in the M14.2 entry, not as a footnote here.
+
+## M26 — Backup, restore and point-in-time recovery 🆕 New
+**Problem:** the only way to back up the database is to stop the process
+and copy three files, and the only recovery target is "whatever was in
+the WAL when it died". Every mechanism needed for something better
+already exists — segmented WAL, monotonic LSNs, checkpoints with a
+recovery bound — and none of it is exposed.
+**Solution:** a logical dump and restore (`pg_dump`-shaped: schema plus
+`INSERT`s or a copy stream), a physical base backup taken while the
+database is running, WAL segment archiving instead of deletion at
+truncation, and replay to a target LSN or timestamp. This is the payoff
+for M5 through M12 and it is the difference between a durable database
+and an operable one. It also gives the crash-injection harness a second
+oracle: a restored backup replayed to an LSN must match the live database
+at that LSN.
+
+## M27 — Statistics and cost-based planning 🆕 New
+**Problem:** `IndexScanRule` picks an index whenever a predicate mentions
+an indexed column, with no idea how selective it is. An index scan
+returning 90% of a table is slower than a sequential scan, and the
+planner cannot tell. M11's title says "efficiently", but join ordering
+without cardinality estimates is a guess.
+**Solution:** `ANALYZE`, per-column statistics (row count, distinct
+count, null fraction, a histogram or most-common-values list) persisted
+in the catalog, selectivity estimation for the predicate forms M19 and
+M21 add, a cost model over sequential and index scans, and join ordering
+driven by it. Extend `EXPLAIN` to print estimated rows and cost, and add
+`EXPLAIN ANALYZE` so estimates can be compared against reality — without
+that, a cost model cannot be debugged.
