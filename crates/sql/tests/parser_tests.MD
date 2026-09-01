@@ -52,6 +52,18 @@ parse error (not a panic).
   1` parses `from` with `alias: None` and still finds the `WHERE`
   clause - proving `parse_optional_table_alias` correctly declines to
   consume `WHERE` as a bare alias.
+- `order_by_is_not_swallowed_as_a_table_alias` - `SELECT * FROM t ORDER BY
+  x` reports `SqlError::UnexpectedToken` naming `ORDER`, proving
+  `parse_optional_table_alias` declines a reserved word rather than
+  consuming it as `t`'s alias and failing later on `BY` instead.
+- `table_alias_declines_reserved_words_not_yet_tokenized` - the same
+  check for a representative sweep of `lexer::RESERVED_WORDS` words that
+  have no `TokenKind` of their own yet (`ORDER`, `GROUP`, `HAVING`,
+  `LIMIT`, `JOIN`, `RETURNING`, `UNION`, `OFFSET`): each is left
+  unconsumed rather than swallowed as an alias.
+- `table_alias_declines_reserved_words_case_insensitively` - lowercase
+  `order` is declined exactly like `ORDER`, matching
+  `is_reserved_word`'s case-insensitive comparison.
 - `precedence_or_binds_looser_than_and` - `a = 1 OR b = 2 AND c = 3`
   parses as `a=1 OR (b=2 AND c=3)`.
 - `parentheses_override_precedence` - `(a = 1 OR b = 2) AND c = 3` parses

@@ -228,3 +228,32 @@ impl<'a> Lexer<'a> {
         }
     }
 }
+
+pub(crate) const RESERVED_WORDS: &[&str] = &[
+    "ORDER",
+    "BY",
+    "GROUP",
+    "HAVING",
+    "LIMIT",
+    "OFFSET",
+    "JOIN",
+    "INNER",
+    "LEFT",
+    "RIGHT",
+    "FULL",
+    "OUTER",
+    "CROSS",
+    "ON",
+    "USING",
+    "UNION",
+    "INTERSECT",
+    "EXCEPT",
+    "RETURNING",
+    "SET",
+    "WHERE",
+    "FROM",
+];
+
+pub(crate) fn is_reserved_word(word: &str) -> bool {
+    RESERVED_WORDS.iter().any(|reserved| word.eq_ignore_ascii_case(reserved))
+}

@@ -5,6 +5,7 @@ use crate::ast::{
     SelectItem, SelectStatement, Statement, TableRef, UnaryOperator,
 };
 use crate::error::SqlError;
+use crate::lexer::is_reserved_word;
 use crate::token::{Token, TokenKind};
 
 pub struct Parser {
@@ -109,6 +110,9 @@ impl Parser {
             self.advance();
             Ok(Some(self.expect_identifier()?))
         } else if let TokenKind::Identifier(name) = &self.current().kind {
+            if is_reserved_word(name) {
+                return Ok(None);
+            }
             let name = name.clone();
             self.advance();
             Ok(Some(name))

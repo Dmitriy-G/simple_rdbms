@@ -1,7 +1,13 @@
 # lexer
 
 Turns SQL source text into a flat stream of `Token`s. Holds no knowledge
-of grammar; a `Parser` is what gives the token stream structure.
+of grammar; a `Parser` is what gives the token stream structure. The one
+exception is `RESERVED_WORDS`/`is_reserved_word`: not part of tokenizing
+itself (every reserved word still lexes as an ordinary `Identifier` until
+it earns its own `TokenKind`), but kept here rather than in `parser.rs`
+so the one place that knows every word the grammar will ever treat
+specially - lexed or not - is also the one place a future keyword's
+`TokenKind` gets added.
 
 ## Key Components
 
@@ -40,6 +46,24 @@ of grammar; a `Parser` is what gives the token stream structure.
   while `pred` holds on the current byte.
 - `Lexer::char_at(&self, offset) -> char` - private. Decodes the UTF-8
   character starting at byte `offset`.
+- `RESERVED_WORDS` - `pub(crate)`. The words that may never be treated as
+  a bare table alias, even though most of them lex as an ordinary
+  `Identifier` today - `ORDER`, `BY`, `GROUP`, `HAVING`, `LIMIT`,
+  `OFFSET`, `JOIN`, `INNER`, `LEFT`, `RIGHT`, `FULL`, `OUTER`, `CROSS`,
+  `ON`, `USING`, `UNION`, `INTERSECT`, `EXCEPT`, `RETURNING`, `SET`,
+  `WHERE`, `FROM`. Seeded with every keyword a future grammar addition
+  (`ORDER BY` in M20, `JOIN` in M11, `RETURNING` in M23, ...) will need,
+  not only the ones tokenized so far, so `parser.MD`'s
+  `parse_optional_table_alias` never has to be revisited just to add one
+  more word - only `RESERVED_WORDS` does. A word appearing here before it
+  has its own `TokenKind` is harmless: it still lexes as `Identifier`
+  everywhere else in the grammar (`SELECT limit FROM t` still parses
+  `limit` as a column reference), since this list only governs where an
+  alias may appear, exactly the distinction Postgres's own reserved/
+  unreserved keyword split maintains.
+- `is_reserved_word(word) -> bool` - `pub(crate)`. Case-insensitive
+  membership test against `RESERVED_WORDS`, matching how every keyword in
+  `lex_ident_or_keyword` is already matched case-insensitively.
 
 ## Usage Example
 

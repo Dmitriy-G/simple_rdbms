@@ -231,6 +231,40 @@ fn from_without_an_alias_still_allows_a_where_clause() {
 }
 
 #[test]
+fn order_by_is_not_swallowed_as_a_table_alias() {
+    let err = parse_err("SELECT * FROM t ORDER BY x");
+    match err {
+        SqlError::UnexpectedToken { found, .. } => {
+            assert!(found.contains("ORDER"), "expected the error to name ORDER, got {found:?}");
+        }
+        other => panic!("expected UnexpectedToken naming ORDER, got {other:?}"),
+    }
+}
+
+#[test]
+fn table_alias_declines_reserved_words_not_yet_tokenized() {
+    for word in ["ORDER", "GROUP", "HAVING", "LIMIT", "JOIN", "RETURNING", "UNION", "OFFSET"] {
+        let source = format!("SELECT * FROM t {word}");
+        match parse_err(&source) {
+            SqlError::UnexpectedToken { found, .. } => {
+                assert!(found.contains(word), "expected {found:?} to mention {word:?}");
+            }
+            other => panic!("expected UnexpectedToken for {source:?}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn table_alias_declines_reserved_words_case_insensitively() {
+    match parse_err("SELECT * FROM t order BY x") {
+        SqlError::UnexpectedToken { found, .. } => {
+            assert!(found.contains("order"), "expected the error to name order, got {found:?}");
+        }
+        other => panic!("expected UnexpectedToken, got {other:?}"),
+    }
+}
+
+#[test]
 fn precedence_or_binds_looser_than_and() {
     let stmt = parse("SELECT * FROM t WHERE a = 1 OR b = 2 AND c = 3");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };

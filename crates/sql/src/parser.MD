@@ -56,10 +56,20 @@ cursor rather than by recursing over the input text.
   name followed by `parse_optional_table_alias`.
 - `Parser::parse_optional_table_alias(&mut self) -> Result<Option<String>, SqlError>` -
   private. Consumes `AS ident` if the current token is `AS`; otherwise, if
-  the current token is a bare `Identifier` (not `WHERE`, `;`, or `EOF` -
-  none of which lex as `Identifier`), consumes it as an alias with no
-  `AS`; otherwise leaves the cursor untouched and returns `None`. Mirrors
-  Postgres's optional-`AS` table alias grammar.
+  the current token is a bare `Identifier` that is not one of
+  `lexer::RESERVED_WORDS` (`lexer.MD`), consumes it as an alias with no
+  `AS`; otherwise leaves the cursor untouched and returns `None`. The
+  reserved-word check is what stops `SELECT * FROM t ORDER BY x` from
+  parsing `ORDER` as `t`'s alias and then failing on `BY` with a
+  misleading message - `ORDER`, like every word in the reserved list,
+  has no `TokenKind` of its own yet, so without the check it would look
+  exactly like a legitimate alias. Declining leaves `ORDER` itself as the
+  current token, so the statement still fails - `ORDER BY` isn't
+  supported until M20 - but as an ordinary "unexpected token" error
+  naming `ORDER`, not a confusing one about `BY`. Mirrors Postgres's
+  optional-`AS` table alias grammar, including the reserved/unreserved
+  keyword distinction: a word can be reserved for alias position without
+  yet being a keyword anywhere else.
 - `Parser::parse_insert(&mut self) -> Result<InsertStatement, SqlError>` -
   private. Parses an `INSERT INTO` statement.
 - `Parser::parse_value_row(&mut self) -> Result<Vec<Expr>, SqlError>` -
