@@ -23,6 +23,10 @@ pipeline, against a real (tempfile-backed) database file.
   predicate involves `NULL` and therefore evaluates to `NULL` (not
   `false`) - the row is still excluded either way, since `NULL` is not
   `true`.
+- `where_is_null_and_is_not_null_find_and_exclude_null_rows` - `WHERE b IS
+  NULL` finds exactly the row with a `NULL` `b`, and `WHERE b IS NOT NULL`
+  finds exactly the rows without one - the case `= NULL` can never handle
+  under three-valued logic (`sql::ast.MD`'s `Expr::IsNull` entry).
 - `insert_spanning_multiple_pages_is_all_readable_back` - 1000 single-
   column rows (enough to span several heap pages) all round-trip through
   `INSERT` then `SELECT`.

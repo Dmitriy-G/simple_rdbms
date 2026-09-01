@@ -73,6 +73,23 @@ fn where_clause_evaluates_eq_lt_and_or_and_excludes_null_predicate_rows() {
 }
 
 #[test]
+fn where_is_null_and_is_not_null_find_and_exclude_null_rows() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER, b INTEGER)").expect("create table");
+    db.execute("INSERT INTO t VALUES (1, 10), (2, 20), (3, NULL)").expect("insert");
+
+    let (_, rows) =
+        rows_and_columns_of(db.execute("SELECT a FROM t WHERE b IS NULL").expect("select"));
+    assert_eq!(rows, vec![vec![Value::Integer(3)]]);
+
+    let (_, rows) =
+        rows_and_columns_of(db.execute("SELECT a FROM t WHERE b IS NOT NULL").expect("select"));
+    assert_eq!(rows, vec![vec![Value::Integer(1)], vec![Value::Integer(2)]]);
+}
+
+#[test]
 fn insert_spanning_multiple_pages_is_all_readable_back() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let mut db = open(&dir);

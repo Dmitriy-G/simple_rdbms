@@ -61,6 +61,13 @@ unknown columns/tables and type mismatches are rejected.
 - `rejects_comparison_between_integer_and_bigint_columns` - comparing an
   `Integer` column against a `BigInt` column (no literal on either side to
   coerce) returns `PlannerError::TypeMismatch`.
+- `binds_is_null_and_is_not_null_to_boolean` - `WHERE id IS NULL` and
+  `WHERE id IS NOT NULL` each bind to a `BoundExpr::IsNull` predicate with
+  the expected `negated` flag.
+- `is_null_accepts_any_operand_type_without_coercion` - `IS NULL`/`IS NOT
+  NULL` on a `Varchar` column and a `Boolean` column both bind
+  successfully, since nullness testing places no type restriction on its
+  operand.
 - `binds_create_table` - `CREATE TABLE t (a INTEGER, b TEXT)` binds to a
   `BoundCreateTable` with the given name and two columns.
 

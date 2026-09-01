@@ -8,15 +8,21 @@ Follows SQL three-valued logic throughout: a comparison with a `NULL`
 operand yields `Value::Null` rather than `true`/`false`, and `AND`/`OR`
 only short-circuit to a definite result when one operand is definite
 enough to decide the outcome regardless of the other (`NULL AND false` is
-`false`, `NULL OR true` is `true`); otherwise they too yield `NULL`.
+`false`, `NULL OR true` is `true`); otherwise they too yield `NULL`. The
+one deliberate exception is `IsNull`: `<expr> IS [NOT] NULL` always
+returns a real `Boolean`, never `Value::Null` itself, which is precisely
+what makes it usable where `<expr> = NULL` (three-valued, always `NULL`)
+is not (`sql::ast.MD`'s `Expr::IsNull` entry).
 Arithmetic operators (`+ - * /`) are recognized by the grammar and binder
 but not yet supported here — evaluating one is an `ExecutorError`.
 
 ## Key Components
 
 - `evaluate(expr, tuple) -> Result<Value, ExecutorError>` - evaluates any
-  `BoundExpr` variant (`Literal`, `ColumnRef`, `UnaryOp`, `BinaryOp`)
-  against `tuple`.
+  `BoundExpr` variant (`Literal`, `ColumnRef`, `UnaryOp`, `BinaryOp`,
+  `IsNull`) against `tuple`. `IsNull { expr, negated }` evaluates `expr`
+  and returns `Boolean(true)` when its nullness matches `negated` (`IS
+  NULL` wants `Value::Null`; `IS NOT NULL` wants anything else).
 - `evaluate_unary(op, expr, tuple)` - private. Evaluates `NOT` (`NULL` in,
   `NULL` out; flips a `Boolean`) and unary `-` (negates `Integer`,
   `BigInt`, or `Double`; propagates `NULL`).

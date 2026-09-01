@@ -13,6 +13,7 @@ pub enum TokenKind {
     And,
     Or,
     Not,
+    Is,
     Null,
     True,
     False,

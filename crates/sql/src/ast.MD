@@ -46,7 +46,12 @@ consumes.
   `Literal(Value)` is a literal value. `Column(String)` is a bare column
   reference. `BinaryOp { left, op, right }` applies a `BinaryOperator` to
   two operands. `UnaryOp { op, expr }` applies a `UnaryOperator` to one
-  operand.
+  operand. `IsNull { expr, negated }` is `<expr> IS NULL` (`negated`
+  false) or `<expr> IS NOT NULL` (`negated` true) - the only way to test
+  for `NULL` that actually returns a `Boolean`: `<expr> = NULL` parses as
+  an ordinary `BinaryOp` and, under three-valued logic, evaluates to
+  `NULL` for every row rather than ever selecting one (`expression.MD` in
+  `executor`).
 - `BinaryOperator` - a binary operator that can appear in an
   `Expr::BinaryOp`: `Eq` (`=`), `NotEq` (`<>`/`!=`), `Lt` (`<`), `LtEq`
   (`<=`), `Gt` (`>`), `GtEq` (`>=`), `And` (`AND`), `Or` (`OR`), `Plus`

@@ -46,10 +46,11 @@ memcomparable bounds back into a readable condition.
 - `projected_column(expr, input_cols, position) -> (String, Option<DataType>)` -
   private. The output name and type for one `Projection` expression: a
   `ColumnRef` inherits its source column's name from `input_cols`, and
-  every other expression shape (a literal, an operator application) gets
-  the positional `column<N>` name `planner::binder::BoundSelect::column_names`
-  already uses for the same case, so `EXPLAIN`'s labels agree with what a
-  client would see as the result set's own column names.
+  every other expression shape (a literal, an operator application, an
+  `IsNull` test - always `Boolean`) gets the positional `column<N>` name
+  `planner::binder::BoundSelect::column_names` already uses for the same
+  case, so `EXPLAIN`'s labels agree with what a client would see as the
+  result set's own column names.
 - `cols_line(cols) -> String` - private. The non-verbose `cols=[a, b, c]`
   form: names only.
 - `verbose_cols_line(cols) -> String` - private. The verbose form, each
@@ -65,12 +66,13 @@ memcomparable bounds back into a readable condition.
   and not the other way around.
 - `render_expr(expr, cols) -> String` - private. Renders a `BoundExpr` as
   SQL-like text, resolving every `ColumnRef` through `cols` by ordinal.
-  A nested `BinaryOp`/`UnaryOp` operand is parenthesized (`wrapped`); the
-  expression's own top level never wraps itself, which is what turns
-  `(age >= 21) AND (name = 'ada')` into exactly that instead of
-  `((age >= 21) AND (name = 'ada'))`.
+  A nested `BinaryOp`/`UnaryOp`/`IsNull` operand is parenthesized
+  (`wrapped`); the expression's own top level never wraps itself, which is
+  what turns `(age >= 21) AND (name = 'ada')` into exactly that instead of
+  `((age >= 21) AND (name = 'ada'))`. `IsNull { expr, negated }` renders as
+  `<expr> IS NULL` or `<expr> IS NOT NULL`.
 - `wrapped(expr, cols) -> String` - private. `render_expr`, parenthesized
-  if `expr` is itself a compound (`BinaryOp`/`UnaryOp`) node.
+  if `expr` is itself a compound (`BinaryOp`/`UnaryOp`/`IsNull`) node.
 - `render_unary(op, expr, cols) -> String`, `op_symbol(op) -> &'static str`,
   `render_value(value) -> String` - private. `render_expr`'s pieces: unary
   operator text, a binary operator's conventional symbol (`=`, `<>`,

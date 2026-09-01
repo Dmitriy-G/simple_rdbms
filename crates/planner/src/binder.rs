@@ -65,6 +65,10 @@ pub enum BoundExpr {
         expr: Box<BoundExpr>,
         data_type: DataType,
     },
+    IsNull {
+        expr: Box<BoundExpr>,
+        negated: bool,
+    },
 }
 
 pub struct Binder<'a> {
@@ -259,6 +263,11 @@ impl<'a> Binder<'a> {
             sql::Expr::UnaryOp { op, expr } => self.bind_unary_op(*op, expr, schema),
             sql::Expr::BinaryOp { left, op, right } => {
                 self.bind_binary_op(left, *op, right, schema)
+            }
+            sql::Expr::IsNull { expr, negated } => {
+                let (bound, _operand_type) = self.bind_expr(expr, schema)?;
+                let bound = BoundExpr::IsNull { expr: Box::new(bound), negated: *negated };
+                Ok((bound, Some(DataType::Boolean)))
             }
         }
     }

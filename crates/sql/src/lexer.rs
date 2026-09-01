@@ -122,6 +122,7 @@ impl<'a> Lexer<'a> {
             "AND" => TokenKind::And,
             "OR" => TokenKind::Or,
             "NOT" => TokenKind::Not,
+            "IS" => TokenKind::Is,
             "NULL" => TokenKind::Null,
             "TRUE" => TokenKind::True,
             "FALSE" => TokenKind::False,

@@ -236,7 +236,7 @@ impl Parser {
     }
 
     fn parse_comparison(&mut self) -> Result<Expr, SqlError> {
-        let mut left = self.parse_unary()?;
+        let mut left = self.parse_is_null_operand()?;
         loop {
             let op = match &self.current().kind {
                 TokenKind::Eq => BinaryOperator::Eq,
@@ -248,10 +248,26 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let right = self.parse_unary()?;
+            let right = self.parse_is_null_operand()?;
             left = Expr::BinaryOp { left: Box::new(left), op, right: Box::new(right) };
         }
         Ok(left)
+    }
+
+    fn parse_is_null_operand(&mut self) -> Result<Expr, SqlError> {
+        let mut expr = self.parse_unary()?;
+        while matches!(self.current().kind, TokenKind::Is) {
+            self.advance();
+            let negated = if matches!(self.current().kind, TokenKind::Not) {
+                self.advance();
+                true
+            } else {
+                false
+            };
+            self.expect_kind(TokenKind::Null, "NULL")?;
+            expr = Expr::IsNull { expr: Box::new(expr), negated };
+        }
+        Ok(expr)
     }
 
     fn parse_unary(&mut self) -> Result<Expr, SqlError> {

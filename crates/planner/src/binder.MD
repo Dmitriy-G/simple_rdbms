@@ -51,7 +51,9 @@ becomes "semantically valid against this database's schema".
   source's schema, with `data_type` cached to avoid re-deriving it during
   execution. `BinaryOp { left, op, right, data_type }` and `UnaryOp { op,
   expr, data_type }` mirror the parsed operator applications, each
-  carrying its resolved result type.
+  carrying its resolved result type. `IsNull { expr, negated }` mirrors
+  `sql::Expr::IsNull` - its result type is always `Boolean`, so unlike the
+  other compound variants it carries no `data_type` field of its own.
 - `Binder` - binds parsed `sql` AST nodes against a `Catalog`. Holds a
   reference to the catalog it resolves names against.
 - `Binder::new(catalog) -> Self` - creates a binder that resolves names
@@ -92,6 +94,9 @@ becomes "semantically valid against this database's schema".
   Returns the bound expression along with its resolved type, or `None` if
   the expression is a `NULL` literal (which has no type of its own and is
   treated as compatible with any type it's checked against).
+  `sql::Expr::IsNull { expr, negated }` binds its operand against no type
+  restriction at all (any type, including an untyped `NULL` literal, can
+  be tested for nullness) and always resolves to `Boolean`.
 - `Binder::bind_unary_op(&self, op, expr, schema) -> Result<(BoundExpr, Option<DataType>), PlannerError>` -
   private. Type-checks `NOT` (operand must be `Boolean`) and unary `-`
   (operand must be numeric and non-`NULL`).

@@ -19,6 +19,10 @@ pub fn evaluate(expr: &BoundExpr, tuple: &Tuple) -> Result<Value, ExecutorError>
         }
         BoundExpr::UnaryOp { op, expr, .. } => evaluate_unary(*op, expr, tuple),
         BoundExpr::BinaryOp { left, op, right, .. } => evaluate_binary(left, *op, right, tuple),
+        BoundExpr::IsNull { expr, negated } => {
+            let value = evaluate(expr, tuple)?;
+            Ok(Value::Boolean(value.is_null() != *negated))
+        }
     }
 }
 

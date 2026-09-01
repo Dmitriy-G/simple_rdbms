@@ -69,13 +69,24 @@ cursor rather than by recursing over the input text.
 - `Parser::parse_expr(&mut self) -> Result<Expr, SqlError>` - private.
   Parses an expression, respecting operator precedence and associativity
   via precedence climbing: `OR` binds loosest, then `AND`, then
-  comparisons, then unary `NOT`/`-`, then primaries. Delegates to
-  `parse_or`.
+  comparisons, then postfix `IS [NOT] NULL`, then unary `NOT`/`-`, then
+  primaries. Delegates to `parse_or`.
 - `Parser::parse_or`, `parse_and`, `parse_comparison`, `parse_unary`,
   `parse_primary` - private. The precedence-climbing ladder `parse_expr`
   sits on top of, each one level tighter than the last; `parse_primary`
   is the base case, matching literals, column references, and
-  parenthesized sub-expressions.
+  parenthesized sub-expressions. `parse_comparison` parses its operands
+  through `parse_is_null_operand` rather than `parse_unary` directly, so
+  `IS [NOT] NULL` binds to one comparison operand the same way a
+  Postgres-style grammar treats it - tighter than `=`/`<`/etc, looser
+  than unary `NOT`/`-`.
+- `Parser::parse_is_null_operand(&mut self) -> Result<Expr, SqlError>` -
+  private. Parses one `parse_unary` operand, then greedily wraps it in
+  `Expr::IsNull { expr, negated }` for each trailing `IS NULL` (`negated:
+  false`) or `IS NOT NULL` (`negated: true`) it finds - a loop rather than
+  an `if`, so a (pathological but grammatically sound) repeated `x IS
+  NULL IS NOT NULL` parses instead of leaving a trailing `IS` for the
+  caller to choke on.
 - `Parser::current(&self) -> &Token` - private. The token at the cursor.
 - `Parser::peek_kind(&self, ahead) -> &TokenKind` - private. The kind of
   the token `ahead` positions past the cursor, clamped to the final token

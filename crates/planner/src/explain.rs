@@ -75,6 +75,7 @@ pub(crate) fn projected_column(
         BoundExpr::BinaryOp { data_type, .. } | BoundExpr::UnaryOp { data_type, .. } => {
             (format!("column{}", position + 1), Some(*data_type))
         }
+        BoundExpr::IsNull { .. } => (format!("column{}", position + 1), Some(DataType::Boolean)),
     }
 }
 
@@ -123,12 +124,15 @@ pub(crate) fn render_expr(expr: &BoundExpr, cols: &[(String, Option<DataType>)])
         BoundExpr::BinaryOp { left, op, right, .. } => {
             format!("{} {} {}", wrapped(left, cols), op_symbol(*op), wrapped(right, cols))
         }
+        BoundExpr::IsNull { expr, negated } => {
+            format!("{} IS {}NULL", wrapped(expr, cols), if *negated { "NOT " } else { "" })
+        }
     }
 }
 
 fn wrapped(expr: &BoundExpr, cols: &[(String, Option<DataType>)]) -> String {
     match expr {
-        BoundExpr::BinaryOp { .. } | BoundExpr::UnaryOp { .. } => {
+        BoundExpr::BinaryOp { .. } | BoundExpr::UnaryOp { .. } | BoundExpr::IsNull { .. } => {
             format!("({})", render_expr(expr, cols))
         }
         BoundExpr::Literal(_) | BoundExpr::ColumnRef { .. } => render_expr(expr, cols),

@@ -207,6 +207,36 @@ fn rejects_comparison_between_integer_and_bigint_columns() {
 }
 
 #[test]
+fn binds_is_null_and_is_not_null_to_boolean() {
+    let catalog = catalog_with_users();
+    let BoundStatement::Select(select) = bind_ok(&catalog, "SELECT * FROM users WHERE id IS NULL")
+    else {
+        panic!("expected a bound SELECT");
+    };
+    match &select.predicate {
+        Some(BoundExpr::IsNull { negated, .. }) => assert!(!negated),
+        other => panic!("expected a bound IsNull predicate, got {other:?}"),
+    }
+
+    let BoundStatement::Select(select) =
+        bind_ok(&catalog, "SELECT * FROM users WHERE id IS NOT NULL")
+    else {
+        panic!("expected a bound SELECT");
+    };
+    match &select.predicate {
+        Some(BoundExpr::IsNull { negated, .. }) => assert!(negated),
+        other => panic!("expected a bound IsNull predicate, got {other:?}"),
+    }
+}
+
+#[test]
+fn is_null_accepts_any_operand_type_without_coercion() {
+    let catalog = catalog_with_users();
+    let result = bind(&catalog, "SELECT * FROM users WHERE name IS NULL AND active IS NOT NULL");
+    assert!(result.is_ok(), "expected bind to succeed, got {result:?}");
+}
+
+#[test]
 fn binds_create_table() {
     let catalog = catalog_with_users();
     let BoundStatement::CreateTable(create) =

@@ -58,6 +58,7 @@ pub enum Expr {
     Column(String),
     BinaryOp { left: Box<Expr>, op: BinaryOperator, right: Box<Expr> },
     UnaryOp { op: UnaryOperator, expr: Box<Expr> },
+    IsNull { expr: Box<Expr>, negated: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

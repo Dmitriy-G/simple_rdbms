@@ -45,6 +45,13 @@ parse error (not a panic).
   with the parenthesized `OR` binding tighter than the outer `AND`.
 - `unary_not_and_negate` - `NOT a AND b = -1` parses with `NOT` and unary
   `-` each binding to their immediate operand.
+- `parses_is_null_and_is_not_null` - `a IS NULL` and `a IS NOT NULL` each
+  parse to `Expr::IsNull` with the expected `negated` flag.
+- `is_null_binds_tighter_than_and_but_looser_than_comparison` - `a = 1 AND
+  b IS NULL` parses with `IS NULL` applying to `b` alone, then combined
+  with the `a = 1` comparison by `AND`.
+- `is_null_missing_null_keyword_is_a_parse_error` - `a IS` with nothing
+  after it errors with `UnexpectedEof` rather than panicking.
 - `string_literal_escapes_doubled_quote` - `'it''s a test'` parses to the
   unescaped string `it's a test`.
 - `keywords_are_case_insensitive_identifiers_are_not` - `select Id from

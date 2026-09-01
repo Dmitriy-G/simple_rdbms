@@ -250,6 +250,48 @@ fn unary_not_and_negate() {
 }
 
 #[test]
+fn parses_is_null_and_is_not_null() {
+    let stmt = parse("SELECT * FROM t WHERE a IS NULL");
+    let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
+    assert_eq!(
+        select.where_clause,
+        Some(Expr::IsNull { expr: Box::new(Expr::Column("a".to_string())), negated: false })
+    );
+
+    let stmt = parse("SELECT * FROM t WHERE a IS NOT NULL");
+    let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
+    assert_eq!(
+        select.where_clause,
+        Some(Expr::IsNull { expr: Box::new(Expr::Column("a".to_string())), negated: true })
+    );
+}
+
+#[test]
+fn is_null_binds_tighter_than_and_but_looser_than_comparison() {
+    let stmt = parse("SELECT * FROM t WHERE a = 1 AND b IS NULL");
+    let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
+    let expected = Expr::BinaryOp {
+        left: Box::new(Expr::BinaryOp {
+            left: Box::new(Expr::Column("a".to_string())),
+            op: BinaryOperator::Eq,
+            right: Box::new(Expr::Literal(Value::BigInt(1))),
+        }),
+        op: BinaryOperator::And,
+        right: Box::new(Expr::IsNull {
+            expr: Box::new(Expr::Column("b".to_string())),
+            negated: false,
+        }),
+    };
+    assert_eq!(select.where_clause, Some(expected));
+}
+
+#[test]
+fn is_null_missing_null_keyword_is_a_parse_error() {
+    let err = parse_err("SELECT * FROM t WHERE a IS");
+    assert!(matches!(err, SqlError::UnexpectedEof { .. }));
+}
+
+#[test]
 fn string_literal_escapes_doubled_quote() {
     let stmt = parse("SELECT * FROM t WHERE a = 'it''s a test'");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
