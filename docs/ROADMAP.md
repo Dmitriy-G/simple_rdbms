@@ -114,7 +114,7 @@ touch a small fraction of a table still pay for reading all of it.
 choose over a sequential scan, built against the durable, recoverable
 storage layer M6–M8 provide rather than the pre-WAL one — see ADR 0003.
 
-## M10 — Concurrent transactions without corrupting each other 🆕 New
+## M10 — Concurrent transactions without corrupting each other 🚧 In Progress
 **Problem:** multiple transactions running at once can interleave their
 reads and writes in ways that violate isolation, from lost updates to
 dirty reads, on top of the atomicity M8 already guarantees for each one
@@ -122,7 +122,7 @@ individually.
 **Solution:** a lock manager enforcing two-phase locking first, then MVCC
 for snapshot isolation so readers stop blocking writers.
 
-## M11 — Answering multi-table queries efficiently 🆕 New
+## M11 — Answering multi-table queries efficiently 🚧 In Progress
 **Problem:** multi-table queries cannot be expressed at all today —
 `FROM` accepts exactly one table (`crates/sql/src/parser.rs` has no
 `JOIN` production and no comma-separated `FROM` list), so any question
@@ -191,7 +191,7 @@ distinct from the interactive `cli` REPL; and container packaging
 file on a named volume, and `SIGTERM` handled as a graceful checkpoint
 -and-close instead of every restart paying for a full crash recovery.
 
-## M14 — Speaking SQL over the network 🆕 New
+## M14 — Speaking SQL over the network 🚧 In Progress
 **Problem:** every milestone through M13 still requires an in-process
 `Database` handle - `cli`'s REPL and `server`'s metrics/health endpoints
 both open the database directly in the same process that uses it. Nothing
