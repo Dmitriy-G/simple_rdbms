@@ -144,6 +144,11 @@ than one usable index, or an index whose selectivity doesn't obviously
 beat a sequential scan) by estimated cost, and extending that choice
 across a join rather than one table at a time — a harder problem than the
 on/off choice M9 already answers, not one M9 left untouched.
+**Note:** the qualified-column representation this milestone needs
+(`Expr::Column { table, name }`, `TableRef { name, alias }`, and the
+binder's `table_scope` resolution, which makes an aliased table's real
+name go out of scope for qualification) already landed as B-2, ahead of
+`JOIN` itself existing. Nothing here should reintroduce it.
 
 ## M12 — Surviving a torn page write ✅ Done
 **Problem:** even a single page write is not atomic at the hardware level —
@@ -225,7 +230,7 @@ would use to relax the single engine thread into genuine multi-threaded
 execution - but are no longer a prerequisite for shipping a network
 frontend.
 
-### M14.1 — Many connections against a single-threaded engine 🆕 New
+### M14.1 — Many connections against a single-threaded engine ✅ Done
 **Problem:** a wire listener needs to serve many concurrent connections,
 each of which may submit a statement at any time, but letting each
 connection's statements run against a shared `Database` from its own
@@ -273,17 +278,30 @@ never fabricate a result. Track what works in
 `docs/CLIENT-COMPATIBILITY.md`. See datafusion-postgres (linked above) as
 a reference `pg_catalog` implementation.
 
-## M15 — Changing and removing rows 🚧 In Progress
+## M15 — Changing and removing rows 🆕 New
 **Problem:** rows can be inserted and read but never modified or removed.
 `DELETE` and `UPDATE` do not exist in the token list, the AST or the
 grammar; `TableHeap::delete_tuple` and `update_tuple_in_place` are
 reachable only from the catalog's own bookkeeping, and `BTreeIndex::delete`
 is `todo!()`.
-**Solution:** `DELETE FROM t WHERE ...` and `UPDATE t SET col = expr WHERE
-...`, the delete/update executors, B+tree entry removal with underflow
-rebalancing, index maintenance on both paths, and the `// TODO(M5): vacuum`
-compaction in `heap.rs` so tombstoned space is actually reclaimed. Note
-that this is a hard prerequisite for M18.
+**Solution:** `DELETE FROM t WHERE ...` and `UPDATE t SET col = expr
+WHERE ...`, plus the arithmetic operators (`+`/`-`/`*`/`/`) `UPDATE`'s
+`SET` list actually needs: checked arithmetic over `Integer`, `BigInt`
+and `Double`, `22003 numeric_value_out_of_range` on overflow, `22012
+division_by_zero` on a zero divisor, and `NULL` propagation through every
+operator, in both the binder and the executor. The delete/update
+executors need each output row's `Rid`, not just its `Tuple`, so
+`Executor::next` changes shape to carry both. `BTreeIndex::delete(txn_id,
+key, rid)` removes the target entry, located by `key ++ rid` the same way
+`insert` places it; an empty leaf is unlinked from the sibling chain (its
+page reclaimed once M24's free list exists, orphaned but unreachable
+until then), and a merely partly empty node is left alone - no merge, no
+borrow-from-sibling, the same choice Postgres's `nbtree` makes
+(`storage::btree.MD`, `docs/adr/0012-btree-delete-does-not-merge.md`).
+Index maintenance on both paths, and the `// TODO(M5): vacuum` compaction
+in `heap.rs` so tombstoned space is actually reclaimed, keeping slot
+indices stable since a `Rid` is half slot index. Note that this is a hard
+prerequisite for M18.
 
 ## M16 — Column constraints that hold 🆕 New
 **Problem:** `Column::nullable` is parsed as a hardcoded `true`, plumbed
@@ -294,6 +312,11 @@ through the binder into the catalog, persisted to disk, and never checked
 with `23502`, plus `DEFAULT <expr>` and `CHECK (<expr>)`. Add `23514
 check_violation` to `SqlState`. No index work required, so this is the
 cheapest of the four.
+**Note:** `IS NULL`/`IS NOT NULL` (the `Is` token, `Expr::IsNull`,
+`BoundExpr::IsNull`, and the executor's evaluation, which returns a real
+`Boolean` rather than the `NULL` a bare `= NULL` comparison would) already
+landed as B-1, ahead of this milestone rather than as its first step.
+Nothing here should reimplement it.
 
 ## M17 — Identity and uniqueness 🆕 New
 **Problem:** no table can declare a primary key, and the B+tree

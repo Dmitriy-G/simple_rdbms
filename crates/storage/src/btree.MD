@@ -14,7 +14,9 @@ compare with plain `[u8]` `Ord` and get the right answer. Milestone M9.1
 `leaf_for_start`/`scan_leaf` (the primitives `catalog` and `executor` need
 to give this module a place in the query path - see "Key Components"
 below) without changing node layout or the split protocol at all; delete
-is still `todo!()`, tracked as a later milestone in `docs/ROADMAP.md`.
+is still `todo!()`, tracked as M15 in `docs/ROADMAP.md`. Its design is
+already decided even though it isn't built yet - see "Deleting" below and
+`docs/adr/0012-btree-delete-does-not-merge.md`.
 
 ## Node layout
 
@@ -269,6 +271,27 @@ legitimate split can ever produce a `required` larger than the page, so
 this guard should never fire in practice; it stays as the same kind of
 defense in depth `checked_slot_count` already is.
 
+## Deleting
+
+Not implemented yet (`todo!()`, tracked as M15), but the design is
+already settled: `docs/adr/0012-btree-delete-does-not-merge.md`. Delete
+removes exactly the entry located by its full sort key (`key ++ rid`, the
+same lookup a duplicate-tolerant `insert` places by - see "Ordering"
+above), the same way `insert` already descends with `leaf_sort_key`
+rather than the bare key. Two cases: if the leaf still holds at least one
+entry afterward, nothing else happens - a node at any occupancy, even
+one entry, is left as-is, deliberately, not as a gap to fill in later. If
+the leaf becomes completely empty, it is unlinked from the leaf sibling
+chain and removed from its parent's entries; if that leaves the parent a
+degenerate one-child internal node (nothing but its own `tail`), the
+parent is spliced out the same way, one level at a time, up through a
+possible root collapse. No sibling is ever inspected for a borrow, and no
+two non-empty nodes are ever merged - the same choice Postgres's `nbtree`
+makes, and the only one that makes sense before M24 gives this engine a
+free list a merged-away page could actually be returned to; until then,
+an unlinked leaf's page is simply orphaned (unreachable, not reclaimed),
+the same as every other page nothing in this codebase frees yet.
+
 ## Key Components
 
 - `MAX_KEY_SIZE` - the largest key `insert` can ever accept: one that,
@@ -298,9 +321,13 @@ defense in depth `checked_slot_count` already is.
   never touches a page, so a bad `start` key surfaces as the iterator's
   first `Err` rather than a panic or an early return from `range_scan`
   itself. `insert(&mut self, txn_id, key, rid)` is M9.2: see "Splitting"
-  above. `delete(&mut self, key)` is not implemented yet -
-  `todo!("descend to the target leaf, remove the entry, rebalance on
-  underflow")`. `leaf_for_start(&self, start) -> Result<(PageId, u16),
+  above. `delete(&mut self, key)` is not implemented yet - `todo!()`, its
+  message still describing a textbook merge-and-rebalance delete that
+  "Deleting" above and ADR 0012 have since superseded with a no-merge
+  design; the signature itself will also gain an `rid: Rid` parameter
+  once M15 implements it, to locate the exact duplicate entry by its full
+  sort key rather than removing an arbitrary one sharing `key`.
+  `leaf_for_start(&self, start) -> Result<(PageId, u16),
   StorageError>` and the associated function `scan_leaf(buffer_pool,
   leaf_page_id, from_slot) -> Result<LeafScan, StorageError>` are the
   primitives `BTreeRangeIterator` is itself built on (below) and exist as
