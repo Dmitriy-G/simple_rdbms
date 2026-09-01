@@ -50,7 +50,12 @@ cursor rather than by recursing over the input text.
   private. Parses a `SELECT` statement.
 - `Parser::parse_select_list(&mut self) -> Result<Vec<SelectItem>, SqlError>` -
   private. Parses a `select_list`: either a bare `*` or a comma-separated
-  list of expressions.
+  list of expressions. No `AS alias` here yet - `SelectItem` has no alias
+  field to put one in - even though `TokenKind::As` already exists for
+  `parse_optional_table_alias`. `SELECT col AS alias` is M20's scope
+  (`docs/ROADMAP.md`); until then `AS` in this position simply isn't
+  recognized, and `SELECT col AS alias FROM t` is a parse error, not a
+  silently-ignored alias.
 - `Parser::parse_table_ref(&mut self) -> Result<TableRef, SqlError>` -
   private. Parses a `FROM` clause's single source table: a required table
   name followed by `parse_optional_table_alias`.
@@ -87,24 +92,32 @@ cursor rather than by recursing over the input text.
   BOOLEAN`, matched case-insensitively against an identifier token.
 - `Parser::parse_expr(&mut self) -> Result<Expr, SqlError>` - private.
   Parses an expression, respecting operator precedence and associativity
-  via precedence climbing: `OR` binds loosest, then `AND`, then
-  comparisons, then postfix `IS [NOT] NULL`, then unary `NOT`/`-`, then
+  via precedence climbing: `OR` binds loosest, then `AND`, then postfix
+  `IS [NOT] NULL`, then comparisons, then unary `NOT`/`-`, then
   primaries. Delegates to `parse_or`.
-- `Parser::parse_or`, `parse_and`, `parse_comparison`, `parse_unary`,
-  `parse_primary` - private. The precedence-climbing ladder `parse_expr`
-  sits on top of, each one level tighter than the last; `parse_primary`
-  is the base case, matching literals, column references, and
-  parenthesized sub-expressions - a bare identifier becomes
-  `Expr::Column { table: None, name }`, and one immediately followed by
-  `.` and a second identifier becomes `Expr::Column { table: Some(first),
-  name: second }`, a qualified reference the binder resolves against the
-  `FROM` clause's `TableRef` (`planner::binder.MD`). `parse_comparison` parses its operands
-  through `parse_is_null_operand` rather than `parse_unary` directly, so
-  `IS [NOT] NULL` binds to one comparison operand the same way a
-  Postgres-style grammar treats it - tighter than `=`/`<`/etc, looser
-  than unary `NOT`/`-`.
-- `Parser::parse_is_null_operand(&mut self) -> Result<Expr, SqlError>` -
-  private. Parses one `parse_unary` operand, then greedily wraps it in
+- `Parser::parse_or`, `parse_and`, `parse_is_null`, `parse_comparison`,
+  `parse_unary`, `parse_primary` - private. The precedence-climbing
+  ladder `parse_expr` sits on top of, each one level tighter than the
+  last; `parse_primary` is the base case, matching literals, column
+  references, and parenthesized sub-expressions - a bare identifier
+  becomes `Expr::Column { table: None, name }`, and one immediately
+  followed by `.` and a second identifier becomes `Expr::Column {
+  table: Some(first), name: second }`, a qualified reference the binder
+  resolves against the `FROM` clause's `TableRef` (`planner::binder.MD`).
+  `parse_is_null` sits between `parse_and` and `parse_comparison`, so
+  `IS [NOT] NULL` applies to an entire comparison, not to one of its
+  operands - `a = b IS NULL` parses as `(a = b) IS NULL`, matching
+  Postgres, where `IS` sits below the comparison operators. This is
+  deliberately *not* the naive placement (`IS` inside `parse_comparison`,
+  next to `parse_unary`): that placement parses `a = b IS NULL` as `a =
+  (b IS NULL)` instead, which then fails to bind (`IS NULL` is always
+  `Boolean`, and `a` typically isn't) - a real bug this precedence fixes,
+  not a style preference. The common forms (`WHERE col IS NULL`, `WHERE
+  col IS NOT NULL AND x = 1`) parse identically either way, since neither
+  involves `IS` applied to the result of a comparison, which is exactly
+  why the wrong placement went unnoticed.
+- `Parser::parse_is_null(&mut self) -> Result<Expr, SqlError>` - private.
+  Parses one `parse_comparison` result, then greedily wraps it in
   `Expr::IsNull { expr, negated }` for each trailing `IS NULL` (`negated:
   false`) or `IS NOT NULL` (`negated: true`) it finds - a loop rather than
   an `if`, so a (pathological but grammatically sound) repeated `x IS

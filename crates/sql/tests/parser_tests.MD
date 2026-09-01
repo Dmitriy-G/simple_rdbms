@@ -75,6 +75,9 @@ parse error (not a panic).
 - `is_null_binds_tighter_than_and_but_looser_than_comparison` - `a = 1 AND
   b IS NULL` parses with `IS NULL` applying to `b` alone, then combined
   with the `a = 1` comparison by `AND`.
+- `is_null_binds_looser_than_comparison` - `a = b IS NULL` parses as
+  `(a = b) IS NULL`, not `a = (b IS NULL)` - matching Postgres, where `IS`
+  sits below the comparison operators.
 - `is_null_missing_null_keyword_is_a_parse_error` - `a IS` with nothing
   after it errors with `UnexpectedEof` rather than panicking.
 - `string_literal_escapes_doubled_quote` - `'it''s a test'` parses to the

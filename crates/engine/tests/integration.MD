@@ -27,6 +27,12 @@ pipeline, against a real (tempfile-backed) database file.
   NULL` finds exactly the row with a `NULL` `b`, and `WHERE b IS NOT NULL`
   finds exactly the rows without one - the case `= NULL` can never handle
   under three-valued logic (`sql::ast.MD`'s `Expr::IsNull` entry).
+- `is_null_binds_looser_than_comparison_and_evaluates_accordingly` -
+  `WHERE a = b IS NULL` parses and evaluates as `(a = b) IS NULL`: across
+  three rows only the one where `b` is `NULL` matches (`a = b` is itself
+  `NULL` there, and `NULL IS NULL` is `true`), proving the parser's
+  precedence fix (`sql::parser.MD`'s `parse_is_null`) reaches all the way
+  through binding and execution, not just the AST shape.
 - `select_resolves_qualified_columns_against_a_table_alias` - `SELECT u.a
   FROM t u WHERE u.b = 20` resolves both qualified references against the
   alias `u`, not the real table name `t`.

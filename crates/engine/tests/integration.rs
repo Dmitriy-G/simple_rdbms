@@ -90,6 +90,24 @@ fn where_is_null_and_is_not_null_find_and_exclude_null_rows() {
 }
 
 #[test]
+fn is_null_binds_looser_than_comparison_and_evaluates_accordingly() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER, b INTEGER)").expect("create table");
+    db.execute("INSERT INTO t VALUES (1, 1), (1, 2), (1, NULL)").expect("insert");
+
+    let (_, rows) =
+        rows_and_columns_of(db.execute("SELECT a FROM t WHERE a = b IS NULL").expect("select"));
+    assert_eq!(
+        rows.len(),
+        1,
+        "`a = b IS NULL` should parse and evaluate as `(a = b) IS NULL`, matching only the \
+         row where `b` is NULL (so `a = b` is NULL, and `NULL IS NULL` is true)"
+    );
+}
+
+#[test]
 fn select_resolves_qualified_columns_against_a_table_alias() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let mut db = open(&dir);

@@ -245,10 +245,10 @@ impl Parser {
     }
 
     fn parse_and(&mut self) -> Result<Expr, SqlError> {
-        let mut left = self.parse_comparison()?;
+        let mut left = self.parse_is_null()?;
         while matches!(self.current().kind, TokenKind::And) {
             self.advance();
-            let right = self.parse_comparison()?;
+            let right = self.parse_is_null()?;
             left = Expr::BinaryOp {
                 left: Box::new(left),
                 op: BinaryOperator::And,
@@ -258,27 +258,8 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_comparison(&mut self) -> Result<Expr, SqlError> {
-        let mut left = self.parse_is_null_operand()?;
-        loop {
-            let op = match &self.current().kind {
-                TokenKind::Eq => BinaryOperator::Eq,
-                TokenKind::NotEq => BinaryOperator::NotEq,
-                TokenKind::Lt => BinaryOperator::Lt,
-                TokenKind::LtEq => BinaryOperator::LtEq,
-                TokenKind::Gt => BinaryOperator::Gt,
-                TokenKind::GtEq => BinaryOperator::GtEq,
-                _ => break,
-            };
-            self.advance();
-            let right = self.parse_is_null_operand()?;
-            left = Expr::BinaryOp { left: Box::new(left), op, right: Box::new(right) };
-        }
-        Ok(left)
-    }
-
-    fn parse_is_null_operand(&mut self) -> Result<Expr, SqlError> {
-        let mut expr = self.parse_unary()?;
+    fn parse_is_null(&mut self) -> Result<Expr, SqlError> {
+        let mut expr = self.parse_comparison()?;
         while matches!(self.current().kind, TokenKind::Is) {
             self.advance();
             let negated = if matches!(self.current().kind, TokenKind::Not) {
@@ -291,6 +272,25 @@ impl Parser {
             expr = Expr::IsNull { expr: Box::new(expr), negated };
         }
         Ok(expr)
+    }
+
+    fn parse_comparison(&mut self) -> Result<Expr, SqlError> {
+        let mut left = self.parse_unary()?;
+        loop {
+            let op = match &self.current().kind {
+                TokenKind::Eq => BinaryOperator::Eq,
+                TokenKind::NotEq => BinaryOperator::NotEq,
+                TokenKind::Lt => BinaryOperator::Lt,
+                TokenKind::LtEq => BinaryOperator::LtEq,
+                TokenKind::Gt => BinaryOperator::Gt,
+                TokenKind::GtEq => BinaryOperator::GtEq,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_unary()?;
+            left = Expr::BinaryOp { left: Box::new(left), op, right: Box::new(right) };
+        }
+        Ok(left)
     }
 
     fn parse_unary(&mut self) -> Result<Expr, SqlError> {

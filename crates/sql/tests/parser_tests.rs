@@ -361,6 +361,25 @@ fn is_null_binds_tighter_than_and_but_looser_than_comparison() {
 }
 
 #[test]
+fn is_null_binds_looser_than_comparison() {
+    let stmt = parse("SELECT * FROM t WHERE a = b IS NULL");
+    let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
+    let expected = Expr::IsNull {
+        expr: Box::new(Expr::BinaryOp {
+            left: Box::new(col_expr("a")),
+            op: BinaryOperator::Eq,
+            right: Box::new(col_expr("b")),
+        }),
+        negated: false,
+    };
+    assert_eq!(
+        select.where_clause,
+        Some(expected),
+        "`a = b IS NULL` must parse as `(a = b) IS NULL`, matching Postgres's precedence"
+    );
+}
+
+#[test]
 fn is_null_missing_null_keyword_is_a_parse_error() {
     let err = parse_err("SELECT * FROM t WHERE a IS");
     assert!(matches!(err, SqlError::UnexpectedEof { .. }));

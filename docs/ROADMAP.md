@@ -461,3 +461,11 @@ M21 add, a cost model over sequential and index scans, and join ordering
 driven by it. Extend `EXPLAIN` to print estimated rows and cost, and add
 `EXPLAIN ANALYZE` so estimates can be compared against reality — without
 that, a cost model cannot be debugged.
+**Note:** `planner::optimizer::IndexScanRule` also skips `BoundExpr::IsNull`
+entirely today - `WHERE col IS NULL` on an indexed column is always a
+full scan plus filter, never an index scan. `types::memcomparable`
+encodes `NULL` as a leading `0x00` tag that sorts before every non-`NULL`
+value, so `IS NULL` could become a range scan over `[0x00, 0x01)` the
+same way an equality predicate becomes one over `[key, successor(key))`.
+Worth doing here, alongside the rest of this milestone's selectivity
+work, rather than as a special case bolted onto `IndexScanRule` earlier.
