@@ -2,7 +2,7 @@
 
 Proves `engine::Database`'s response to `storage::buffer::BufferPool`
 being poisoned (`buffer.MD`'s poisoning paragraph) is a single, immediate,
-clearly-named failure rather than the silent degradation `task.MD`'s P-3
+clearly-named failure rather than the silent degradation `../../../.claude/task.MD`'s P-3
 diagnosed: a poisoned pool used to keep acknowledging statements that
 touched no dirty-enough page, let `maybe_checkpoint` retry and warn once
 per statement forever without ever advancing `bytes_at_last_checkpoint`,

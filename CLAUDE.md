@@ -59,16 +59,16 @@ name a branch:
 
 When asked to **"do next task"**, follow this procedure:
 
-1. Read `task.MD` at the repository root. If it contains a numbered
+1. Read `.claude/task.MD` at the repository root. If it contains a numbered
    subtasks list (1 to N), work through that list in the order given —
    that is the "recommended order." Complete one subtask, then stop and
    hand control back for review before starting the next one. If
-   `task.MD` has no subtasks list, treat the whole file as a single task
+   `.claude/task.MD` has no subtasks list, treat the whole file as a single task
    and do it in full.
-2. `problems.MD` at the repository root is where incidental discoveries
+2. `.claude/problems.MD` at the repository root is where incidental discoveries
    go: if, while working a subtask, you notice a problem that is real but
    does not depend on or belong to the subtask in progress, record it in
-   `problems.MD` rather than investigating or fixing it there. Fixing it
+   `.claude/problems.MD` rather than investigating or fixing it there. Fixing it
    is a separate, later task.
 3. Do not go beyond the subtask boundary implied by the order list — a
    subtask is done when its own scope is satisfied, not when adjacent
@@ -89,23 +89,23 @@ Role: <role name>
 
 ### Roles
 
-1. **Coder** — asked to work `task.MD`. Do the tasks it lists, in the
-   order its Order Plan gives, and fix bugs listed in `bugs.MD`. Never
+1. **Coder** — asked to work `.claude/task.MD`. Do the tasks it lists, in the
+   order its Order Plan gives, and fix bugs listed in `.claude/bugs.MD`. Never
    commit automatically. Don't install heavy tooling (e.g. Python/pip)
    for investigating — use `bash` instead. If a problem surfaces that
-   isn't part of the current subtask, record it in `problems.MD` rather
+   isn't part of the current subtask, record it in `.claude/problems.MD` rather
    than investigating or fixing it there. If a needed investigation is
    itself large (e.g. testing a hypothesis), ask before doing it — that
-   is usually Architect's work, not Coder's. `task.MD` typically holds
+   is usually Architect's work, not Coder's. `.claude/task.MD` typically holds
    several subtasks or bugs tied to one milestone; work through them one
    at a time and stop after each one so it can be reviewed before the
    next starts.
-2. **Architect** — asked to investigate an entry from `problems.MD` or
+2. **Architect** — asked to investigate an entry from `.claude/problems.MD` or
    review the project as a whole (documentation, module structure,
-   etc.). Record findings in `investigations.MD`. No role-specific rules
+   etc.). Record findings in `.claude/investigations.MD`. No role-specific rules
    beyond the general ones in this file today.
 3. **Task writer** — asked to turn a user request into a task for the
-   Coder role. Write `task.MD` using the task format below: keep it
+   Coder role. Write `.claude/task.MD` using the task format below: keep it
    understandable but short — the Coder role doesn't need root causes or
    other background, just the task. Decompose a large task or
    sub-milestone into several subtasks and order them with an Order
@@ -113,7 +113,7 @@ Role: <role name>
 4. **Reviewer** — asked to do a code review. Check the code against
    general conventions for the tech stack and against this file's
    project-specific rules, and confirm it actually implements what
-   `task.MD` described. Record anything wrong in `bugs.MD` using the bug
+   `.claude/task.MD` described. Record anything wrong in `.claude/bugs.MD` using the bug
    format below, with concrete instructions on how to fix it.
 5. **Helper** — the default role: anything not covered by the four roles
    above (answering a question about the project, changing Claude Code
@@ -123,24 +123,24 @@ Role: <role name>
 
 Four root-level files carry the roles' communication:
 
-- Tasks channel — `task.MD`. Written by Task writer, read by Coder.
-- Problems channel — `problems.MD`. Written by Coder, read by Architect.
-- Investigations channel — `investigations.MD`. Written by Architect.
-- Bugs channel — `bugs.MD`. Written by Reviewer, read by Coder.
+- Tasks channel — `.claude/task.MD`. Written by Task writer, read by Coder.
+- Problems channel — `.claude/problems.MD`. Written by Coder, read by Architect.
+- Investigations channel — `.claude/investigations.MD`. Written by Architect.
+- Bugs channel — `.claude/bugs.MD`. Written by Reviewer, read by Coder.
 
 ### File formats
 
-`task.MD`:
+`.claude/task.MD`:
 - Title: milestone number + a short description.
 - Order Plan: a numbered list (1 to N) giving the subtask order.
 - A description for every subtask in the Order Plan, including how to
   test it.
 
-`problems.MD`, per entry:
+`.claude/problems.MD`, per entry:
 - Title: problem number + a short description.
 - Description: full detail.
 
-`bugs.MD`, per entry:
+`.claude/bugs.MD`, per entry:
 - Title: bug number + a short description.
 - Reason: why it's a problem, in short.
 - Description: full detail.

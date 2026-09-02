@@ -89,6 +89,9 @@ pub enum Error {
     #[error("serialization failure: {detail}")]
     SerializationFailure { detail: String },
 
+    #[error("deadlock detected: {detail}")]
+    DeadlockDetected { detail: String },
+
     #[error("internal error: {detail}")]
     Internal { detail: String },
 
@@ -155,6 +158,7 @@ impl Error {
             Error::NumericValueOutOfRange { .. } => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
             Error::DataCorrupted { .. } => SqlState::DATA_CORRUPTED,
             Error::SerializationFailure { .. } => SqlState::SERIALIZATION_FAILURE,
+            Error::DeadlockDetected { .. } => SqlState::DEADLOCK_DETECTED,
             Error::Internal { .. } => SqlState::INTERNAL_ERROR,
             Error::NestedTransaction => SqlState::NO_ACTIVE_SQL_TRANSACTION,
             Error::NoActiveTransaction { .. } => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -201,6 +205,7 @@ impl Error {
             | Error::DatatypeMismatch { .. }
             | Error::NumericValueOutOfRange { .. }
             | Error::SerializationFailure { .. }
+            | Error::DeadlockDetected { .. }
             | Error::NestedTransaction
             | Error::NoActiveTransaction { .. }
             | Error::TransactionAborted
@@ -213,7 +218,9 @@ impl Error {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self.sql_state(),
-            SqlState::SERIALIZATION_FAILURE | SqlState::STATEMENT_COMPLETION_UNKNOWN
+            SqlState::SERIALIZATION_FAILURE
+                | SqlState::DEADLOCK_DETECTED
+                | SqlState::STATEMENT_COMPLETION_UNKNOWN
         )
     }
 
@@ -240,6 +247,7 @@ impl Error {
             | Error::DuplicateIndex { .. }
             | Error::DataCorrupted { .. }
             | Error::SerializationFailure { .. }
+            | Error::DeadlockDetected { .. }
             | Error::Internal { .. }
             | Error::NestedTransaction
             | Error::NoActiveTransaction { .. }

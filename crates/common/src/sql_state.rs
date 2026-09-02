@@ -21,6 +21,7 @@ impl SqlState {
     pub const LOCK_NOT_AVAILABLE: SqlState = SqlState(*b"55P03");
 
     pub const SERIALIZATION_FAILURE: SqlState = SqlState(*b"40001");
+    pub const DEADLOCK_DETECTED: SqlState = SqlState(*b"40P01");
     pub const STATEMENT_COMPLETION_UNKNOWN: SqlState = SqlState(*b"40003");
 
     pub const SYNTAX_ERROR: SqlState = SqlState(*b"42601");

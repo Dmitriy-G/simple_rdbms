@@ -19,10 +19,11 @@ gap nobody notices.
   equals `expected_sql_state(&err)` for every sample.
 - `is_retryable_is_true_only_for_class_40_codes` - asserts
   `err.is_retryable()` equals "this sample's SQLSTATE is
-  `SERIALIZATION_FAILURE` or `STATEMENT_COMPLETION_UNKNOWN`" for every
-  sample - since only one sample (`SerializationFailure`) is currently a
-  class-40 code, this also pins down that `is_retryable` is `false` for
-  the other twenty-six.
+  `SERIALIZATION_FAILURE`, `DEADLOCK_DETECTED`, or
+  `STATEMENT_COMPLETION_UNKNOWN`" for every sample - since only two samples
+  (`SerializationFailure`, `DeadlockDetected`) are currently class-40
+  codes, this also pins down that `is_retryable` is `false` for the other
+  twenty-six.
 
 ## Usage Example
 

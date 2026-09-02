@@ -4,7 +4,7 @@ The crate root: re-exports every module's public surface so a consuming
 `tests/*.rs` file can write `use test_support::{open_pool, PoolOptions, ...}`
 without naming the submodule. `test-support` exists purely to end the
 copy-paste duplication `docs/ROADMAP.md`'s testing-convention review
-(`task.MD`'s T-2) found across `storage`, `catalog`, `executor`, `txn`,
+(`../../../.claude/task.MD`'s T-2) found across `storage`, `catalog`, `executor`, `txn`,
 and `engine`'s own `tests/` directories: a dozen-plus near-identical
 `open_pool`/`open_file`/`config`/`faulty_devices` functions, two
 independent copies of the crash-injection sweep algorithm, and a

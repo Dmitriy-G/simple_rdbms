@@ -383,7 +383,7 @@ rediscover by watching a test go quiet.
   `checkpoints_written` (a running count of every checkpoint that has
   actually completed, incremented by `record_checkpoint_written` and
   never reset - the field `EngineStats`/`stats()` below reads), and
-  `slow_query_warn_threshold_ms` - the five fields `task.MD`'s M14.1 plan
+  `slow_query_warn_threshold_ms` - the five fields `../../../.claude/task.MD`'s M14.1 plan
   calls "engine-wide", now genuinely shared across every session rather
   than duplicated per-`Database` the way `bytes_at_last_checkpoint` used
   to be (a real bug the old layout had: N `Database`s each tracked their
@@ -426,7 +426,7 @@ rediscover by watching a test go quiet.
   logging it here would mislabel an engine-level checkpoint as a
   connection event. Does not check `is_flush_poisoned` first - an
   explicit close should still attempt the flush and still return the real
-  error, exactly as `task.MD`'s P-4 and `buffer.MD`'s poisoning paragraph
+  error, exactly as `../../../.claude/task.MD`'s P-4 and `buffer.MD`'s poisoning paragraph
   require.
 - `EngineState::best_effort_flush(&self)` - the work `Drop for Database`
   needs: skip entirely if `buffer_pool.is_flush_poisoned()`, otherwise

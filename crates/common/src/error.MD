@@ -97,9 +97,21 @@ had to change, from stringifying to matching.
     because the fields differ, but the same SQLSTATE, since both mean the
     same thing to a client.
   - `SerializationFailure` -> `SERIALIZATION_FAILURE` (40001), Error,
-    **retryable**. A deadlock victim (`txn::TxnError::DeadlockVictim`);
-    named after the SQLSTATE class rather than the mechanism because a
-    retrying client only needs to know "conflict, try again."
+    **retryable**. No variant constructs this yet - reserved for the
+    snapshot-conflict abort M10.3's MVCC snapshot isolation will need to
+    raise once it exists; kept defined now, the same way `sql_state.MD`
+    reserves codes like `NOT_NULL_VIOLATION` ahead of the milestone that
+    raises them, so that work maps onto a variant already named instead
+    of inventing one under pressure.
+  - `DeadlockDetected` -> `DEADLOCK_DETECTED` (40P01), Error,
+    **retryable**. A `txn::LockManager` wait-for-graph cycle
+    (`txn::TxnError::DeadlockVictim`): the transaction chosen to break the
+    cycle gets this instead of blocking forever. Distinct from
+    `SerializationFailure` even though both are class 40 and equally
+    retryable, so a test or an operator can tell "lost a deadlock-detector
+    coin flip" from "lost a plain write-write race" apart - this is also
+    the SQLSTATE `txn::TxnError::DeadlockVictim` used to map to before
+    this variant existed, back when the two conditions shared one code.
   - `Internal` -> `INTERNAL_ERROR` (XX000), Fatal. An invariant this
     engine's own bookkeeping should never violate
     (`txn::TxnError::UnknownTransaction`/`LockAfterUnlock`) - reachable

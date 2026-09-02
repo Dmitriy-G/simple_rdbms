@@ -29,7 +29,8 @@ fn sample_errors() -> Vec<Error> {
             data_type: "Integer".to_string(),
         },
         Error::DataCorrupted { detail: "unknown column type tag".to_string() },
-        Error::SerializationFailure { detail: "deadlock".to_string() },
+        Error::SerializationFailure { detail: "snapshot conflict".to_string() },
+        Error::DeadlockDetected { detail: "deadlock".to_string() },
         Error::Internal { detail: "unknown transaction".to_string() },
         Error::NestedTransaction,
         Error::NoActiveTransaction { statement: "COMMIT".to_string() },
@@ -70,6 +71,7 @@ fn expected_sql_state(err: &Error) -> SqlState {
         Error::NumericValueOutOfRange { .. } => SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
         Error::DataCorrupted { .. } => SqlState::DATA_CORRUPTED,
         Error::SerializationFailure { .. } => SqlState::SERIALIZATION_FAILURE,
+        Error::DeadlockDetected { .. } => SqlState::DEADLOCK_DETECTED,
         Error::Internal { .. } => SqlState::INTERNAL_ERROR,
         Error::NestedTransaction => SqlState::NO_ACTIVE_SQL_TRANSACTION,
         Error::NoActiveTransaction { .. } => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -102,7 +104,9 @@ fn is_retryable_is_true_only_for_class_40_codes() {
     for err in sample_errors() {
         let is_class_40 = matches!(
             err.sql_state(),
-            SqlState::SERIALIZATION_FAILURE | SqlState::STATEMENT_COMPLETION_UNKNOWN
+            SqlState::SERIALIZATION_FAILURE
+                | SqlState::DEADLOCK_DETECTED
+                | SqlState::STATEMENT_COMPLETION_UNKNOWN
         );
         assert_eq!(err.is_retryable(), is_class_40, "wrong is_retryable for {err:?}");
     }

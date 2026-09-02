@@ -44,7 +44,12 @@ connection attempt itself failed" - it maps to `Error::UnknownSession`
 specifically so that code and `EngineUnavailable`'s `CONNECTION_FAILURE`
 stay two different codes; collapsing both onto one would leave a future
 wire-protocol client no way to tell "your session was torn down, open a
-new one" apart from "the server process itself is gone."
+new one" apart from "the server process itself is gone." `DEADLOCK_DETECTED`
+(`40P01`) is Postgres's own extension code within the standard's class 40
+(transaction rollback), kept distinct from the standard's own
+`SERIALIZATION_FAILURE` (`40001`) so a `txn::LockManager` deadlock victim
+(`Error::DeadlockDetected`) can be told apart from a plain write-write
+conflict even though both are equally retryable to a client.
 
 ## Key Components
 
@@ -77,6 +82,7 @@ new one" apart from "the server process itself is gone."
   | `IDLE_IN_TRANSACTION_SESSION_TIMEOUT` | `25P03` | 25 - invalid transaction state |
   | `LOCK_NOT_AVAILABLE` | `55P03` | 55 - object not in prerequisite state |
   | `SERIALIZATION_FAILURE` | `40001` | 40 - transaction rollback |
+  | `DEADLOCK_DETECTED` | `40P01` | 40 - transaction rollback |
   | `STATEMENT_COMPLETION_UNKNOWN` | `40003` | 40 - transaction rollback |
   | `SYNTAX_ERROR` | `42601` | 42 - syntax error or access rule violation |
   | `AMBIGUOUS_COLUMN` | `42702` | 42 - syntax error or access rule violation |

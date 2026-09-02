@@ -1,8 +1,23 @@
 # lock_manager
 
-Grants and releases row-level locks under strict two-phase locking,
-blocking (conceptually; the actual wait/wound policy is future work)
-conflicting requests and detecting deadlocks among waiters.
+Grants and releases locks under strict two-phase locking: every lock a
+transaction acquires stays held until that transaction ends, at which
+point every one of its locks releases atomically via `release_all` - no
+partial, mid-transaction unlock exists, since strict 2PL forbids one.
+`&self` throughout, not `&mut self`: a single `LockManager` is meant to be
+shared across every worker thread running a statement once M10.2's
+concurrent execution model lands, so it protects its own state with a
+`Mutex` and blocks waiters on a `Condvar` rather than requiring a caller
+to serialize access itself. Two independent resource spaces share one
+instance - row locks, keyed by `Rid`, and table locks, keyed by
+`TableId` - so a table-level lock and a row-level lock on a row inside
+that table are unrelated as far as this module is concerned; a later
+subtask makes the executor take both, in the right order.
+
+Not yet wired into `TransactionManager` or `engine::Database`: this crate
+provides the type and its full contract ahead of the executor actually
+taking locks around row reads and writes, which a later M10.2 subtask
+does (`docs/ROADMAP.md`).
 
 ## Key Components
 
@@ -10,30 +25,71 @@ conflicting requests and detecting deadlocks among waiters.
   transactions to hold a lock on the same resource simultaneously; used
   for reads. `Exclusive` allows only one transaction to hold a lock on a
   resource at a time, and it excludes shared locks too; used for writes.
-- `LockManager` - the lock manager. Holds `holders`, a map from `Rid` to
-  the list of `(TxnId, LockMode)` pairs currently granted on it.
+  `LockMode::conflicts_with(self, other) -> bool` - private. `true` unless
+  both sides are `Shared`.
+- `LockManager` - the lock manager. `state: Mutex<State>` holds every
+  resource's current holders and every blocked transaction's pending
+  request; `released: Condvar` wakes every blocked call after any
+  `release_all`.
 - `LockManager::new() -> Self` - creates a lock manager with no locks
   held.
-- `LockManager::lock(&mut self, txn_id, rid, mode) -> Result<(), TxnError>` -
-  acquires a lock on `rid` in `mode` on behalf of `txn_id`, blocking (or
-  erroring, once deadlock detection exists) if it conflicts with an
-  incompatible lock already held by another transaction. Unimplemented
-  (`todo!`).
-- `LockManager::unlock(&mut self, txn_id, rid) -> Result<(), TxnError>` -
-  releases `txn_id`'s lock on `rid`. Under strict 2PL this only happens at
-  commit/abort, never mid-transaction. Unimplemented (`todo!`).
+- `LockManager::lock(&self, txn_id, rid, mode) -> Result<(), TxnError>` -
+  acquires a lock on `rid` in `mode` on behalf of `txn_id`. Returns
+  immediately if `txn_id` already holds `mode` or a stronger mode on
+  `rid`; upgrades a held `Shared` to `Exclusive` in place if `txn_id` is
+  the only holder; otherwise blocks the calling thread on `released`
+  until the conflicting lock(s) are released, unless granting would first
+  require blocking behind a cycle in the wait-for graph, in which case it
+  returns `TxnError::DeadlockVictim` immediately without blocking at all.
+  Returns `TxnError::LockAfterUnlock` if `release_all` has already run for
+  `txn_id`.
+- `LockManager::lock_table(&self, txn_id, table_id, mode) -> Result<(), TxnError>` -
+  the same contract as `lock`, on the table-id resource space instead of
+  the row-id one.
+- `LockManager::release_all(&self, txn_id)` - releases every lock
+  `txn_id` currently holds, across both resource spaces, in one step;
+  marks `txn_id` as finished (a further `lock`/`lock_table` call for it
+  fails with `LockAfterUnlock` rather than silently reacquiring); and
+  wakes every thread blocked in `lock`/`lock_table`, which each recheck
+  their own request against the new state rather than assuming they were
+  the one released.
+- `Resource` - private. `Row(Rid)` or `Table(TableId)`: the two kinds of
+  thing a lock can be held on, unified so the wait-for graph walk in
+  `would_deadlock` doesn't need to know which kind it's looking at.
+- `State` - private. `holders` maps a `Resource` to every `(TxnId,
+  LockMode)` currently granted on it (at most one entry per `TxnId`);
+  `held_by` is the reverse index `release_all` uses to find everything a
+  transaction holds without scanning `holders`; `waiting_for` maps a
+  blocked `TxnId` to the single `(Resource, LockMode)` it's parked on - a
+  transaction can only ever be blocked on one request at a time, since
+  `lock`/`lock_table` itself blocks the calling thread; `finished` is the
+  set of transactions `release_all` has already run for.
+- `conflicting_holders(state, resource, mode, exclude) -> Vec<TxnId>` -
+  private. Every transaction other than `exclude` currently holding
+  `resource` in a mode that conflicts with `mode`.
+- `would_deadlock(state, start, blockers) -> bool` - private. Walks the
+  wait-for graph outward from `blockers` (the transactions `start` is
+  about to wait on): for each one, if it is itself blocked on some
+  resource, follows the chain to whichever transactions are blocking
+  *it*, and so on. Returns `true` the moment `start` itself is reached,
+  meaning granting `start`'s wait would close a cycle. Called before
+  `start` ever registers itself as a waiter, so the check only ever sees
+  waits that are already real, never one it just created.
 
 ## Usage Example
 
 ```rust
+use std::sync::Arc;
+
 use common::{PageId, Rid, TxnId};
 use txn::{LockManager, LockMode};
 
-let mut locks = LockManager::new();
+let locks = Arc::new(LockManager::new());
 locks.lock(TxnId(1), Rid::new(PageId(0), 0), LockMode::Exclusive)?;
-locks.unlock(TxnId(1), Rid::new(PageId(0), 0))?;
+// ... do the write this lock protects ...
+locks.release_all(TxnId(1));
 ```
 
-Not yet wired into `TransactionManager` or `engine::Database`: this crate
-provides the type and its intended contract ahead of the executor
-actually taking locks around row reads and writes.
+Every fallible call in this crate returns `TxnError`; see `error.MD` for
+how a `LockManager` caller's `DeadlockVictim`/`LockAfterUnlock` fold into
+`common::Error` at the point they cross into `engine`.

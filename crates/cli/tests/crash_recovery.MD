@@ -9,7 +9,7 @@ dirty in the buffer pool (no-force) - they may not reach disk until a
 later eviction or `close`. That is safe because a crash can replay the
 log to redo whatever never made it to the data file: `Database::open`
 runs `storage::recovery::recover` before the catalog is even loaded (see
-M7, `task.MD`), so a hard kill right after an acknowledgment still leaves
+M7, `../../../.claude/task.MD`), so a hard kill right after an acknowledgment still leaves
 the statement fully recoverable from the WAL alone.
 
 This is the "coarse subprocess SIGKILL sanity check" M7 asks for
