@@ -245,10 +245,10 @@ impl Parser {
     }
 
     fn parse_and(&mut self) -> Result<Expr, SqlError> {
-        let mut left = self.parse_is_null()?;
+        let mut left = self.parse_not()?;
         while matches!(self.current().kind, TokenKind::And) {
             self.advance();
-            let right = self.parse_is_null()?;
+            let right = self.parse_not()?;
             left = Expr::BinaryOp {
                 left: Box::new(left),
                 op: BinaryOperator::And,
@@ -256,6 +256,15 @@ impl Parser {
             };
         }
         Ok(left)
+    }
+
+    fn parse_not(&mut self) -> Result<Expr, SqlError> {
+        if matches!(self.current().kind, TokenKind::Not) {
+            self.advance();
+            let expr = self.parse_not()?;
+            return Ok(Expr::UnaryOp { op: UnaryOperator::Not, expr: Box::new(expr) });
+        }
+        self.parse_is_null()
     }
 
     fn parse_is_null(&mut self) -> Result<Expr, SqlError> {
@@ -295,11 +304,6 @@ impl Parser {
 
     fn parse_unary(&mut self) -> Result<Expr, SqlError> {
         match self.current().kind {
-            TokenKind::Not => {
-                self.advance();
-                let expr = self.parse_unary()?;
-                Ok(Expr::UnaryOp { op: UnaryOperator::Not, expr: Box::new(expr) })
-            }
             TokenKind::Minus => {
                 self.advance();
                 let expr = self.parse_unary()?;

@@ -92,19 +92,24 @@ cursor rather than by recursing over the input text.
   BOOLEAN`, matched case-insensitively against an identifier token.
 - `Parser::parse_expr(&mut self) -> Result<Expr, SqlError>` - private.
   Parses an expression, respecting operator precedence and associativity
-  via precedence climbing: `OR` binds loosest, then `AND`, then postfix
-  `IS [NOT] NULL`, then comparisons, then unary `NOT`/`-`, then
-  primaries. Delegates to `parse_or`.
-- `Parser::parse_or`, `parse_and`, `parse_is_null`, `parse_comparison`,
-  `parse_unary`, `parse_primary` - private. The precedence-climbing
-  ladder `parse_expr` sits on top of, each one level tighter than the
-  last; `parse_primary` is the base case, matching literals, column
-  references, and parenthesized sub-expressions - a bare identifier
-  becomes `Expr::Column { table: None, name }`, and one immediately
-  followed by `.` and a second identifier becomes `Expr::Column {
-  table: Some(first), name: second }`, a qualified reference the binder
-  resolves against the `FROM` clause's `TableRef` (`planner::binder.MD`).
-  `parse_is_null` sits between `parse_and` and `parse_comparison`, so
+  via precedence climbing: `OR` binds loosest, then `AND`, then prefix
+  `NOT`, then postfix `IS [NOT] NULL`, then comparisons, then unary `-`,
+  then primaries. Delegates to `parse_or`.
+- `Parser::parse_or`, `parse_and`, `parse_not`, `parse_is_null`,
+  `parse_comparison`, `parse_unary`, `parse_primary` - private. The
+  precedence-climbing ladder `parse_expr` sits on top of, each one level
+  tighter than the last; `parse_primary` is the base case, matching
+  literals, column references, and parenthesized sub-expressions - a bare
+  identifier becomes `Expr::Column { table: None, name }`, and one
+  immediately followed by `.` and a second identifier becomes
+  `Expr::Column { table: Some(first), name: second }`, a qualified
+  reference the binder resolves against the `FROM` clause's `TableRef`
+  (`planner::binder.MD`). This ladder matches Postgres's order exactly,
+  highest to lowest: comparison, `IS`, `NOT`, `AND`, `OR`, with unary
+  minus kept separate and high (inside `parse_unary`, above the
+  multiplicative/additive levels M15 will add) since Postgres binds unary
+  minus above `*`/`/` rather than down at `NOT`'s level.
+  `parse_is_null` sits between `parse_not` and `parse_comparison`, so
   `IS [NOT] NULL` applies to an entire comparison, not to one of its
   operands - `a = b IS NULL` parses as `(a = b) IS NULL`, matching
   Postgres, where `IS` sits below the comparison operators. This is
@@ -115,7 +120,18 @@ cursor rather than by recursing over the input text.
   not a style preference. The common forms (`WHERE col IS NULL`, `WHERE
   col IS NOT NULL AND x = 1`) parse identically either way, since neither
   involves `IS` applied to the result of a comparison, which is exactly
-  why the wrong placement went unnoticed.
+  why the wrong placement went unnoticed. `parse_not` sits between
+  `parse_and` and `parse_is_null` for the same reason: `NOT` used to be
+  handled in `parse_unary`, below `parse_comparison`, so `WHERE NOT a = 1`
+  parsed as `(NOT a) = 1` and then failed to bind, since `NOT` requires a
+  Boolean operand and `a` typically isn't one. Moving it above
+  `parse_comparison` makes `WHERE NOT a = 1` parse as `NOT (a = 1)`,
+  matching Postgres.
+- `Parser::parse_not(&mut self) -> Result<Expr, SqlError>` - private. If
+  the current token is `NOT`, consumes it and recurses on itself (so
+  `NOT NOT a = 1` parses as `NOT (NOT (a = 1))`), wrapping the result in
+  `Expr::UnaryOp { op: UnaryOperator::Not, expr }`; otherwise delegates
+  straight to `parse_is_null`.
 - `Parser::parse_is_null(&mut self) -> Result<Expr, SqlError>` - private.
   Parses one `parse_comparison` result, then greedily wraps it in
   `Expr::IsNull { expr, negated }` for each trailing `IS NULL` (`negated:

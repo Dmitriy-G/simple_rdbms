@@ -114,7 +114,7 @@ touch a small fraction of a table still pay for reading all of it.
 choose over a sequential scan, built against the durable, recoverable
 storage layer M6–M8 provide rather than the pre-WAL one — see ADR 0003.
 
-## M10 — Concurrent transactions without corrupting each other 🚧 In Progress
+## M10 — Concurrent transactions without corrupting each other 🆕 New
 **Problem:** multiple transactions running at once can interleave their
 reads and writes in ways that violate isolation, from lost updates to
 dirty reads, on top of the atomicity M8 already guarantees for each one

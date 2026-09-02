@@ -108,6 +108,23 @@ fn is_null_binds_looser_than_comparison_and_evaluates_accordingly() {
 }
 
 #[test]
+fn not_binds_looser_than_comparison_and_evaluates_accordingly() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (a INTEGER)").expect("create table");
+    db.execute("INSERT INTO t VALUES (1), (2)").expect("insert");
+
+    let (_, rows) =
+        rows_and_columns_of(db.execute("SELECT a FROM t WHERE NOT a = 1").expect("select"));
+    assert_eq!(
+        rows,
+        vec![vec![Value::Integer(2)]],
+        "`NOT a = 1` should parse and evaluate as `NOT (a = 1)`, matching Postgres"
+    );
+}
+
+#[test]
 fn select_resolves_qualified_columns_against_a_table_alias() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let mut db = open(&dir);
