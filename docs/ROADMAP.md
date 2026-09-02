@@ -2,16 +2,19 @@
 
 Each milestone is named after the database problem it solves, not the
 feature it adds — the feature is just how the problem gets solved this
-time. Milestones are numbered by the problem they solve and mostly build
-on each other in that order, but implementation order has deliberately
-diverged from it twice: M12 shipped ahead of M9 (cheaper to change the
-flush path before B+tree splits start writing several related pages per
-operation — see M12's entry), and M14 no longer depends on M10 (the
-single-threaded engine thread removes the dependency — see M14's entry).
-Read each entry's Problem/Solution for what it actually depends on rather
-than assuming strict numeric order. Each heading also carries a status:
-✅ Done (shipped), 🚧 In Progress (actively being built), or 🆕 New (not
-started).
+time. Numbers M15 and above are implementation order: read top to bottom
+and that is the order the work happens in. M10, M12, M13 and M14 sit out
+of numeric order because each already had shipped work under its
+identifier before this ordering was adopted — M12 shipped ahead of M9
+(cheaper to change the flush path before B+tree splits start writing
+several related pages per operation — see M12's entry), M14 no longer
+depends on M10 (the single-threaded engine thread removes the dependency
+— see M14's entry), and M10.1 shipped as part of an earlier storage-layer
+refactor. Read each entry's Problem/Solution for what it actually depends
+on rather than assuming strict numeric order. Each heading also carries a
+status: ✅ Done (shipped), 🚧 In Progress (someone is writing code for it
+right now — at most one milestone carries this status at a time; partial
+progress otherwise goes in the entry's prose), or 🆕 New (not started).
 
 ## M1 — Durable, fixed-size storage ✅ Done
 **Problem:** a database needs a way to persist bytes to disk in units the
@@ -114,41 +117,70 @@ touch a small fraction of a table still pay for reading all of it.
 choose over a sequential scan, built against the durable, recoverable
 storage layer M6–M8 provide rather than the pre-WAL one — see ADR 0003.
 
-## M10 — Concurrent transactions without corrupting each other 🆕 New
+### M9.1 — B+tree node layout and read path ✅ Done
+**Problem:** the read path needs a durable, WAL-recoverable tree structure
+before insert or index-scan wiring can build on it.
+**Solution:** `storage::btree::BTreeIndex` node layout, `create`/`open`/
+`get`/`range_scan`, and the encoding contract with
+`types::MemcomparableEncode` (`btree.MD`).
+
+### M9.2 — Splitting nodes as they fill ✅ Done
+**Problem:** a fixed-size page cannot hold an unbounded number of keys;
+`insert` needs a real strategy for what happens when a leaf or internal
+node is full.
+**Solution:** `BTreeIndex::insert` with leaf and internal node splits,
+propagating a new separator key upward.
+
+### M9.3 — Wiring the index into the query path ✅ Done
+**Problem:** M9.1 and M9.2 give the tree correct node-level operations,
+but nothing yet lets a real `CREATE INDEX` statement build one, or
+`SELECT` choose one over a sequential scan.
+**Solution:** `leaf_for_start`/`scan_leaf`, an index catalog
+(`index_catalog_first_page`) alongside the table catalog, `CREATE INDEX`,
+`executor::IndexScanExecutor`, and `planner::optimizer::IndexScanRule`
+choosing an index scan over a sequential scan whenever one qualifies.
+
+## M10 — Concurrent transactions without corrupting each other 🚧 In Progress
 **Problem:** multiple transactions running at once can interleave their
 reads and writes in ways that violate isolation, from lost updates to
 dirty reads, on top of the atomicity M8 already guarantees for each one
 individually.
-**Solution:** a lock manager enforcing two-phase locking first, then MVCC
-for snapshot isolation so readers stop blocking writers.
+**Solution:** in order, a storage layer safe to drive from multiple
+threads, a lock manager enforcing two-phase locking, and then MVCC for
+snapshot isolation so readers stop blocking writers.
 
-## M11 — Answering multi-table queries efficiently 🚧 In Progress
-**Problem:** multi-table queries cannot be expressed at all today —
-`FROM` accepts exactly one table (`crates/sql/src/parser.rs` has no
-`JOIN` production and no comma-separated `FROM` list), so any question
-spanning two tables has to be answered by the application issuing two
-queries and joining the results in memory itself.
-**Solution:** in order: `JOIN` syntax and a multi-table `FROM` in the
-grammar; a real path into the `LogicalPlan::Join`/
-`PhysicalPlan::NestedLoopJoin` node kinds that already exist as
-scaffolding but that nothing in `sql`'s grammar can reach today; finishing
-`NestedLoopJoinExecutor`, whose `init` and `next` are both still
-`todo!()`; and only then additional join algorithms plus a cost-based
-optimizer choosing among them and among access paths using table and
-index statistics. M9 has since shipped, and a basic form of access-path
-choice already exists because of it: `planner::optimizer::IndexScanRule`
-picks an index scan over a sequential scan whenever one qualifies,
-greedily and without comparing cost. What this milestone's optimizer half
-still needs is choosing *among* several qualifying access paths (more
-than one usable index, or an index whose selectivity doesn't obviously
-beat a sequential scan) by estimated cost, and extending that choice
-across a join rather than one table at a time — a harder problem than the
-on/off choice M9 already answers, not one M9 left untouched.
-**Note:** the qualified-column representation this milestone needs
-(`Expr::Column { table, name }`, `TableRef { name, alias }`, and the
-binder's `table_scope` resolution, which makes an aliased table's real
-name go out of scope for qualification) already landed as B-2, ahead of
-`JOIN` itself existing. Nothing here should reintroduce it.
+### M10.1 — A storage layer safe to drive from multiple threads ✅ Done
+**Problem:** locking and MVCC both assume the storage layer underneath can
+be driven from more than one thread at once; before this, nothing
+guaranteed that.
+**Solution:** `Send + Sync` throughout `storage` — `BufferPool`,
+`BlockDevice`, and `SegmentStore` — backed by `Mutex`/`RwLock`/`Condvar`/
+atomics rather than any single-threaded assumption, exercised by
+`buffer_pool_concurrency.rs` and `dwb_batch_exclusion.rs` driving the
+buffer pool from eight threads at once.
+
+### M10.2 — Concurrent execution under two-phase locking 🆕 New
+**Problem:** M14.1's single dedicated engine thread gets isolation for
+free by executing every statement, from every connection, serially — but
+that means only one transaction can be open at a time; a second `BEGIN`
+waits and then fails with `55P03` rather than running concurrently.
+`storage::btree`'s descent also releases each parent's guard before
+fetching the child (no latch coupling / crabbing — `btree.rs:384`), which
+is safe only because nothing today runs two writers against the tree at
+once.
+**Solution:** a lock manager enforcing two-phase locking, removing
+M14.1's park queue and its one-open-transaction-at-a-time limit so
+statements from different connections genuinely run concurrently, and
+latch crabbing in `storage::btree` so a concurrent split cannot move a key
+out from under a reader mid-descent.
+
+### M10.3 — MVCC snapshot isolation 🆕 New
+**Problem:** two-phase locking (M10.2) gives correct concurrent execution,
+but a reader still blocks behind a writer holding a lock on the same rows,
+which a snapshot-isolated database does not require.
+**Solution:** multi-version concurrency control so a reader sees a
+consistent snapshot without taking row locks, letting readers and writers
+stop blocking each other.
 
 ## M12 — Surviving a torn page write ✅ Done
 **Problem:** even a single page write is not atomic at the hardware level —
@@ -277,8 +309,13 @@ real catalog where the data exists, return empty where it does not, and
 never fabricate a result. Track what works in
 `docs/CLIENT-COMPATIBILITY.md`. See datafusion-postgres (linked above) as
 a reference `pg_catalog` implementation.
+**Note:** matching known query text is inherently brittle - it works for
+the client versions actually tested and breaks on others that phrase the
+same introspection query differently. M25 replaces this interception with
+`pg_catalog` tables answered by ordinary queries once joins exist to make
+that possible.
 
-## M15 — Changing and removing rows 🆕 New
+## M15 — Changing and removing rows (DELETE, UPDATE, arithmetic) 🆕 New
 **Problem:** rows can be inserted and read but never modified or removed.
 `DELETE` and `UPDATE` do not exist in the token list, the AST or the
 grammar; `TableHeap::delete_tuple` and `update_tuple_in_place` are
@@ -294,14 +331,23 @@ executors need each output row's `Rid`, not just its `Tuple`, so
 `Executor::next` changes shape to carry both. `BTreeIndex::delete(txn_id,
 key, rid)` removes the target entry, located by `key ++ rid` the same way
 `insert` places it; an empty leaf is unlinked from the sibling chain (its
-page reclaimed once M24's free list exists, orphaned but unreachable
+page reclaimed once M29's free list exists, orphaned but unreachable
 until then), and a merely partly empty node is left alone - no merge, no
 borrow-from-sibling, the same choice Postgres's `nbtree` makes
 (`storage::btree.MD`, `docs/adr/0012-btree-delete-does-not-merge.md`).
 Index maintenance on both paths, and the `// TODO(M5): vacuum` compaction
 in `heap.rs` so tombstoned space is actually reclaimed, keeping slot
 indices stable since a `Rid` is half slot index. Note that this is a hard
-prerequisite for M18.
+prerequisite for M28.
+**Constraints for M10.3:** two decisions here are made to avoid a rewrite
+once MVCC (M10.3) lands. First, reserve space in the heap tuple header for
+version metadata now, even though nothing reads or writes it yet -
+retrofitting that space into an on-disk format already in use is a
+migration, not a field addition. Second, implement `UPDATE` as a delete of
+the old tuple plus an insert of a new one, never as an in-place rewrite of
+the tuple's bytes - MVCC needs the old version to remain reachable to a
+snapshot that started before the update, which an in-place write
+destroys.
 
 ## M16 — Column constraints that hold 🆕 New
 **Problem:** `Column::nullable` is parsed as a hardcoded `true`, plumbed
@@ -318,7 +364,7 @@ cheapest of the four.
 landed as B-1, ahead of this milestone rather than as its first step.
 Nothing here should reimplement it.
 
-## M17 — Identity and uniqueness 🆕 New
+## M17 — Identity and uniqueness (PRIMARY KEY, UNIQUE) 🆕 New
 **Problem:** no table can declare a primary key, and the B+tree
 deliberately permits duplicates - `get` walks the leaf sibling chain to
 collect them. `SqlState::UNIQUE_VIOLATION` is defined and unreachable.
@@ -330,22 +376,22 @@ constraint kind in the index catalog row so it survives a restart. Note
 the interaction with M15: uniqueness must be re-checked on `UPDATE`, not
 only on `INSERT`.
 
-## M18 — Referential integrity 🆕 New
-**Problem:** no way to express that one table's column references
-another's, so the application has to enforce it and nothing stops an
-orphan row.
-**Solution:** `FOREIGN KEY ... REFERENCES` in `CREATE TABLE`, validation
-on insert and update against the referenced unique index, `ON DELETE` and
-`ON UPDATE` actions (`NO ACTION`, `RESTRICT`, `CASCADE`, `SET NULL`), and
-constraint metadata in the catalog. Add `23503 foreign_key_violation` to
-`SqlState`. State the dependencies explicitly: M15 because the
-referential actions are entirely about delete and update behaviour, and
-M17 because the referenced column must be backed by a unique index for
-the check to be a lookup rather than a scan. Record deferred constraint
-checking (`SET CONSTRAINTS DEFERRED`) as explicitly out of scope, since it
-needs statement-level rather than row-level checking.
+## M18 — Generated identity (sequences, SERIAL, RETURNING) 🆕 New
+**Problem:** every row's primary key has to be supplied by the client.
+There are no sequences and no `SERIAL`, so two concurrent inserts cannot
+agree on the next id without an external coordinator. M17 gives tables a
+primary key but no way to generate one.
+**Solution:** sequences as catalog objects with their own durable
+counter, `nextval`/`currval`/`setval`, `SERIAL` and `BIGSERIAL` as column
+shorthands, and `GENERATED BY DEFAULT AS IDENTITY`. Sequence advances are
+non-transactional by design — a rolled-back insert does not return its
+id — and that must be stated in the milestone, in the catalog docs and in
+an ADR, because it is the one place in the system where a rollback
+deliberately does not undo something. ORMs depend on this heavily; expect
+every insert from one to end in `RETURNING id`, which means `RETURNING`
+belongs here too.
 
-## M19 — Predicates a real query needs 🆕 New
+## M19 — Predicates a real query needs (IN, BETWEEN, LIKE) 🆕 New
 **Problem:** `WHERE` supports comparison, `AND`/`OR`/`NOT` and arithmetic
 and nothing else. `IN`, `BETWEEN` and `LIKE` have no tokens, no AST and
 no grammar, so the most common filters an application writes cannot be
@@ -358,7 +404,7 @@ exist. Extend `IndexScanRule` so `IN` over an indexed column becomes a
 set of range scans rather than a full scan with a filter. (`IS NULL` is
 not here — it is B-1, folded into M16.)
 
-## M20 — Shaping the result set 🆕 New
+## M20 — Shaping the result set (ORDER BY, LIMIT, DISTINCT, aliases) 🆕 New
 **Problem:** results come back in physical heap order with no way to
 sort, limit, page or deduplicate them, and no way to name a computed
 column. `SelectItem` has no alias field. Any application that shows a
@@ -395,33 +441,7 @@ so clients parse it. Do this before M14.2: every column in a
 `RowDescription` needs a real Postgres type OID, and mapping a type
 system that is still growing means doing that work twice.
 
-## M23 — Generated identity 🆕 New
-**Problem:** every row's primary key has to be supplied by the client.
-There are no sequences and no `SERIAL`, so two concurrent inserts cannot
-agree on the next id without an external coordinator. M17 gives tables a
-primary key but no way to generate one.
-**Solution:** sequences as catalog objects with their own durable
-counter, `nextval`/`currval`/`setval`, `SERIAL` and `BIGSERIAL` as column
-shorthands, and `GENERATED BY DEFAULT AS IDENTITY`. Sequence advances are
-non-transactional by design — a rolled-back insert does not return its
-id — and that must be stated in the milestone, in the catalog docs and in
-an ADR, because it is the one place in the system where a rollback
-deliberately does not undo something. ORMs depend on this heavily; expect
-every insert from one to end in `RETURNING id`, which means `RETURNING`
-belongs here too.
-
-## M24 — Removing and altering schema objects 🆕 New
-**Problem:** a table, once created, exists forever. There is no `DROP`,
-`ALTER` or `TRUNCATE` in the token list, and `Catalog::drop_table` is a
-`todo!()`. A schema mistake means deleting the database file.
-**Solution:** `DROP TABLE`, `DROP INDEX`, `TRUNCATE`, and `ALTER TABLE`
-with `ADD COLUMN`, `DROP COLUMN` and `RENAME`. `DROP` has to reclaim
-every page the table's heap and indexes owned, which needs the free-space
-map the allocator does not have — `DiskManager::allocate_page` only ever
-appends. That free list is the real work in this milestone. `IF EXISTS`
-and `IF NOT EXISTS` throughout, since every migration tool emits them.
-
-## M25 — Authentication and access control 🆕 New
+## M23 — Authentication and access control 🆕 New
 **Problem:** anything that can reach the port is a superuser. There are
 no users, no roles and no privileges, and M14.2 opens a socket without
 addressing it.
@@ -433,34 +453,61 @@ Until this lands, the M14.2 listener must bind to `127.0.0.1` by default
 and require an explicit opt-in to bind anywhere else — record that as a
 constraint in the M14.2 entry, not as a footnote here.
 
-## M26 — Backup, restore and point-in-time recovery 🆕 New
-**Problem:** the only way to back up the database is to stop the process
-and copy three files, and the only recovery target is "whatever was in
-the WAL when it died". Every mechanism needed for something better
-already exists — segmented WAL, monotonic LSNs, checkpoints with a
-recovery bound — and none of it is exposed.
-**Solution:** a logical dump and restore (`pg_dump`-shaped: schema plus
-`INSERT`s or a copy stream), a physical base backup taken while the
-database is running, WAL segment archiving instead of deletion at
-truncation, and replay to a target LSN or timestamp. This is the payoff
-for M5 through M12 and it is the difference between a durable database
-and an operable one. It also gives the crash-injection harness a second
-oracle: a restored backup replayed to an LSN must match the live database
-at that LSN.
+## M24 — Answering multi-table queries (nested-loop joins) 🚧 In Progress
+**Problem:** multi-table queries cannot be expressed at all today —
+`FROM` accepts exactly one table (`crates/sql/src/parser.rs` has no
+`JOIN` production and no comma-separated `FROM` list), so any question
+spanning two tables has to be answered by the application issuing two
+queries and joining the results in memory itself.
+**Solution:** in order: `JOIN` syntax and a multi-table `FROM` in the
+grammar; a real path into the `LogicalPlan::Join`/
+`PhysicalPlan::NestedLoopJoin` node kinds that already exist as
+scaffolding but that nothing in `sql`'s grammar can reach today; and
+finishing `NestedLoopJoinExecutor`, whose `init` and `next` are both
+still `todo!()`. Nested loop only — done when a two-table join returns
+correct results. Additional join algorithms, a cost-based optimizer
+choosing among them, and join ordering are M26/M27, not this milestone.
+**Note:** the qualified-column representation this milestone needs
+(`Expr::Column { table, name }`, `TableRef { name, alias }`, and the
+binder's `table_scope` resolution, which makes an aliased table's real
+name go out of scope for qualification) already landed as B-2, ahead of
+`JOIN` itself existing. Nothing here should reintroduce it.
 
-## M27 — Statistics and cost-based planning 🆕 New
+## M25 — `pg_catalog` answered by real queries 🆕 New
+**Problem:** M14.4's known-query-text interception works for the client
+versions it was tested against and breaks on any client that phrases the
+same introspection query differently — the moment `pg_class`/
+`pg_namespace`/`pg_attribute`/`pg_type` are joined instead of queried
+standalone, or filtered or aliased differently, interception has nothing
+to match and returns nothing. Real `pg_catalog` compatibility needs those
+tables to exist and answer through the same query path every other table
+does.
+**Solution:** system catalog tables backed by the real `catalog::Catalog`
+state and answered through ordinary `SELECT` execution rather than string
+matching, including the joins across them real clients issue — which
+needs M24's nested-loop joins to exist first. Retire M14.4's interception
+once these are in place. See datafusion-postgres (linked from M14) as a
+reference `pg_catalog` implementation.
+
+## M26 — Statistics and single-table cost 🆕 New
 **Problem:** `IndexScanRule` picks an index whenever a predicate mentions
 an indexed column, with no idea how selective it is. An index scan
 returning 90% of a table is slower than a sequential scan, and the
-planner cannot tell. M11's title says "efficiently", but join ordering
-without cardinality estimates is a guess.
+planner cannot tell. `planner::optimizer::IndexScanRule` picks an index
+scan over a sequential scan whenever one qualifies, greedily and without
+comparing cost. What is still needed is choosing *among* several
+qualifying access paths (more than one usable index, or an index whose
+selectivity doesn't obviously beat a sequential scan) by estimated cost —
+a harder problem than the on/off choice M9 already answers, not one M9
+left untouched. M24's nested-loop join executor picks up here too:
+additional join algorithms and a cost-based optimizer choosing among them
+and among access paths need the same table and index statistics this
+milestone builds.
 **Solution:** `ANALYZE`, per-column statistics (row count, distinct
 count, null fraction, a histogram or most-common-values list) persisted
 in the catalog, selectivity estimation for the predicate forms M19 and
-M21 add, a cost model over sequential and index scans, and join ordering
-driven by it. Extend `EXPLAIN` to print estimated rows and cost, and add
-`EXPLAIN ANALYZE` so estimates can be compared against reality — without
-that, a cost model cannot be debugged.
+M21 add, and a cost model over sequential and index scans for a single
+table. Extend `EXPLAIN` to print estimated rows and cost.
 **Note:** `planner::optimizer::IndexScanRule` also skips `BoundExpr::IsNull`
 entirely today - `WHERE col IS NULL` on an indexed column is always a
 full scan plus filter, never an index scan. `types::memcomparable`
@@ -469,3 +516,70 @@ value, so `IS NULL` could become a range scan over `[0x00, 0x01)` the
 same way an equality predicate becomes one over `[key, successor(key))`.
 Worth doing here, alongside the rest of this milestone's selectivity
 work, rather than as a special case bolted onto `IndexScanRule` earlier.
+
+## M27 — Join ordering 🆕 New
+**Problem:** M24 only ever joins tables in the order they're written; for
+more than two tables, join order changes the amount of intermediate data
+produced by orders of magnitude, and M26's per-table cost model says
+nothing about how to sequence a join yet.
+**Solution:** join ordering driven by M26's statistics and cost model,
+and `EXPLAIN ANALYZE` so estimated rows and cost can be compared against
+what a query actually produced — without that, a cost model cannot be
+debugged.
+
+## M28 — Referential integrity (foreign keys) 🆕 New
+**Problem:** no way to express that one table's column references
+another's, so the application has to enforce it and nothing stops an
+orphan row.
+**Solution:** `FOREIGN KEY ... REFERENCES` in `CREATE TABLE`, validation
+on insert and update against the referenced unique index, `ON DELETE` and
+`ON UPDATE` actions (`NO ACTION`, `RESTRICT`, `CASCADE`, `SET NULL`), and
+constraint metadata in the catalog. Add `23503 foreign_key_violation` to
+`SqlState`. State the dependencies explicitly: M15 because the
+referential actions are entirely about delete and update behaviour, and
+M17 because the referenced column must be backed by a unique index for
+the check to be a lookup rather than a scan. Record deferred constraint
+checking (`SET CONSTRAINTS DEFERRED`) as explicitly out of scope, since it
+needs statement-level rather than row-level checking.
+
+## M29 — Page free list, DROP, TRUNCATE 🆕 New
+**Problem:** a table, once created, exists forever. There is no `DROP`,
+`ALTER` or `TRUNCATE` in the token list, and `Catalog::drop_table` is a
+`todo!()`. A schema mistake means deleting the database file.
+`DiskManager::allocate_page` only ever appends, so there is no way to
+reclaim a page a dropped table or index frees.
+**Solution:** a free-space map the allocator can hand pages back to,
+`DROP TABLE`, `DROP INDEX`, and `TRUNCATE` built on it — each has to
+reclaim every page the table's heap and indexes owned. `IF EXISTS`
+throughout, since every migration tool emits it. This free list is also
+where M15's orphaned, unlinked B+tree leaf pages finally get reclaimed.
+
+## M30 — ALTER TABLE 🆕 New
+**Problem:** a table's schema is fixed at `CREATE TABLE` time; there is
+no way to add, remove or rename a column without dropping and recreating
+the table, which loses its data.
+**Solution:** `ALTER TABLE` with `ADD COLUMN`, `DROP COLUMN` and
+`RENAME`, plus `IF EXISTS`/`IF NOT EXISTS` throughout, since every
+migration tool emits them.
+
+## M31 — Logical dump and restore 🆕 New
+**Problem:** the only way to back up the database today is to stop the
+process and copy three files. There is no way to get data out or back in
+as portable SQL.
+**Solution:** a logical dump and restore (`pg_dump`-shaped: schema plus
+`INSERT`s or a copy stream).
+
+## M32 — Physical backup, WAL archiving, PITR 🆕 New
+**Problem:** the only recovery target today is "whatever was in the WAL
+when it died" — there is no way to take a backup while the database
+keeps running, and no way to recover to a point in time short of that.
+Every mechanism needed for something better already exists — segmented
+WAL, monotonic LSNs, checkpoints with a recovery bound — and none of it
+is exposed.
+**Solution:** a physical base backup taken while the database is
+running, WAL segment archiving instead of deletion at truncation, and
+replay to a target LSN or timestamp. This is the payoff for M5 through
+M12 and it is the difference between a durable database and an operable
+one. It also gives the crash-injection harness a second oracle: a
+restored backup replayed to an LSN must match the live database at that
+LSN.
