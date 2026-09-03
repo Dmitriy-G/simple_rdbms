@@ -23,7 +23,7 @@ flowchart TD
     FWD["Write the forward dependency into the<br/>later milestone's docs/ROADMAP.md entry"]
 
     LOOP(["Task writer schedules the fixes,<br/>Coder works them as subtasks<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
-    DONE["Set the milestone to ✅ Done in<br/>docs/ROADMAP.md.<br/>Only this role sets Done.<br/>A parent is Done only when every<br/>sub-milestone under it is Done"]
+    DONE["Set the milestone to ✅ Done in<br/>docs/ROADMAP.md. Only this role sets it,<br/>and it means the functionality was<br/>reviewed and works — not that the<br/>subtasks were ticked.<br/>A parent is Done only when every<br/>sub-milestone under it is Done"]
     ARCHIVE["Task writer archives .claude/task.md to<br/>docs/tasks/&lt;milestone&gt;-&lt;slug&gt;.md"]:::role
     HUMAN["Human reviews and commits"]:::human
     NEXT(["Next milestone<br/>— see agent-flow-milestone-planning.mmd"]):::stop

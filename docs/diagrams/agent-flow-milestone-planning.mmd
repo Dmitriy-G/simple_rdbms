@@ -19,13 +19,13 @@ flowchart TD
 
     TW["Task writer"]:::role
     READ["Reads the docs/ROADMAP.md entry:<br/>Problem, Solution, Done-when,<br/>plus any ADR it names"]
-    ARCHIVE{"Is the previous .claude/task.md<br/>finished in full? The Coder's Status:<br/>lines are how you tell"}
+    ARCHIVE{"Is every subtask in the previous<br/>.claude/task.md at ✅ Done?<br/>👀 Review is not done"}
     MOVE["Move it to docs/tasks/&lt;milestone&gt;-&lt;slug&gt;.md.<br/>task.md is gitignored, so this archive is<br/>the only copy that survives"]
     KEEP["Leave it in place —<br/>it is still the live task"]:::stop
 
     SPLIT["Decompose into subtasks:<br/>each independently completable<br/>and independently reviewable"]
     ORDER["Order Plan, 1..N —<br/>if a subtask cannot finish without a<br/>later one, it is two subtasks misordered"]
-    WRITE["Write .claude/task.md:<br/>title, Order Plan, one section per subtask<br/>with how to test it. No rationale — a decision<br/>worth explaining is an ADR, not a task"]
+    WRITE["Write .claude/task.md:<br/>title, Order Plan, one section per subtask<br/>with how to test it, every status at 🆕 New.<br/>No rationale — a decision worth explaining<br/>is an ADR, not a task"]
     TASK[".claude/task.md"]:::channel
     STATUS["Set the sub-milestone to 🚧 In Progress<br/>in docs/ROADMAP.md.<br/>At most one sub-milestone at a time"]
     ROADMAP["docs/ROADMAP.md"]:::channel

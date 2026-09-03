@@ -7,7 +7,9 @@ flowchart TD
     classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
     classDef stop fill:#eeeeee,stroke:#777,color:#000
 
-    START(["Coder stopped after a subtask.<br/>Working tree uncommitted"]):::human
+    classDef gate fill:#f2dede,stroke:#a94442,color:#000
+
+    START(["Coder stopped after a subtask.<br/>It stands at 👀 Review.<br/>Working tree uncommitted"]):::human
     CR["Code Reviewer — diff-level scope,<br/>one subtask's worth of change"]:::role
 
     C1["1. .claude/task.md:<br/>does the code do what the subtask said,<br/>including its 'how to test it'?"]
@@ -18,8 +20,10 @@ flowchart TD
     C6["6. Was the full gate actually run?"]
 
     FOUND{"Any finding?"}
+    BACKTO["Set the subtask back to 🚧 In Progress.<br/>The same subtask gets finished, rather than<br/>its defects becoming new work"]
+    SETDONE["Set the subtask ✅ Done in .claude/task.md.<br/>Only this role sets it, and only here"]:::gate
     BUGS[".claude/problems.md — append one entry:<br/>P-n from the 'Next entry:' line,<br/>Created by: Code Reviewer, Reason,<br/>Description, How to prevent in future.<br/>Prevention is a lint, a test or a CI step,<br/>never 'be careful next time'.<br/>It is read once and deleted when scheduled,<br/>so it must stand on its own"]:::channel
-    BACK(["Task writer schedules the fix<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
+    BACK(["Coder finishes the same subtask;<br/>preventions the entries name are<br/>scheduled separately<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
 
     OK["Say so plainly. Write nothing to problems.md"]
     HUMAN["Human reviews and commits"]:::human
@@ -28,7 +32,7 @@ flowchart TD
     MSREVIEW(["Milestone Reviewer<br/>— see agent-flow-milestone-review.mmd"]):::stop
 
     START --> CR --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> FOUND
-    FOUND -- yes --> BUGS --> BACK
-    FOUND -- no --> OK --> HUMAN --> MORE
+    FOUND -- yes --> BUGS --> BACKTO --> BACK
+    FOUND -- no --> SETDONE --> OK --> HUMAN --> MORE
     MORE -- yes --> NEXTSUB
     MORE -- no --> MSREVIEW

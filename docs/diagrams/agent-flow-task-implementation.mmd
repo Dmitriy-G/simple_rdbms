@@ -10,7 +10,7 @@ flowchart TD
 
     START(["'do next task'"]):::human
     CODER["Coder reads .claude/task.md"]:::role
-    PICK["Take the first subtask in the Order Plan<br/>not already marked done.<br/>No Order Plan means the file is one task"]
+    PICK["Take the first subtask marked 🆕 New.<br/>Set it 🚧 In Progress before writing code.<br/>No Order Plan means the file is one task"]
 
     SANE{"Is the subtask right, possible,<br/>and consistent with the codebase?"}
     BAD["Append the contradiction to<br/>.claude/problems.md and stop.<br/>Do not improvise a different task"]:::stop
@@ -27,7 +27,7 @@ flowchart TD
     PASS{"All green?"}
     FIX["Fix it — still inside this subtask"]
 
-    MARK["Mark the subtask done in .claude/task.md:<br/>tick its Order Plan line, set its Status:.<br/>Status markers only — the task prose<br/>belongs to the Task writer.<br/>A P-n in the heading is provenance:<br/>that entry left problems.md when the<br/>Task writer scheduled it, so there is<br/>nothing to close"]
+    MARK["Set the subtask 👀 Review in .claude/task.md:<br/>its Order Plan line and its Status: line.<br/>Never ✅ Done — only the Code Reviewer<br/>sets that. Status markers only; the prose<br/>belongs to the Task writer.<br/>A P-n in the heading is provenance:<br/>that entry left problems.md when it was<br/>scheduled, so there is nothing to close"]
 
     STOPHERE["Stop. Do not start the next subtask,<br/>do not commit, leave the tree for review"]:::stop
     CR(["Code Reviewer<br/>— see agent-flow-code-review.mmd"]):::stop

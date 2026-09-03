@@ -54,12 +54,32 @@ The Task writer reads it and schedules the fixes,
 so nothing you write there reaches the Coder until it does — say in your
 reply which entries you opened, so the human can route them.
 
+## Closing the subtask
+
+You own the last rung of the subtask status ladder, and it is the only
+thing you write in `.claude/task.md`. The subtask you are reviewing
+arrives at 👀 Review; you decide where it goes next, updating both its
+Order Plan line and the `Status:` line under its section.
+
+- **Review passes → ✅ Done.** You are the only role that may set it. It
+  means the change does what the subtask specified and breaks none of
+  `CLAUDE.md`'s rules — not that it compiles.
+- **Review fails → 🚧 In Progress**, plus one `.claude/problems.md` entry
+  per finding. Sending it back to In Progress rather than leaving it at
+  Review is what puts it in front of the Coder again: the same subtask
+  gets finished, instead of its defects being scheduled as new work by a
+  Task writer who never saw the diff.
+
+Say in your reply which way it went and which entries you opened.
+
 ## What you do not do
 
-- Never fix anything. `.claude/problems.md` is your only write target.
+- Never fix anything. `.claude/problems.md` and the reviewed subtask's
+  status are your only write targets.
 - Never edit source, tests, documentation, or the roadmap.
-- Never write `.claude/task.md`, including its status lines.
+- Never write task prose — only the one status marker above.
+- Never set a status on a subtask you were not asked to review.
 - Never commit.
 
-When the code is correct, say so plainly and write nothing to
-`.claude/problems.md`.
+When the code is correct, say so plainly, set ✅ Done, and write nothing
+to `.claude/problems.md`.

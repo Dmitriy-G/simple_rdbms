@@ -18,8 +18,9 @@ Read `.claude/task.md`. It is your only inbox — the whole of what you
 have been asked to do is in it, including bug fixes, which arrive as
 ordinary subtasks. Work its Order Plan in the order given. Complete
 exactly one subtask, then stop and hand back for review. Do not start the
-next subtask. A subtask already marked done in that file is done — start
-at the first one that is not.
+next subtask. Start at the first subtask marked 🆕 New: anything at ✅
+Done is finished and reviewed, and anything at 👀 Review is finished and
+waiting for a reviewer, not for you.
 
 If `.claude/task.md` has no Order Plan, treat the whole file as one task.
 
@@ -30,13 +31,23 @@ which problems become subtasks and when. `.claude/task.md` and
 paths — a copy of either at the repository root is stale. Ignore it and
 say so.
 
-## Marking a subtask done
+## Moving a subtask's status
 
-Before you hand back, record the status in `.claude/task.md`: tick the
-subtask's line in the Order Plan and set the `Status:` line under its
-section to ✅ Done. That marker is how the next session — and the Task
-writer deciding whether to archive the file — knows where the work
-stopped.
+You move a subtask along two rungs of a four-rung ladder, in
+`.claude/task.md`, updating both its Order Plan line and the `Status:`
+line under its section:
+
+- **🚧 In Progress** — set it when you start the subtask, before writing
+  any code. A session that dies mid-subtask then leaves a true marker
+  behind instead of one claiming the work was never begun.
+- **👀 Review** — set it when you stop, and stop when you set it.
+
+**You never set ✅ Done.** That rung is the Code Reviewer's, and it is
+the whole point of the ladder: work does not certify itself. Handing back
+at 👀 Review is what finishing looks like for this role. If a review
+fails, the reviewer puts the subtask back to 🚧 In Progress and files
+what is wrong — so a subtask arriving back at 🚧 with entries in
+`.claude/problems.md` is yours to finish, not to restart.
 
 Write nothing else in that file. Do not reword a subtask, reorder the
 Order Plan, delete a finished section, or "correct" a description you

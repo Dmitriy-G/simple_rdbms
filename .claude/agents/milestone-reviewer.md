@@ -14,8 +14,11 @@ Role: Milestone Reviewer
 
 ## Scope
 
-A whole milestone, after all its subtasks have passed Code Review. You
-are looking for what per-diff review structurally cannot see.
+A whole milestone, once every subtask in `.claude/task.md` stands at ✅
+Done — which means each has passed Code Review, since the Coder cannot
+set that marker itself. A subtask still at 👀 Review means the milestone
+is not ready for you. You are looking for what per-diff review
+structurally cannot see.
 
 ## What you check
 
@@ -53,8 +56,12 @@ are looking for what per-diff review structurally cannot see.
   work. Name the entries you opened in your reply so the human can route
   them.
 - When the milestone genuinely passes, set its status to ✅ Done in
-  `docs/ROADMAP.md`. Only you set Done. A parent milestone becomes Done
-  only when every sub-milestone under it is Done.
+  `docs/ROADMAP.md`. Only you set Done, and it asserts that the
+  milestone's functionality was reviewed and works — not that its
+  subtasks were all ticked, which is merely what let the review start. A
+  parent becomes Done only when every sub-milestone under it is Done.
+- When it does not pass, leave the status at 🚧 In Progress and file the
+  findings. Do not invent a status between the two.
 
 ## What you do not do
 

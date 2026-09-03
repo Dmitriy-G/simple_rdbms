@@ -32,7 +32,7 @@ flowchart TD
     CONSUME["Delete the entry from problems.md<br/>in the same edit. It has moved, not gone:<br/>the subtask is where it lives now.<br/>No roadmap status changes — repair<br/>is not milestone progress"]
 
     CODER(["Coder works one subtask<br/>— see agent-flow-task-implementation.mmd"]):::role
-    GATE["Gate green. Mark the subtask done<br/>in task.md — nothing to close in<br/>problems.md, the entry is already gone"]:::gate
+    GATE["Gate green. Set the subtask 👀 Review<br/>in task.md; the Code Reviewer sets ✅ Done.<br/>Nothing to close in problems.md —<br/>the entry is already gone"]:::gate
     CR(["Code Reviewer checks the fix<br/>and its prevention"]):::stop
     ARCHIVE["Whoever wrote the task archives it<br/>to docs/tasks/. That archive is the only<br/>lasting record of what was found"]:::stop
 

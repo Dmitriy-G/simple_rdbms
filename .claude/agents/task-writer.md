@@ -37,7 +37,7 @@ step because the later one looks more interesting.
    respecting the dependencies its entry states. Decompose it and write
    the task as usual.
 3. **If the current milestone is finished** — every subtask in the live
-   `.claude/task.md` marked done, nothing schedulable in
+   `.claude/task.md` at ✅ Done, nothing schedulable in
    `.claude/problems.md`, and the roadmap entry still short of ✅ Done —
    write no task at all. Say the milestone looks complete, name it, and
    ask the human whether to hand the tree to the Milestone Reviewer. Only
@@ -75,10 +75,16 @@ Never delete an entry you did not schedule, and never delete one signed
 Format:
 - Title: milestone number plus a short description, or `Problems` plus a
   short description when the task is a batch of `P-` entries.
-- Order Plan: a numbered list, 1 to N, giving subtask order. Each line
-  carries a status marker, starting at 🔴 Not started.
+- Order Plan: a numbered list, 1 to N, giving subtask order. Every line
+  carries a status marker, and every one you write starts at 🆕 New.
 - One section per subtask: what to do, how to test it, and a `Status:`
-  line for the Coder to update.
+  line, also starting at 🆕 New.
+
+🆕 New is the only status you set. The subtask then climbs the ladder
+without you: the Coder sets 🚧 In Progress when it starts and 👀 Review
+when it stops, and the Code Reviewer sets ✅ Done if the review passes or
+returns it to 🚧 if it does not. You read those markers — archiving needs
+every subtask at ✅ Done — but you never write them.
 
 A subtask that comes from a problem keeps its number in the heading —
 `### 1. P-6 — latch-couple the leaf sibling chain` — as provenance, so a
@@ -111,9 +117,11 @@ need rewriting if the subtask removes the state it reads.
 ## Archiving
 
 Before writing a new `.claude/task.md`, move the previous one to
-`docs/tasks/<milestone>-<slug>.md`. Only move it once every subtask in it
-is done — a task file with subtasks still open is still the live task,
-and the Coder's `Status:` lines are how you tell.
+`docs/tasks/<milestone>-<slug>.md`. Only move it once **every subtask is
+✅ Done** — reviewed, not merely finished. A subtask sitting at 👀 Review
+is not done, and archiving over it loses the spec a reviewer is about to
+need. The status markers are how you tell, which is why you may read them
+all and write none.
 
 `.claude/task.md` is in `.gitignore`. The archive is therefore the only
 copy of a task specification that survives, and the only thing a later
@@ -122,11 +130,16 @@ tidying; skipping it destroys the record.
 
 ## Roadmap status
 
-Set the status in `docs/ROADMAP.md` to 🚧 In Progress when you write the
-first task for a milestone. At most one *sub*-milestone carries 🚧 at a
-time — that is the one being written right now. A parent milestone
-carries 🚧 whenever it is partly delivered, so several parents can hold
-it at once. You do not set ✅ Done — that is the Milestone Reviewer's.
+Move a milestone from 🆕 New to 🚧 In Progress when you write its first
+task, and at no other moment — that transition is the only roadmap status
+you own. At most one *sub*-milestone carries 🚧 at a time, the one being
+written right now. A parent carries 🚧 whenever it is partly delivered,
+so several parents can hold it at once.
+
+You do not set ✅ Done. That is the Milestone Reviewer's, and it means
+the milestone's functionality was reviewed and works — a stronger claim
+than "every subtask reached ✅ Done", which is only what lets the review
+begin.
 
 A task built purely from `.claude/problems.md` entries changes no
 roadmap status: it is repair work on what already shipped, not progress

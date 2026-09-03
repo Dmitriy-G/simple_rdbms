@@ -62,16 +62,19 @@ When asked to **"do next task"**, follow this procedure:
 1. Read `.claude/task.md` — and nothing else as a work queue. It is the
    Coder's only inbox. If it contains a numbered subtasks list (1 to N),
    work through that list in the order given — that is the "recommended
-   order." Start at the first subtask not already marked done. Complete
-   one subtask, then stop and hand control back for review before
-   starting the next one. If `.claude/task.md` has no subtasks list,
-   treat the whole file as a single task and do it in full.
-2. When a subtask is finished, mark its status in `.claude/task.md` —
-   and only its status. Add or update a `Status:` line under the
-   subtask's heading and tick it in the Order Plan, so the next session
-   knows where to start. Never reword, reorder, delete or "clean up" the
-   task text itself: the Task writer owns that prose, exactly as it owns
-   the file. A status marker is the one thing the Coder may write there.
+   order." Start at the first subtask that is 🆕 New. Complete one
+   subtask, then stop and hand control back for review before starting
+   the next one. If `.claude/task.md` has no subtasks list, treat the
+   whole file as a single task and do it in full.
+2. Move the subtask's status as you work it, in `.claude/task.md` — and
+   move only the status. Set 🚧 In Progress when you start it and
+   👀 Review when you finish it, in both the Order Plan line and the
+   `Status:` line under the subtask's heading. **Never set ✅ Done**: that
+   is the Code Reviewer's, and a subtask marking itself done is the whole
+   reason the review gate exists. Never reword, reorder, delete or "clean
+   up" the task text itself — the Task writer owns that prose, exactly as
+   it owns the file. A status marker is the one thing the Coder may write
+   there.
 3. `.claude/problems.md` is where incidental discoveries
    go: if, while working a subtask, you notice a problem that is real but
    does not depend on or belong to the subtask in progress, record it in
@@ -117,8 +120,9 @@ Role: <role name>
 
 1. **Coder** — asked to work `.claude/task.md`, which is the only file it
    takes work from. Do the tasks it lists, in the order its Order Plan
-   gives, and mark each one's status there when it is done. Never
-   commit automatically. Don't install heavy tooling (e.g. Python/pip)
+   gives, moving each subtask's status to 🚧 In Progress when it starts
+   and 👀 Review when it stops — never to ✅ Done, which is the Code
+   Reviewer's. Never commit automatically. Don't install heavy tooling (e.g. Python/pip)
    for investigating — use `bash` instead. If a problem surfaces that
    isn't part of the current subtask, record it in `.claude/problems.md` rather
    than investigating or fixing it there. If a needed investigation is
@@ -146,15 +150,18 @@ Role: <role name>
    understandable but short — the Coder role doesn't need root causes or
    other background, just the task. Decompose a large task or
    sub-milestone into several subtasks and order them with an Order
-   Plan. Archives the finished `.claude/task.md` to `docs/tasks/` and
-   sets 🚧 In Progress in `docs/ROADMAP.md`.
+   Plan, each subtask starting at 🆕 New. Archives the finished
+   `.claude/task.md` to `docs/tasks/` and sets 🚧 In Progress in
+   `docs/ROADMAP.md` when it writes a milestone's first task.
 4. **Code Reviewer** — asked to do a code review of one subtask's
    change. Check the code against general conventions for the tech stack
    and against this file's project-specific rules, and confirm it
    actually implements what `.claude/task.md` described. Record anything
    wrong in `.claude/problems.md` using the problem format below —
    signed `Created by: Code Reviewer`, with concrete instructions on how
-   to fix it and how to prevent it recurring.
+   to fix it and how to prevent it recurring. It is the only role that
+   sets a subtask ✅ Done, and it does so only when the review passes;
+   a failed review goes back to 🚧 In Progress with the findings filed.
 5. **Milestone Reviewer** — asked to review a finished milestone as a
    whole against its `docs/ROADMAP.md` entry, once every subtask has
    passed code review: the milestone's Done-when, cross-cutting
@@ -187,7 +194,7 @@ than cosmetic.
 
 | File | Written by | Read by | Carries |
 | --- | --- | --- | --- |
-| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; Coder for subtask status lines only) | Coder, Code Reviewer, Milestone Reviewer | The current task's subtasks and their Order Plan |
+| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; Coder for 🚧/👀 status; Code Reviewer for ✅) | Coder, Code Reviewer, Milestone Reviewer | The current task's subtasks and their Order Plan |
 | `.claude/problems.md` | Everyone who finds something: Coder, Code Reviewer, Milestone Reviewer, Architect | Task writer first, Architect, human | A queue of everything found and not fixed on the spot: defects from review, incidental discoveries, and the Architect's findings with their evidence |
 
 Every finding goes to `.claude/problems.md`, whoever found it, signed
@@ -220,12 +227,13 @@ it changed asks through a channel above.
 | `README.md`, `CLAUDE.md` | Architect | Repository-level prose. "What works today" claims here are checked by the Milestone Reviewer at the end of each milestone. |
 | `docs/adr/**` | Architect | A decision worth an ADR is recorded by the role that investigated it. |
 | `docs/ROADMAP.md` — entry prose | Architect | Including retiring or splitting an entry. |
-| `docs/ROADMAP.md` — status markers | Task writer sets 🚧, Milestone Reviewer sets ✅ | Nobody else, Architect included. This is the gate that makes "Done" mean something. |
+| `docs/ROADMAP.md` — status markers | Architect sets 🆕 on a new entry, Task writer sets 🚧, Milestone Reviewer sets ✅ | Nobody else. ✅ means the milestone's functionality was reviewed and works, which is the gate that makes "Done" mean something. |
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
 | `docs/tasks/*.md` — archived specs | Task writer | Written once when a task is archived, and history from then on. |
 | `docs/tasks/README.md` | Architect | Not an archived spec: it explains what the archive is for, which is process prose and goes stale like any other. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
-| `.claude/task.md` | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. The Coder writes subtask `Status:` lines and nothing else in it. |
+| `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. |
+| `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, Code Reviewer sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. See "Status, and who may set it". |
 | `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows the signature: the Task writer deletes what it schedules and never an Architect entry, the Architect deletes its own. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
@@ -243,8 +251,47 @@ to review and commit.
 - Order Plan: a numbered list (1 to N) giving the subtask order, each
   line carrying its own status marker.
 - A description for every subtask in the Order Plan, including how to
-  test it, and a `Status:` line the Coder updates. A subtask that exists
-  to fix a problem names its `P-<n>` in its heading.
+  test it, and a `Status:` line. A subtask that exists to fix a problem
+  names its `P-<n>` in its heading.
+
+### Status, and who may set it
+
+Two ladders, one for subtasks and one for milestones. Each rung is owned
+by exactly one role, and the point of that is the last rung: **nothing
+marks its own work complete.**
+
+A **subtask** in `.claude/task.md` carries one of four:
+
+| Status | Meaning | Set by |
+| --- | --- | --- |
+| 🆕 New | written, not started | Task writer, when it writes the subtask |
+| 🚧 In Progress | being worked right now | Coder, when it starts |
+| 👀 Review | finished and awaiting review | Coder, when it stops |
+| ✅ Done | reviewed and accepted | Code Reviewer, and nobody else |
+
+A review that fails does not invent a fifth status: the Code Reviewer
+puts the subtask back to 🚧 In Progress and records what is wrong in
+`.claude/problems.md`, so the same subtask is picked up again rather than
+the defect being scheduled as new work.
+
+A **milestone or sub-milestone** in `docs/ROADMAP.md` carries one of
+three:
+
+| Status | Meaning | Set by |
+| --- | --- | --- |
+| 🆕 New | not started | Architect, when it writes the entry |
+| 🚧 In Progress | started | Task writer, when it writes the milestone's first task |
+| ✅ Done | reviewed and accepted | Milestone Reviewer, and nobody else |
+
+On a sub-milestone, 🚧 means someone is writing code for it now, and at
+most one sub-milestone anywhere carries it. On a parent, 🚧 means partly
+delivered, so several parents may carry it at once; a parent becomes ✅
+Done only when everything under it is.
+
+✅ Done on a milestone means its functionality was reviewed and works —
+not that its subtasks were all ticked. That is why only the Milestone
+Reviewer sets it, and why the Task writer's "the milestone looks
+finished" is a question to the human rather than a status change.
 
 `.claude/problems.md` is a queue, not a log. The file holds exactly the
 problems that have not yet been turned into work; an entry leaves it when

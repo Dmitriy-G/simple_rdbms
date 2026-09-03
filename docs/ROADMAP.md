@@ -24,14 +24,20 @@ milestone — a `.MD` file, a `// TODO(Mx):` marker, `CLAUDE.md` — moves
 with it, so renumbering and updating those references are one change,
 never two.
 
-Each heading also carries a
-status: ✅ Done (shipped), 🚧 In Progress, or 🆕 New (not started). On a
-sub-milestone (`M10.2`) 🚧 means someone is writing code for it right now,
-and at most one sub-milestone across the whole roadmap carries it. On a
-parent milestone (`M10`) it means partly delivered — some of its
-sub-milestones or components have shipped and others have not — so
-several parents can carry it at once. A parent becomes ✅ Done only when
-everything under it is Done.
+Each heading carries one of three statuses, and each is set by exactly
+one role:
+
+- **🆕 New** — not started. The Architect sets it when the entry is
+  written.
+- **🚧 In Progress** — started. The Task writer sets it when it writes
+  the milestone's first task. On a sub-milestone this means someone is
+  writing code for it right now, and at most one sub-milestone across the
+  roadmap carries it. On a parent it means partly delivered, so several
+  parents can carry it at once.
+- **✅ Done** — the Milestone Reviewer sets it, and nobody else. It
+  asserts that the milestone's functionality was reviewed and works, not
+  that its subtasks were all completed. A parent becomes Done only when
+  everything under it is.
 
 ## M1 — Durable, fixed-size storage ✅ Done
 **Problem:** a database needs a way to persist bytes to disk in units the
