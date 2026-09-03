@@ -1,5 +1,8 @@
 use std::error::Error;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread;
 
 use common::{PageId, Rid, TxnId};
 use proptest::test_runner::{RngAlgorithm, TestRng};
@@ -335,6 +338,97 @@ fn a_long_duplicate_run_between_distinct_keys_stays_ordered() -> Result<(), Box<
     let scanned = scanned?;
     assert_eq!(scanned.len(), 1_200);
     assert!(scanned.windows(2).all(|w| w[0].0 <= w[1].0));
+    Ok(())
+}
+
+const CONCURRENT_BASELINE_KEYS: i32 = 1_000;
+const CONCURRENT_WRITER_INSERTS: i32 = 6_000;
+const CONCURRENT_READER_THREADS: usize = 4;
+const CONCURRENT_READER_ITERATIONS: usize = 400;
+
+#[test]
+fn concurrent_readers_see_a_consistent_view_while_a_writer_forces_repeated_splits()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = Arc::new(open_pool(dir.path(), 64)?);
+    let mut index = BTreeIndex::create(&pool, TXN)?;
+
+    let mut baseline_rids = Vec::with_capacity(CONCURRENT_BASELINE_KEYS as usize);
+    for i in 0..CONCURRENT_BASELINE_KEYS {
+        let rid = Rid::new(PageId(1), i as u16);
+        index.insert(TXN, &key_of(i), rid)?;
+        baseline_rids.push(rid);
+    }
+
+    let baseline_rids = Arc::new(baseline_rids);
+    let root = Arc::new(AtomicU32::new(index.root_page_id().0));
+
+    let reader_handles: Vec<_> = (0..CONCURRENT_READER_THREADS)
+        .map(|thread_index| {
+            let pool = Arc::clone(&pool);
+            let baseline_rids = Arc::clone(&baseline_rids);
+            let root = Arc::clone(&root);
+            thread::spawn(move || -> Result<(), String> {
+                for iteration in 0..CONCURRENT_READER_ITERATIONS {
+                    let reader = BTreeIndex::open(&pool, PageId(root.load(Ordering::Acquire)));
+                    let key_index = (thread_index * 37 + iteration) % baseline_rids.len();
+                    let rids = reader.get(&key_of(key_index as i32)).map_err(|e| e.to_string())?;
+                    if rids != vec![baseline_rids[key_index]] {
+                        return Err(format!(
+                            "key {key_index}: expected [{:?}], got {rids:?} - a baseline key \
+                             inserted before any concurrent writer activity must never go \
+                             missing or change",
+                            baseline_rids[key_index]
+                        ));
+                    }
+
+                    if iteration % 20 == 0 {
+                        let scanned: Result<Vec<(Vec<u8>, Rid)>, StorageError> =
+                            reader.range_scan(None, None).collect();
+                        let scanned = scanned.map_err(|e| e.to_string())?;
+                        let mut seen: std::collections::HashMap<Vec<u8>, Rid> =
+                            std::collections::HashMap::with_capacity(scanned.len());
+                        for (key, rid) in scanned {
+                            seen.insert(key, rid);
+                        }
+                        for (baseline_index, expected_rid) in baseline_rids.iter().enumerate() {
+                            match seen.get(&key_of(baseline_index as i32)) {
+                                Some(found) if found == expected_rid => {}
+                                Some(found) => {
+                                    return Err(format!(
+                                        "range_scan found baseline key {baseline_index} with \
+                                         rid {found:?}, expected {expected_rid:?}"
+                                    ));
+                                }
+                                None => {
+                                    return Err(format!(
+                                        "range_scan is missing baseline key {baseline_index}, \
+                                         which was inserted before any concurrent writer \
+                                         activity and must never disappear"
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            })
+        })
+        .collect();
+
+    for i in CONCURRENT_BASELINE_KEYS..CONCURRENT_BASELINE_KEYS + CONCURRENT_WRITER_INSERTS {
+        index.insert(TXN, &key_of(i), Rid::new(PageId(2), (i % i32::from(u16::MAX)) as u16))?;
+        root.store(index.root_page_id().0, Ordering::Release);
+    }
+
+    for (thread_index, handle) in reader_handles.into_iter().enumerate() {
+        handle
+            .join()
+            .unwrap_or_else(|_| panic!("reader thread {thread_index} panicked"))
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
+    }
+
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
     Ok(())
 }
 

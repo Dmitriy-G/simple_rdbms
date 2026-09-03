@@ -4,7 +4,7 @@ use common::{PageId, Rid, TxnId};
 
 use crate::buffer::BufferPool;
 use crate::error::StorageError;
-use crate::page::PageWriteGuard;
+use crate::page::{PageReadGuard, PageWriteGuard};
 
 const NODE_TYPE_RANGE: std::ops::Range<usize> = 12..13;
 const SLOT_COUNT_RANGE: std::ops::Range<usize> = 13..15;
@@ -381,28 +381,23 @@ impl<'pool> BTreeIndex<'pool> {
         self.root_page_id
     }
 
-    // TODO(M10.2): this descent releases each parent's guard before fetching
-    // the child (no latch coupling / crabbing), which is unsafe once two
-    // writers can run at once - a concurrent split could move `key` out from
-    // under a reader between one fetch and the next. Correct while execution
-    // stays serial (M10.1); needs crabbing before the lock manager allows
-    // concurrent writers.
     fn descend_to_leaf(&self, key: &[u8]) -> Result<(PageId, Vec<PageId>), StorageError> {
         let mut path = Vec::new();
         let mut current = self.root_page_id;
+        let mut parent_guard: Option<PageReadGuard<'pool>> = None;
         loop {
             let guard = self.buffer_pool.fetch_page_read(current)?;
+            drop(parent_guard.take());
             let bytes = guard.page().data();
             match node_type(bytes) {
                 NodeType::Leaf => {
-                    drop(guard);
                     return Ok((current, path));
                 }
                 NodeType::Internal => {
                     let child = child_for_key(bytes, key, current)?;
-                    drop(guard);
                     path.push(current);
                     current = child;
+                    parent_guard = Some(guard);
                 }
             }
         }

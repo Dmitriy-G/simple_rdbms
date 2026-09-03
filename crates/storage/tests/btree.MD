@@ -89,6 +89,38 @@ isolation, independent of that higher-layer wiring, which
   logs well under the cost of writing both split nodes' full before/after
   images - see `btree.MD`'s "Splitting" for the diff-based rebuild logging
   this pins down.
+- `CONCURRENT_BASELINE_KEYS` / `CONCURRENT_WRITER_INSERTS` /
+  `CONCURRENT_READER_THREADS` / `CONCURRENT_READER_ITERATIONS` - sizing
+  constants for the concurrent descent test below: 1,000 keys inserted
+  single-threaded before any concurrency starts, 6,000 more inserted by the
+  one writer thread while readers run (enough to force several leaf splits,
+  at least one internal split, and at least one root split), 4 reader
+  threads, 400 iterations each.
+- `concurrent_readers_see_a_consistent_view_while_a_writer_forces_repeated_splits` -
+  the latch-crabbing regression test for `btree.MD`'s "Latch crabbing
+  during descent": inserts `CONCURRENT_BASELINE_KEYS` keys single-threaded,
+  publishes the resulting `root_page_id` into a shared `AtomicU32`, then
+  runs `CONCURRENT_READER_THREADS` reader threads concurrently with the
+  main thread inserting `CONCURRENT_WRITER_INSERTS` more keys. Each reader
+  opens a fresh `BTreeIndex::open` against whatever root the atomic
+  currently holds (a valid root from some point in the writer's serial
+  insert sequence, never a torn one, since the writer only publishes it
+  after `insert` returns and every page write is itself synchronized by
+  the buffer pool's per-frame `RwLock`), calls `get` on one baseline key
+  per iteration and asserts it returns exactly that key's original `Rid`,
+  and every 20th iteration also runs a full `range_scan` and asserts every
+  baseline key is present in it with its correct `Rid` - the property
+  `.claude/task.MD`'s subtask 2 actually asks for ("every read returns
+  either the pre-insert or post-insert value and never an error or a
+  missing key"), not a stronger duplicate-free guarantee that
+  `.claude/problems.MD`'s P-6 found `range_scan` does not have across a
+  concurrent leaf-boundary crossing. Ends by joining every reader (any
+  `Err` fails the test with the exact key and mismatch) and running
+  `check_invariants` on the writer's own final tree. Timing-dependent like
+  `crates/storage/tests/buffer_pool_concurrency.rs`'s races: it exercises
+  the crabbing fix under real thread scheduling rather than deterministically
+  forcing the exact interleaving, so a clean run is evidence, not proof -
+  see that file's `.MD` for the same caveat.
 - `scan_leaf_and_leaf_for_start_cross_a_leaf_boundary_like_range_scan_does` -
   drives `leaf_for_start`/`scan_leaf` by hand, the same way
   `executor::IndexScanExecutor` must (owned `(PageId, u16)` cursor state,

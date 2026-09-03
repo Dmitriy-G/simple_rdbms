@@ -77,6 +77,32 @@ Descent (`child_for_key`) follows directly from this: search for the
 right-most entry whose key is `<= K`; if one exists, follow its child;
 otherwise `K` is below every separator here, so follow `tail`.
 
+### Latch crabbing during descent
+
+`BTreeIndex::descend_to_leaf` holds a parent node's `PageReadGuard` until
+the child's own `PageReadGuard` has been acquired, releasing the parent
+only then - one extra guard's worth of overlap per level, not a
+release-then-fetch gap. Without this, a reader could compute `child_for_key`
+from a parent's separators, drop the parent's latch, and then have a
+concurrent `insert` split that exact parent - and any of its own
+ancestors - before the reader's `fetch_page_read(child)` runs, moving the
+key it is searching for out of the subtree the reader already committed
+to descending into, with no path left to reach it. Crabbing closes this:
+a writer's own descent needs an exclusive `fetch_page` on that same
+parent to propagate a split into it, and that call blocks for as long as
+the reader's shared guard on the parent is held, so the reader's snapshot
+of "which child holds this key" can never go stale before the reader has
+also latched that child. This follows CLAUDE.md's latch-ordering
+invariant - the buffer pool's index lock is never involved here, only two
+frames' `RwLock`s held briefly together - and is exercised by
+`tests/btree.rs`'s `concurrent_readers_see_a_consistent_view_while_a_writer_forces_repeated_splits`,
+several reader threads calling `get`/`range_scan` against a tree one
+writer thread is repeatedly splitting. `get`, `range_scan`, and
+`leaf_for_start` all call `descend_to_leaf` and inherit this safety for
+locating their starting leaf; crossing a leaf's sibling `tail` pointer
+once already at leaf level is a separate, uncoupled fetch and is not
+protected by this same crabbing.
+
 ## Splitting
 
 A node overflows when `Node::will_fit` says the new entry's slot plus
