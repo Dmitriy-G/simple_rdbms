@@ -1,0 +1,50 @@
+---
+title: The life of a problem entry
+---
+flowchart TD
+    classDef human fill:#fff3cd,stroke:#8a6d3b,color:#000
+    classDef role fill:#d9edf7,stroke:#31708f,color:#000
+    classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
+    classDef gate fill:#f2dede,stroke:#a94442,color:#000
+    classDef stop fill:#eeeeee,stroke:#777,color:#000
+
+    SRC1["Coder — something real,<br/>outside the current subtask's scope"]:::role
+    SRC2["Code Reviewer — a defect in<br/>one subtask's diff"]:::role
+    SRC3["Milestone Reviewer — what diff-level<br/>review structurally could not see"]:::role
+    SRC4["Architect — a judgement call, a design<br/>question, something to investigate"]:::role
+
+    PROB[".claude/problems.md — the open queue:<br/>P-n title, Created by: role, Reason,<br/>Description, How to prevent in future.<br/>Number taken from the 'Next entry:' line"]:::channel
+
+    NEXT(["Human asks for the next task"]):::human
+    TW["Task writer reads problems.md<br/>before docs/ROADMAP.md"]:::role
+    WHO{"Created by?"}
+
+    SKIP["Skipped. Mention it in the reply<br/>so the human knows it is waiting"]:::stop
+    HUMANCALL{"Human decides"}:::human
+    NAMED["Human names it — a request beats<br/>the queue, so it is scheduled"]
+    ARCHINV(["Architect investigates<br/>— see agent-flow-investigation.mmd"]):::stop
+    DELINV["Entry deleted. The investigation,<br/>naming the P-n, is what survives"]:::stop
+
+    ANYOPEN{"Anything schedulable left?"}
+    MILESTONE(["Next milestone instead<br/>— see agent-flow-milestone-planning.mmd"]):::stop
+
+    TASK["Write .claude/task.md: one subtask per<br/>problem, heading keeping the P-n,<br/>restating everything the fix needs<br/>including the prevention"]
+    CONSUME["Delete the entry from problems.md<br/>in the same edit. It has moved, not gone:<br/>the subtask is where it lives now.<br/>No roadmap status changes — repair<br/>is not milestone progress"]
+
+    CODER(["Coder works one subtask<br/>— see agent-flow-task-implementation.mmd"]):::role
+    GATE["Gate green. Mark the subtask done<br/>in task.md — nothing to close in<br/>problems.md, the entry is already gone"]:::gate
+    CR(["Code Reviewer checks the fix<br/>and its prevention"]):::stop
+    ARCHIVE["Task writer archives the finished task<br/>to docs/tasks/. That archive is the only<br/>lasting record of what was found"]:::stop
+
+    SRC1 --> PROB
+    SRC2 --> PROB
+    SRC3 --> PROB
+    SRC4 --> PROB
+
+    NEXT --> TW --> WHO
+    WHO -- "Architect — for the human,<br/>never auto-scheduled" --> SKIP --> HUMANCALL
+    HUMANCALL -- "act on it" --> NAMED --> TASK
+    HUMANCALL -- "look into it" --> ARCHINV --> DELINV
+    WHO -- "Coder, Code Reviewer,<br/>Milestone Reviewer" --> ANYOPEN
+    ANYOPEN -- no --> MILESTONE
+    ANYOPEN -- yes --> TASK --> CONSUME --> CODER --> GATE --> CR --> ARCHIVE

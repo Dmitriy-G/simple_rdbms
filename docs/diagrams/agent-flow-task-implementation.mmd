@@ -9,23 +9,25 @@ flowchart TD
     classDef stop fill:#eeeeee,stroke:#777,color:#000
 
     START(["'do next task'"]):::human
-    CODER["Coder reads .claude/task.MD"]:::role
+    CODER["Coder reads .claude/task.md"]:::role
     PICK["Take the first subtask in the Order Plan<br/>not already marked done.<br/>No Order Plan means the file is one task"]
 
     SANE{"Is the subtask right, possible,<br/>and consistent with the codebase?"}
-    BAD["Append the contradiction to<br/>.claude/problems.MD and stop.<br/>Do not improvise a different task"]:::stop
+    BAD["Append the contradiction to<br/>.claude/problems.md and stop.<br/>Do not improvise a different task"]:::stop
     BIG{"Does it need a large investigation —<br/>testing a hypothesis, reading half the tree?"}
     ASK["Stop and say so.<br/>That is Architect work"]:::stop
 
     IMPL["Implement, inside this subtask's scope only:<br/>source, tests in tests/,<br/>a sibling .MD for every .rs including tests,<br/>no comments in .rs,<br/>no allow or expect attributes in source"]
     SIDE{"Noticed something real<br/>but out of scope?"}
-    PROB[".claude/problems.MD<br/>numbered title + full description"]:::channel
+    PROB[".claude/problems.md<br/>numbered title + full description"]:::channel
 
     GATE["Run the full gate:<br/>cargo build --workspace<br/>cargo fmt --all -- --check<br/>cargo clippy --workspace --all-targets -- -D warnings<br/>bash scripts/check_docs.sh<br/>cargo test --workspace"]:::gate
     TOUCHED{"Did the change touch storage, WAL,<br/>recovery or the double-write buffer?"}
     CRASH["Also run both crash-injection harnesses;<br/>sweep results must be unchanged"]:::gate
     PASS{"All green?"}
     FIX["Fix it — still inside this subtask"]
+
+    MARK["Mark the subtask done in .claude/task.md:<br/>tick its Order Plan line, set its Status:.<br/>Status markers only — the task prose<br/>belongs to the Task writer.<br/>A P-n in the heading is provenance:<br/>that entry left problems.md when the<br/>Task writer scheduled it, so there is<br/>nothing to close"]
 
     STOPHERE["Stop. Do not start the next subtask,<br/>do not commit, leave the tree for review"]:::stop
     CR(["Code Reviewer<br/>— see agent-flow-code-review.mmd"]):::stop
@@ -42,4 +44,4 @@ flowchart TD
     TOUCHED -- yes --> CRASH --> PASS
     TOUCHED -- no --> PASS
     PASS -- no --> FIX --> GATE
-    PASS -- yes --> STOPHERE --> CR
+    PASS -- yes --> MARK --> STOPHERE --> CR

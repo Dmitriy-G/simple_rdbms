@@ -11,5 +11,5 @@ commit message is not a specification.
 
 These files are history. Do not edit an archived task to match what the
 code ended up doing — if the code diverged from the spec, that belongs in
-`.claude/investigations.MD` or in the milestone's `docs/ROADMAP.md`
+`../../.claude/investigations.md` or in the milestone's `docs/ROADMAP.md`
 entry, where someone will actually look for it.

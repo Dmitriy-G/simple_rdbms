@@ -22,7 +22,7 @@ what closes each of those gaps and in what order.
 ## Contents
 
 - [Where to read next](#where-to-read-next)
-- [Working from task.MD](#working-from-taskmd)
+- [Working from task.md](#working-from-taskmd)
 - [LLM roles and channels](#llm-roles-and-channels)
 - [Invariants that must not be broken](#invariants-that-must-not-be-broken)
 - [Known scaffolding](#known-scaffolding)
@@ -55,24 +55,45 @@ name a branch:
 3. The relevant `crates/<crate>/README.md`, then the sibling `.MD` of
    each file being changed.
 
-## Working from task.MD
+## Working from task.md
 
 When asked to **"do next task"**, follow this procedure:
 
-1. Read `.claude/task.MD`. If it contains a numbered
-   subtasks list (1 to N), work through that list in the order given —
-   that is the "recommended order." Complete one subtask, then stop and
-   hand control back for review before starting the next one. If
-   `.claude/task.MD` has no subtasks list, treat the whole file as a single task
-   and do it in full.
-2. `.claude/problems.MD` is where incidental discoveries
+1. Read `.claude/task.md` — and nothing else as a work queue. It is the
+   Coder's only inbox. If it contains a numbered subtasks list (1 to N),
+   work through that list in the order given — that is the "recommended
+   order." Start at the first subtask not already marked done. Complete
+   one subtask, then stop and hand control back for review before
+   starting the next one. If `.claude/task.md` has no subtasks list,
+   treat the whole file as a single task and do it in full.
+2. When a subtask is finished, mark its status in `.claude/task.md` —
+   and only its status. Add or update a `Status:` line under the
+   subtask's heading and tick it in the Order Plan, so the next session
+   knows where to start. Never reword, reorder, delete or "clean up" the
+   task text itself: the Task writer owns that prose, exactly as it owns
+   the file. A status marker is the one thing the Coder may write there.
+3. `.claude/problems.md` is where incidental discoveries
    go: if, while working a subtask, you notice a problem that is real but
    does not depend on or belong to the subtask in progress, record it in
-   `.claude/problems.MD` rather than investigating or fixing it there. Fixing it
+   `.claude/problems.md` rather than investigating or fixing it there. Fixing it
    is a separate, later task.
-3. Do not go beyond the subtask boundary implied by the order list — a
+4. A subtask whose heading names a `P-<n>` is a scheduled problem. It is
+   already gone from `.claude/problems.md` — the Task writer removed it
+   when it wrote the subtask — so there is nothing to close there and
+   nothing to look up: the subtask restates everything needed. Do not go
+   hunting for the original entry.
+5. Do not go beyond the subtask boundary implied by the order list — a
    subtask is done when its own scope is satisfied, not when adjacent
    related work is also finished.
+
+When asked for the **"next task"** (the Task writer's job, not the
+Coder's), the queue is: schedulable entries in `.claude/problems.md`
+first, the next milestone in `docs/ROADMAP.md` second, and neither if the
+current milestone is finished — in that last case the answer is to say so
+and ask the human whether to hand the tree to the Milestone Reviewer, not
+to invent work. "Schedulable" excludes anything signed `Created by:
+Architect`: those are raised for the human to consider, not for an agent
+to schedule. The full procedure is in `.claude/agents/task-writer.md`.
 
 ## LLM roles and channels
 
@@ -93,59 +114,94 @@ Role: <role name>
 
 ### Roles
 
-1. **Coder** — asked to work `.claude/task.MD`. Do the tasks it lists, in the
-   order its Order Plan gives, and fix bugs listed in `.claude/bugs.MD`. Never
+1. **Coder** — asked to work `.claude/task.md`, which is the only file it
+   takes work from. Do the tasks it lists, in the order its Order Plan
+   gives, and mark each one's status there when it is done. Never
    commit automatically. Don't install heavy tooling (e.g. Python/pip)
    for investigating — use `bash` instead. If a problem surfaces that
-   isn't part of the current subtask, record it in `.claude/problems.MD` rather
+   isn't part of the current subtask, record it in `.claude/problems.md` rather
    than investigating or fixing it there. If a needed investigation is
    itself large (e.g. testing a hypothesis), ask before doing it — that
-   is usually Architect's work, not Coder's. `.claude/task.MD` typically holds
-   several subtasks or bugs tied to one milestone; work through them one
-   at a time and stop after each one so it can be reviewed before the
-   next starts.
-2. **Architect** — asked to investigate an entry from `.claude/problems.MD` or
+   is usually Architect's work, not Coder's. `.claude/task.md` typically holds
+   several subtasks tied to one milestone, or one subtask per open
+   problem; work through them one at a time and stop after each one so it
+   can be reviewed before the next starts.
+2. **Architect** — asked to investigate an entry from `.claude/problems.md` or
    review the project as a whole (documentation, module structure,
-   etc.). Record findings in `.claude/investigations.MD`. Owns the
+   etc.). Record findings in `.claude/investigations.md`. Owns the
    project's cross-cutting prose and its process: `docs/adr/**`, the
    roadmap's entry text (never its status markers), this file, crate
    `README.md`s, and `.claude/agents/*.md` plus `.claude/settings*.json`.
    Never touches a `.rs` file, a test, or a sibling module `.MD`.
-3. **Task writer** — asked to turn a user request into a task for the
-   Coder role. Write `.claude/task.MD` using the task format below: keep it
+3. **Task writer** — asked to turn a user request, the open entries in
+   `.claude/problems.md`, or the next milestone into a task for the Coder
+   role. Write `.claude/task.md` using the task format below: keep it
    understandable but short — the Coder role doesn't need root causes or
    other background, just the task. Decompose a large task or
    sub-milestone into several subtasks and order them with an Order
-   Plan. Archives the finished `.claude/task.MD` to `docs/tasks/` and
+   Plan. Archives the finished `.claude/task.md` to `docs/tasks/` and
    sets 🚧 In Progress in `docs/ROADMAP.md`.
 4. **Code Reviewer** — asked to do a code review of one subtask's
    change. Check the code against general conventions for the tech stack
    and against this file's project-specific rules, and confirm it
-   actually implements what `.claude/task.MD` described. Record anything
-   wrong in `.claude/bugs.MD` using the bug format below, with concrete
-   instructions on how to fix it.
+   actually implements what `.claude/task.md` described. Record anything
+   wrong in `.claude/problems.md` using the problem format below —
+   signed `Created by: Code Reviewer`, with concrete instructions on how
+   to fix it and how to prevent it recurring.
 5. **Milestone Reviewer** — asked to review a finished milestone as a
    whole against its `docs/ROADMAP.md` entry, once every subtask has
    passed code review: the milestone's Done-when, cross-cutting
    invariants, documentation truth, forward dependencies it created, and
-   deferred items. Writes `.claude/bugs.MD` and `.claude/problems.MD`,
-   and is the only role that sets ✅ Done in `docs/ROADMAP.md`.
+   deferred items. Writes `.claude/problems.md`, and is the only role
+   that sets ✅ Done in `docs/ROADMAP.md`.
 6. **Helper** — the default role: anything not covered by the five roles
    above, such as answering a question about the project. Read-only.
 
 ### Channels
 
-Four files under `.claude/` carry the roles' communication. Each has one
-primary writer; the extra writers listed are deliberate. Nothing is
-written that nobody reads — a channel with no reader is a bug in this
-table, not a file to keep writing.
+Three files under `.claude/` carry the roles' communication, and together
+with the roadmap each answers exactly one question. Keeping them to that
+one question is what stops them turning into four overlapping logs:
+
+- `.claude/problems.md` — what is wrong **right now**. Open problems
+  only; an entry leaves the file when it is dealt with.
+- `.claude/investigations.md` — what was looked into, and what should be
+  done about it later.
+- `.claude/task.md` — the one task being worked at this moment.
+- `docs/ROADMAP.md` — the whole project, milestone by milestone.
+
+Each channel has one primary writer; the extra writers listed are
+deliberate. Nothing is written that nobody reads — a channel with no
+reader is a bug in this table, not a file to keep writing.
+
+Their extension is lowercase `.md`, unlike the uppercase `.MD` of the
+sibling module docs under `crates/`. The case is the fastest way to tell
+which kind of file a path means, and `.gitignore` matches it literally on
+a case-sensitive filesystem, so the difference is load-bearing rather
+than cosmetic.
 
 | File | Written by | Read by | Carries |
 | --- | --- | --- | --- |
-| `.claude/task.MD` | Task writer (Architect only when the human asks) | Coder, Code Reviewer, Milestone Reviewer | The current milestone's subtasks and their Order Plan |
-| `.claude/problems.MD` | Coder, Milestone Reviewer, Architect (new entries + status lines) | Architect | Real problems found while doing something else |
-| `.claude/investigations.MD` | Architect | Task writer, human | Evidence, options, a recommendation, what to do next |
-| `.claude/bugs.MD` | Code Reviewer, Milestone Reviewer | Coder | Defects, each with a prevention that must ship with the fix |
+| `.claude/task.md` | Task writer (Architect only when the human asks; Coder for subtask status lines only) | Coder, Code Reviewer, Milestone Reviewer | The current task's subtasks and their Order Plan |
+| `.claude/problems.md` | Everyone who finds something: Coder, Code Reviewer, Milestone Reviewer, Architect. Entries are removed by the Task writer as it schedules them | Task writer first, Architect, human | A queue of everything found and not fixed on the spot: defects from review, incidental discoveries, and Architect notes for the human |
+| `.claude/investigations.md` | Architect | Task writer, human | Evidence, options, a recommendation, what to do next |
+
+There was a fourth, `.claude/bugs.md`, carrying reviewer-found defects.
+It is deleted: it held the same thing as `.claude/problems.md` — work
+found by one role, to be scheduled and done by another — with a second
+numbering scheme and a second queue for the Task writer to reconcile.
+Every role now writes findings to `.claude/problems.md` and signs them
+with `Created by:`, and the difference between "a defect a reviewer
+found" and "something the Coder noticed in passing" is that line, not a
+separate file.
+
+All three are in `.gitignore`. They are live working state, not history:
+a channel entry is either scheduled into a task, or promoted into
+something durable — an ADR, a roadmap entry, this file — before it
+matters. The durable copies are `docs/tasks/**` for finished tasks and
+`docs/adr/**` for decisions. An investigation whose conclusion must
+survive the working tree does not stay in `.claude/investigations.md`;
+it becomes an ADR.
 
 ### Who owns which files
 
@@ -165,7 +221,9 @@ it changed asks through a channel above.
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
 | `docs/tasks/**` | Task writer | Archived task specs, written once and then history. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
-| `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
+| `.claude/task.md` | Task writer | Architect writes it only when the human explicitly asks. The Coder writes subtask `Status:` lines and nothing else in it. |
+| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Only the Task writer (on scheduling) and the Architect (on investigating) delete one, and deletion is the only way an entry leaves: the file is an open queue, never a history. |
+| `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
 Milestone planning is the Task writer's, milestone review is the
 Milestone Reviewer's, and neither is a file the other may write.
@@ -175,22 +233,49 @@ to review and commit.
 
 ### File formats
 
-`.claude/task.MD`:
-- Title: milestone number + a short description.
-- Order Plan: a numbered list (1 to N) giving the subtask order.
+`.claude/task.md`:
+- Title: milestone number + a short description, or `Problems` when the
+  task is a batch of `P-` entries.
+- Order Plan: a numbered list (1 to N) giving the subtask order, each
+  line carrying its own status marker.
 - A description for every subtask in the Order Plan, including how to
-  test it.
+  test it, and a `Status:` line the Coder updates. A subtask that exists
+  to fix a problem names its `P-<n>` in its heading.
 
-`.claude/problems.MD`, per entry:
-- Title: problem number + a short description.
-- Description: full detail.
+`.claude/problems.md` is a queue, not a log. The file holds exactly the
+problems that have not yet been turned into work; an entry leaves it when
+the Task writer schedules it, and the task — then the archived task under
+`docs/tasks/` — becomes the record of what was found. Its head carries a
+`Next entry:` line giving the next free `P-` number, because numbers are
+never reused and the highest one in the file is no longer a reliable
+guide once entries start leaving it.
 
-`.claude/bugs.MD`, per entry:
-- Title: bug number + a short description.
-- Reason: why it's a problem, in short.
-- Description: full detail.
-- How to prevent in future: a concrete instruction — a lint, a test,
-  etc.
+Per entry:
+- Title: `P-<n>` + a short description.
+- `Created by:` the role that found it — Coder, Code Reviewer, Milestone
+  Reviewer, or Architect. This line decides who acts on the entry, so it
+  is not optional. **`Created by: Architect` means the entry is for the
+  human**: something noticed that wants a judgement call, a design
+  decision, or an investigation before anyone writes code. The Task
+  writer skips those. Every other signature is schedulable work.
+- Reason: why it is a problem, in one or two sentences.
+- Description: full detail, with file paths and line numbers. Assume the
+  entry will be read once, by the Task writer, and then deleted — so it
+  must contain everything needed to specify the fix.
+- How to prevent in future: a concrete instruction — a lint, a test, a
+  CI step. Mandatory when the entry is a defect found in review;
+  "be careful next time" is not a prevention. Omit it only for an entry
+  that is an observation rather than a fault.
+
+The file holds open problems only. There is no resolved state and no
+`Status:` line: an entry that has been dealt with is deleted, not
+annotated. Two roles delete: the Task writer, when the corresponding
+subtask exists in `.claude/task.md`, and the Architect, when an
+investigation has settled the entry — and then the investigation, which
+says what was decided, is the thing that survives. An Architect entry
+otherwise leaves the file when the human asks for a task naming it, which
+routes it back through the Task writer. Reading the file top to bottom
+should show exactly the outstanding work and nothing else.
 
 ## Invariants that must not be broken
 

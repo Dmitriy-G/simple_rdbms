@@ -10,7 +10,7 @@ flowchart TD
     START(["Coder stopped after a subtask.<br/>Working tree uncommitted"]):::human
     CR["Code Reviewer — diff-level scope,<br/>one subtask's worth of change"]:::role
 
-    C1["1. .claude/task.MD:<br/>does the code do what the subtask said,<br/>including its 'how to test it'?"]
+    C1["1. .claude/task.md:<br/>does the code do what the subtask said,<br/>including its 'how to test it'?"]
     C2["2. CLAUDE.md invariants first:<br/>log before page, latch ordering,<br/>one write guard per page per thread,<br/>all-zero pages valid, page-0 header logged,<br/>errors logged once at the engine boundary"]
     C3["3. CLAUDE.md conventions:<br/>sibling .MD per .rs, no comments in .rs,<br/>no allow or expect attributes in source,<br/>dependency edges, logging levels,<br/>no user data above DEBUG"]
     C4["4. Tests, read as carefully as the code:<br/>would this test pass without the change?<br/>deterministic? in tests/ unless the<br/>pure-private-function carve-out applies?"]
@@ -18,10 +18,10 @@ flowchart TD
     C6["6. Was the full gate actually run?"]
 
     FOUND{"Any finding?"}
-    BUGS[".claude/bugs.MD — per entry:<br/>numbered title, Reason, Description,<br/>How to prevent in future.<br/>Prevention is a lint, a test or a CI step,<br/>never 'be careful next time'"]:::channel
-    BACK(["Coder fixes<br/>— see agent-flow-bug-fixing.mmd"]):::stop
+    BUGS[".claude/problems.md — append one entry:<br/>P-n from the 'Next entry:' line,<br/>Created by: Code Reviewer, Reason,<br/>Description, How to prevent in future.<br/>Prevention is a lint, a test or a CI step,<br/>never 'be careful next time'.<br/>It is read once and deleted when scheduled,<br/>so it must stand on its own"]:::channel
+    BACK(["Task writer schedules the fix<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
 
-    OK["Say so plainly. Write nothing to bugs.MD"]
+    OK["Say so plainly. Write nothing to problems.md"]
     HUMAN["Human reviews and commits"]:::human
     MORE{"Subtasks left in the Order Plan?"}
     NEXTSUB(["Coder takes the next subtask"]):::stop

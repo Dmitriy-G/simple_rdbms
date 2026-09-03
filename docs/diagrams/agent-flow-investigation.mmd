@@ -7,7 +7,7 @@ flowchart TD
     classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
     classDef stop fill:#eeeeee,stroke:#777,color:#000
 
-    T1["An entry in .claude/problems.MD"]:::channel
+    T1["An entry in .claude/problems.md"]:::channel
     T2["A human architecture question:<br/>'should this be one crate or two?'"]:::human
     T3["A whole-project review:<br/>module structure, documentation,<br/>roadmap coherence, dependency edges"]:::human
     T4["A Coder stopped: the needed<br/>investigation was too large for that role"]:::role
@@ -19,16 +19,16 @@ flowchart TD
     OPTS["Lay out the real options,<br/>including 'do nothing', with the cost of each"]
     REC["Recommend one, and say why the others lose"]
 
-    WRITE["Write the entry in .claude/investigations.MD:<br/>problem, evidence with file:line citations,<br/>options, recommendation, what to do next.<br/>An investigation that does not say<br/>what to do next is not finished"]
-    INV[".claude/investigations.MD"]:::channel
+    WRITE["Write the entry in .claude/investigations.md:<br/>problem, evidence with file:line citations,<br/>options, recommendation, what to do next.<br/>An investigation that does not say<br/>what to do next is not finished"]
+    INV[".claude/investigations.md"]:::channel
 
-    CLOSES{"Does it close a .claude/problems.MD entry?"}
+    CLOSES{"Does it close a .claude/problems.md entry?"}
     MARK["Mark that entry resolved and point it<br/>at the investigation. Never delete it —<br/>the record of what was wrong is the point"]
-    NEWPROB["Uncovered something else on the way?<br/>New numbered entry in .claude/problems.MD"]:::channel
+    NEWPROB["Uncovered something else on the way?<br/>New numbered entry in .claude/problems.md"]:::channel
 
     KIND{"What does the recommendation require?"}
     DOC["Architect does it: an ADR recording the<br/>decision, roadmap prose, CLAUDE.md,<br/>a crate README, a role definition"]:::role
-    CODE["Task writer turns it into .claude/task.MD<br/>— see agent-flow-milestone-planning.mmd"]:::role
+    CODE["Task writer turns it into .claude/task.md<br/>— see agent-flow-milestone-planning.mmd"]:::role
     NOTHING["Recommendation is 'leave it'.<br/>The investigation is still the deliverable:<br/>next time the question is already answered"]:::stop
     HUMAN["Human decides and commits"]:::human
 

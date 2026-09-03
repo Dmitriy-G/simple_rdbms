@@ -23,8 +23,8 @@ flowchart TD
 
     Q --> ROUTE
     ROUTE -- "'how does this work?', 'where is X?'" --> HELP
-    ROUTE -- "'do the next task', 'fix these bugs'" --> CODE
-    ROUTE -- "'plan this milestone', 'write me a task'" --> SPEC
+    ROUTE -- "'do the next task', 'work task.md'<br/>— implementing what is already specified" --> CODE
+    ROUTE -- "'what is the next task?', 'plan this milestone',<br/>'write me a task' — deciding what to do next,<br/>which starts from open problems" --> SPEC
     ROUTE -- "'why is this like this?', 'is this the right design?',<br/>'review the project'" --> ARCH
     ROUTE -- "'review this change'" --> CR
     ROUTE -- "'is this milestone done?'" --> MR

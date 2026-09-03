@@ -15,11 +15,11 @@ flowchart LR
     MR["Milestone Reviewer"]:::role
     HELP["Helper"]:::role
 
-    TASK[".claude/task.MD"]:::channel
-    PROB[".claude/problems.MD"]:::channel
-    INV[".claude/investigations.MD"]:::channel
-    BUGS[".claude/bugs.MD"]:::channel
-    ROADMAP["docs/ROADMAP.md"]:::channel
+    TASK[".claude/task.md<br/>the one task being worked now"]:::channel
+    PROB[".claude/problems.md<br/>the problems that are still open"]:::channel
+    INV[".claude/investigations.md<br/>what was looked into, and what to do"]:::channel
+    ROADMAP["docs/ROADMAP.md<br/>the whole project, milestone by milestone"]:::channel
+    ARCHIVE["docs/tasks/**<br/>the only durable copy of a task"]:::channel
 
     HUMAN --> ARCH
     HUMAN --> TW
@@ -29,23 +29,25 @@ flowchart LR
     HUMAN --> HELP
 
     ARCH -- writes --> INV
-    ARCH -- "new entries, status lines" --> PROB
+    ARCH -- "entries for the human;<br/>deletes one an investigation settled" --> PROB
     ARCH -- "ADRs, CLAUDE.md, entry prose, agent files" --> ROADMAP
 
     INV -- read --> TW
-    ROADMAP -- read --> TW
+    PROB -- "read first: open entries outrank<br/>new milestone work, except<br/>Architect-signed ones, which wait<br/>for the human" --> TW
+    TW -- "deletes each entry it schedules" --> PROB
+    ROADMAP -- "read second" --> TW
     TW -- writes --> TASK
+    TW -- "archives the finished task" --> ARCHIVE
     TW -- "sets 🚧" --> ROADMAP
 
-    TASK -- read --> CODER
-    BUGS -- read --> CODER
-    CODER -- "incidental findings" --> PROB
+    TASK -- "the Coder's only inbox" --> CODER
+    CODER -- "subtask Status: lines only" --> TASK
+    CODER -- "incidental findings, appended only" --> PROB
     CODER -- "source, tests, sibling .MD" --> CR
 
-    CR -- writes --> BUGS
+    CR -- "defects, signed Created by" --> PROB
     CR -- "subtask accepted" --> HUMAN
-    MR -- writes --> BUGS
-    MR -- "non-defect findings" --> PROB
+    MR -- "defects and open questions" --> PROB
     MR -- "sets ✅ Done" --> ROADMAP
 
     PROB -- read --> ARCH

@@ -7,7 +7,7 @@ flowchart TD
     classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
     classDef stop fill:#eeeeee,stroke:#777,color:#000
 
-    START(["Every subtask in .claude/task.MD<br/>has passed code review"]):::human
+    START(["Every subtask in .claude/task.md<br/>has passed code review"]):::human
     MR["Milestone Reviewer — whole-milestone scope"]:::role
 
     C1["1. The roadmap entry:<br/>does the code satisfy the Solution and<br/>every line of Done-when?<br/>Not 'did each subtask land'"]
@@ -18,13 +18,13 @@ flowchart TD
     C6["6. Deferred items: anything the Coder or<br/>Code Reviewer put off is written down,<br/>not in someone's head"]
 
     VERDICT{"Verdict"}
-    BUGS[".claude/bugs.MD — defects,<br/>prevention field mandatory"]:::channel
-    PROB[".claude/problems.MD — findings that are<br/>not defects but need investigation"]:::channel
+    BUGS[".claude/problems.md — defects,<br/>Created by: Milestone Reviewer,<br/>prevention field mandatory"]:::channel
+    PROB[".claude/problems.md — findings that are<br/>not defects but need investigation"]:::channel
     FWD["Write the forward dependency into the<br/>later milestone's docs/ROADMAP.md entry"]
 
-    LOOP(["Coder fixes<br/>— see agent-flow-bug-fixing.mmd"]):::stop
+    LOOP(["Task writer schedules the fixes,<br/>Coder works them as subtasks<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
     DONE["Set the milestone to ✅ Done in<br/>docs/ROADMAP.md.<br/>Only this role sets Done.<br/>A parent is Done only when every<br/>sub-milestone under it is Done"]
-    ARCHIVE["Task writer archives .claude/task.MD to<br/>docs/tasks/&lt;milestone&gt;-&lt;slug&gt;.md"]:::role
+    ARCHIVE["Task writer archives .claude/task.md to<br/>docs/tasks/&lt;milestone&gt;-&lt;slug&gt;.md"]:::role
     HUMAN["Human reviews and commits"]:::human
     NEXT(["Next milestone<br/>— see agent-flow-milestone-planning.mmd"]):::stop
 

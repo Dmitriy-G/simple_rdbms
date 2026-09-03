@@ -8,3 +8,7 @@ Cargo.lock.bak
 *.dwb
 *.wal
 *.wal.*
+
+/.claude/task.md
+/.claude/problems.md
+/.claude/investigations.md

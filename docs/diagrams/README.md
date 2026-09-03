@@ -21,18 +21,24 @@ actually move work between each other. Each role's own rules live in
 no single agent file has.
 
 - [`agent-flow-overview.mmd`](agent-flow-overview.mmd) — all six roles
-  and the four channel files, with who writes and who reads each. Read
+  and the three channel files, with who writes and who reads each. Read
   this one first.
 - [`agent-flow-milestone-planning.mmd`](agent-flow-milestone-planning.mmd)
-  — roadmap entry to `.claude/task.MD`, via an investigation when the
-  milestone's shape is not settled.
+  — how the Task writer decides what the next task is: open problems
+  first, then the next roadmap entry, and a question to the human rather
+  than a task when the milestone is already finished.
 - [`agent-flow-task-implementation.mmd`](agent-flow-task-implementation.mmd)
-  — the Coder's loop: one subtask, the gate, stop for review. Includes
-  the three conditions that stop the Coder instead.
+  — the Coder's loop: one subtask, the gate, mark it done, stop for
+  review. Includes the three conditions that stop the Coder instead.
 - [`agent-flow-code-review.mmd`](agent-flow-code-review.mmd) — diff-level
   review of one subtask, in check order.
-- [`agent-flow-bug-fixing.mmd`](agent-flow-bug-fixing.mmd) —
-  `.claude/bugs.MD` to a fix that ships with its prevention.
+- [`agent-flow-problem-lifecycle.mmd`](agent-flow-problem-lifecycle.mmd)
+  — a finding by any role, into `.claude/problems.md`, out of it again as
+  a scheduled subtask, to a fix that ships with its prevention. Also
+  shows the other exit: an Architect-signed entry, which waits for the
+  human rather than being scheduled. This replaced
+  `agent-flow-bug-fixing.mmd` when `.claude/bugs.md` was merged into
+  `.claude/problems.md`.
 - [`agent-flow-milestone-review.mmd`](agent-flow-milestone-review.mmd) —
   whole-milestone review and the only path to ✅ Done.
 - [`agent-flow-documentation.mmd`](agent-flow-documentation.mmd) — who

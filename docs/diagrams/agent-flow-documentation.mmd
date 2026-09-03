@@ -30,10 +30,10 @@ flowchart TD
     end
 
     DRIFT{"Drift found?"}
-    PROB[".claude/problems.MD"]:::channel
+    PROB[".claude/problems.md"]:::channel
     ARCH["Architect investigates<br/>— see agent-flow-investigation.mmd"]:::role
     ROUTE{"Whose fix is it?"}
-    VIATASK["Task writer turns it into<br/>a subtask in .claude/task.MD"]:::role
+    VIATASK["Task writer turns it into<br/>a subtask in .claude/task.md"]:::role
     DIRECT["Architect edits the ADR, roadmap prose,<br/>CLAUDE.md or README directly"]:::role
     OK(["Documented and validated"]):::stop
 

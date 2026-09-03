@@ -113,7 +113,7 @@ isolation, independent of that higher-layer wiring, which
   `.claude/task.MD`'s subtask 2 actually asks for ("every read returns
   either the pre-insert or post-insert value and never an error or a
   missing key"), not a stronger duplicate-free guarantee that
-  `.claude/problems.MD`'s P-6 found `range_scan` does not have across a
+  `../../../.claude/problems.md`'s P-6 found `range_scan` does not have across a
   concurrent leaf-boundary crossing. Ends by joining every reader (any
   `Err` fails the test with the exact key and mismatch) and running
   `check_invariants` on the writer's own final tree. Timing-dependent like

@@ -53,7 +53,7 @@ cheapest first, matching `../../../.claude/task.MD`'s R-6 list.
   `abort_eviction` path left no frame leaked. The failure lands after the
   double-write buffer's batch was synced but before it was cleared
   (`buffer.MD`'s "Poisoning" paragraph on `flush_pages` -
-  `../../../.claude/problems.MD`'s double-write-buffer-slot-reuse entry is what motivated
+  `../../../.claude/problems.md`'s double-write-buffer-slot-reuse entry is what motivated
   it), so the pool must now refuse every further flush - fast, with
   `StorageError::FlushPoisoned`, never `BufferPoolExhausted` and never
   silently succeeding, since silently succeeding is exactly what would
