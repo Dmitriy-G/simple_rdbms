@@ -29,18 +29,37 @@ order, and say what you concluded before reviewing anything:
    order and say that you did. That state should not arise — the Coder
    completes one subtask and stops — so mention it as a process problem
    rather than silently absorbing it.
-4. **Then find that subtask's code.** Usually it is uncommitted: no role
-   commits, so `git status --porcelain` and `git diff` are the change.
-   But work is sometimes committed before review — check `git log` for
-   commits after the last ✅ Done subtask's, and review those too. If the
-   subtask's own text names a commit, that is the one.
-5. **Review only that subtask's scope.** Changes belonging to a different
-   subtask are not yours to accept or reject; note them and move on.
+4. **The change is the uncommitted working tree, and nothing else.**
+   `git status --porcelain` lists the files, `git diff` is the change,
+   and an untracked file is new in its entirety. This is not a heuristic:
+   no role commits, so anything awaiting review is uncommitted by
+   construction. **Committed work is out of scope** — it was either
+   already reviewed or the human took it deliberately, and re-reviewing
+   it turns every review into an audit of the whole history.
+5. **If the working tree is clean, there is nothing to review** — even
+   with a subtask sitting at 👀 Review. Say exactly that: the subtask
+   claims to be finished but its change is not in the tree, so it was
+   committed before review or never made. Name the subtask and stop. Do
+   not go looking through `git log` for it.
+6. **The uncommitted change *is* that subtask's work.** You never have to
+   attribute it. The human commits after each accepted subtask, so the
+   tree is clean when one starts and everything in it when one ends
+   belongs to it. That is also the check: if the tree contains changes
+   the subtask plainly did not ask for, the Coder went past its
+   boundary — which is a finding, not something to skip over.
+7. **Only the new code and documentation, not the files around them.**
+   Review the added and changed lines. Pre-existing code that happens to
+   sit in the same file is not this subtask's work and does not fail it —
+   if something there is genuinely wrong, say so in your reply, or open a
+   `.claude/problems.md` entry for it, but do not send a subtask back for
+   a defect it did not introduce.
 
 ## Scope
 
-One subtask's worth of change. Diff-level review, not milestone-level —
-that is the Milestone Reviewer's job.
+One subtask's worth of uncommitted change: the new code and the new
+documentation, and nothing else. Diff-level review, not milestone-level —
+that is the Milestone Reviewer's job, and it is the one role that looks
+at a body of work rather than a diff.
 
 ## What you do
 
@@ -161,6 +180,8 @@ Say in your reply which way it went and which entries you opened.
 - Never set a status on any subtask but the one you reviewed.
 - Never review a subtask that is not at 👀 Review, however finished it
   looks.
+- Never review committed code, and never review code the current change
+  did not touch.
 - Never commit.
 
 When the code is correct, say so plainly, set ✅ Done, and write nothing

@@ -154,11 +154,14 @@ Role: <role name>
    `.claude/task.md` to `docs/tasks/` and sets 🚧 In Progress in
    `docs/ROADMAP.md` when it writes a milestone's first task.
 4. **Code Reviewer** — asked simply to review, and works out the rest:
-   find the subtask standing at 👀 Review in `.claude/task.md`, find that
-   subtask's code (uncommitted in the working tree, or committed after
-   the last ✅ Done subtask), and review it. If no subtask is at 👀
-   Review there is nothing to review — say so rather than picking
-   something. Then read the **code and its documentation** the way a
+   find the subtask standing at 👀 Review in `.claude/task.md`, and
+   review the **uncommitted** working tree, which is that subtask's work
+   by construction — the human commits after each accepted subtask, so
+   nothing else can be in there. Only the new code and documentation,
+   never anything already committed and never the untouched code around
+   it. If no subtask is at 👀 Review, or the tree is clean, there is
+   nothing to review — say so rather than picking something. Then read
+   the **code and its documentation** the way a
    human reviewer reads a pull request, asking four things in order: is
    it *finished* (every part of the subtask, not the easy parts), is it
    *correct* (this file's invariants first), is it the *right solution*

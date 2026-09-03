@@ -13,7 +13,9 @@ flowchart TD
     CR["Code Reviewer — diff-level scope,<br/>one subtask's worth of change"]:::role
     FIND{"Any subtask at 👀 Review<br/>in .claude/task.md?"}
     NONE["Nothing to review. Say so and stop —<br/>do not review the tree anyway, and do not<br/>guess from what looks recently touched"]:::stop
-    LOCATE["Find that subtask's code:<br/>uncommitted (git status/diff) normally,<br/>or commits after the last ✅ Done subtask<br/>if the work was committed early"]
+    DIRTY{"Is the working tree dirty?<br/>git status --porcelain"}
+    CLEAN["Nothing to review. The subtask claims to be<br/>finished but its change is not in the tree —<br/>committed before review, or never made.<br/>Name it and stop. Do not search git log"]:::stop
+    LOCATE["The uncommitted tree IS that subtask's work —<br/>the human commits after each accepted<br/>subtask, so no attribution is needed.<br/>git diff, plus untracked files whole.<br/>Only the new code and documentation;<br/>never anything already committed"]
 
     C1["1. Is it FINISHED?<br/>every part of the subtask, not the easy parts.<br/>A dropped bullet, a todo! left where the work<br/>should be, an edge case the subtask named<br/>and the code ignores"]
     C2["2. Is it CORRECT?<br/>CLAUDE.md invariants first: log before page,<br/>latch ordering, one write guard per page<br/>per thread, all-zero pages valid, page-0<br/>header logged, errors logged once"]
@@ -36,7 +38,9 @@ flowchart TD
 
     START --> CR --> FIND
     FIND -- no --> NONE
-    FIND -- yes --> LOCATE --> C1 --> C2 --> C3 --> C4 --> C5 --> FOUND
+    FIND -- yes --> DIRTY
+    DIRTY -- no --> CLEAN
+    DIRTY -- yes --> LOCATE --> C1 --> C2 --> C3 --> C4 --> C5 --> FOUND
     C5 -.-> C6
     FOUND -- yes --> BUGS --> BACKTO --> BACK
     FOUND -- no --> SETDONE --> OK --> HUMAN --> MORE
