@@ -25,8 +25,8 @@ flowchart TD
     C6["NOT yours: tests, and whether the gate<br/>was run. Both are the Coder's and both<br/>are automated — CI reports them louder<br/>and sooner than you could"]:::stop
 
     FOUND{"Any finding?"}
-    BACKTO["Set the subtask back to 🚧 In Progress.<br/>The same subtask gets finished, rather than<br/>its defects becoming new work"]
-    SETDONE["Set the subtask ✅ Done in .claude/task.md.<br/>Only this role sets it, and only here"]:::gate
+    BACKTO["Move the marker back to 🚧 In Progress.<br/>The same subtask gets finished, rather than<br/>its defects becoming new work.<br/>The marker only — the explanation lives<br/>in the problems.md entries and the reply"]
+    SETDONE["Move the marker to ✅ Done in .claude/task.md.<br/>Only this role sets it, and only here.<br/>The marker only — never a note beside it,<br/>never a word of the description"]:::gate
     BUGS[".claude/problems.md — append one entry:<br/>P-n from the 'Next entry:' line,<br/>Created by: Code Reviewer, Reason,<br/>Description, How to prevent in future.<br/>Prevention is a lint, a test or a CI step,<br/>never 'be careful next time'.<br/>It is read once and deleted when scheduled,<br/>so it must stand on its own"]:::channel
     BACK(["Coder finishes the same subtask;<br/>preventions the entries name are<br/>scheduled separately<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
 

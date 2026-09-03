@@ -248,7 +248,7 @@ it changed asks through a channel above.
 | `docs/tasks/README.md` | Architect | Not an archived spec: it explains what the archive is for, which is process prose and goes stale like any other. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
 | `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. |
-| `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, Code Reviewer sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. See "Status, and who may set it". |
+| `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, Code Reviewer sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it". |
 | `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows the signature: the Task writer deletes what it schedules and never an Architect entry, the Architect deletes its own. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
@@ -288,6 +288,14 @@ A review that fails does not invent a fifth status: the Code Reviewer
 puts the subtask back to 🚧 In Progress and records what is wrong in
 `.claude/problems.md`, so the same subtask is picked up again rather than
 the defect being scheduled as new work.
+
+**A status change is a marker and nothing else.** Whoever moves a subtask
+changes the emoji on its Order Plan line and on its `Status:` line, and
+touches no other character in the file — no clause explaining the move,
+no "see P-n", no correction to the description. The task's prose belongs
+to the Task writer, and a description carrying edits from three roles
+stops being a specification anyone can trust. What a role wants to say
+goes in `.claude/problems.md` and in its reply.
 
 A **milestone or sub-milestone** in `docs/ROADMAP.md` carries one of
 three:

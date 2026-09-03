@@ -153,30 +153,39 @@ reply which entries you opened, so the human can route them.
 
 ## Closing the subtask
 
-You own the last rung of the subtask status ladder, and it is the only
-thing you write in `.claude/task.md`. The subtask arrived at 👀 Review,
-which is how you found it; you decide where it goes next, updating both
-its Order Plan line and the `Status:` line under its section. Leaving it
-at 👀 Review is not an outcome — it would make the next review pick the
-same subtask up again.
+You own the last rung of the subtask status ladder. The subtask arrived
+at 👀 Review, which is how you found it; you decide where it goes next.
 
 - **Review passes → ✅ Done.** You are the only role that may set it. It
   means the change does what the subtask specified and breaks none of
   `CLAUDE.md`'s rules — not that it compiles.
 - **Review fails → 🚧 In Progress**, plus one `.claude/problems.md` entry
-  per finding. Sending it back to In Progress rather than leaving it at
-  Review is what puts it in front of the Coder again: the same subtask
-  gets finished, instead of its defects being scheduled as new work by a
-  Task writer who never saw the diff.
+  per finding. Sending it back rather than leaving it at 👀 Review is
+  what puts it in front of the Coder again: the same subtask gets
+  finished, instead of its defects being scheduled as new work by a Task
+  writer who never saw the diff.
 
-Say in your reply which way it went and which entries you opened.
+**Change the status marker and nothing else.** Update the marker on the
+subtask's Order Plan line and on its `Status:` line, and stop there. Do
+not append a clause explaining the verdict, do not add "see P-n", do not
+summarise what was wrong, do not edit a word of the subtask's
+description. The status is a marker, not a message.
+
+Everything you want to say goes in two places that are built for it: the
+`.claude/problems.md` entries, which carry the full detail of each
+finding, and your reply, which names the subtask, the verdict, and the
+entries you opened. A subtask description edited by a reviewer is task
+prose written by the wrong role, and the next reader cannot tell which
+sentences were the specification and which were the review.
 
 ## What you do not do
 
 - Never fix anything. `.claude/problems.md` and the reviewed subtask's
-  status are your only write targets.
+  status marker are your only write targets.
 - Never edit source, tests, documentation, or the roadmap.
-- Never write task prose — only the one status marker above.
+- Never write task prose. In `.claude/task.md` you change one marker on
+  the Order Plan line and one on the `Status:` line — no note beside it,
+  no edit to the description, nothing else on the page.
 - Never set a status on any subtask but the one you reviewed.
 - Never review a subtask that is not at 👀 Review, however finished it
   looks.
