@@ -6,7 +6,7 @@ Status: Accepted
 
 ## Context
 
-M12 closes the last gap ADR 0004 didn't cover: durability held for
+M11 closes the last gap ADR 0004 didn't cover: durability held for
 anything the WAL could describe as a byte-range delta to an otherwise-intact
 page, but a single `write_at` is not atomic on real hardware — a 4KB page
 write can be interrupted mid-sector, leaving a page with some old bytes and
@@ -85,7 +85,8 @@ double-write buffer's slot capacity (`DbConfig::dwb_capacity`, default 64)
 is a real tuning knob, not an arbitrary constant.
 
 A `ChecksumMismatch` surviving to `recovery::recover`'s own Redo pass is a
-hard error again, as it always was before part 1's temporary `TODO(M12.2)`
+hard error again, as it always was before this milestone temporarily
+downgraded it while the double-write buffer was still half-built
 - by the time Redo runs, `recover_double_write` has already repaired every
 torn page it could, so anything still failing its checksum is real, media
 corruption beyond what this design can fix, and is worth reporting loudly

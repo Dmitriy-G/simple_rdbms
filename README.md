@@ -168,7 +168,7 @@ curl http://localhost:9090/metrics
 ```
 
 See `crates/server/README.md`, `Dockerfile`, `docker-compose.yml`, and
-`docs/ROADMAP.md`'s M13 entry.
+`docs/ROADMAP.md`'s M12 entry.
 
 ## Docs
 

@@ -40,12 +40,12 @@ what closes each of those gaps and in what order.
 A fresh session needs to know what to open before it needs to know how to
 name a branch:
 
-1. `docs/ROADMAP.md` — every milestone, what's done, what's next, and the
-   dependency that fixes each one's position. Milestone numbers are
-   permanent identifiers: a completed milestone keeps its number forever,
-   and implementation order has twice diverged from numeric order without
-   renumbering anything (M12 shipped ahead of M9; M14 no longer depends
-   on M10 — see the roadmap's own introduction for why).
+1. `docs/ROADMAP.md` — every milestone, what's done, and what's next, in
+   priority order. The number *is* the priority: they run 1, 2, 3 with no
+   gaps, each milestone is a self-contained unit of work, and removing or
+   inserting one renumbers everything after it. A number is therefore a
+   position, not a name — so a milestone identifier written down anywhere
+   else in the tree moves when the roadmap does, in the same change.
 2. `docs/adr/` — the ADRs recording decisions that are expensive to
    rediscover. The ones a change is most likely to violate without
    reading first: 0003 (index after the log), 0004 (what ACID means
@@ -343,29 +343,33 @@ belongs here rather than in `docs/ROADMAP.md` since this is the file a
 fresh session reads first:
 
 - `catalog::Column::nullable` — parsed, persisted, plumbed through the
-  binder, never enforced (M16).
-- `common::SqlState::NOT_NULL_VIOLATION` — defined, never raised (M16).
-- `common::SqlState::UNIQUE_VIOLATION` — defined, never raised (M17); the
+  binder, never enforced (M15).
+- `common::SqlState::NOT_NULL_VIOLATION` — defined, never raised (M15).
+- `common::SqlState::UNIQUE_VIOLATION` — defined, never raised (M16); the
   B+tree still permits duplicate keys.
 - `storage::btree::BTreeIndex::delete` — the method exists; its body is
-  `todo!()` (M15).
+  `todo!()` (M14).
 - `catalog::Catalog::drop_table` — the method exists
   (`crates/catalog/src/catalog.rs:125`); its body is `todo!()` and nothing
-  in the tree calls it, since no grammar produces `DROP TABLE` (M29).
+  in the tree calls it, since no grammar produces `DROP TABLE` (M26).
 - `executor::NestedLoopJoinExecutor` — exists and is wired into the
-  executor factory; `init` and `next` are both `todo!()` (M24).
+  executor factory; `init` and `next` are both `todo!()` (M23.1).
   `planner::LogicalPlan::Join`/`PhysicalPlan::NestedLoopJoin` already
   exist as the node kinds it would run, but nothing in `sql`'s grammar
-  can produce them yet — `FROM` accepts exactly one table (M24).
+  can produce them yet — `FROM` accepts exactly one table (M23.1).
 - `txn::LockManager` — implemented and unit-tested as of M10.2's first
   subtask, but nothing above it calls `lock`/`lock_table`/`release_all`
   yet; the executors and `TransactionManager` wire it up later in the
   same sub-milestone.
 - `txn::VersionChain::visible_version` — `todo!()`; MVCC is M10.3.
 
-Milestone numbers here are the roadmap's. `M11` appears in older
-`.MD` files and `// TODO(M11):` markers and no longer resolves to a live
-entry — see `docs/ROADMAP.md`'s M11 tombstone for where that work went.
+Milestone numbers here are the roadmap's, and a roadmap number is a
+priority in natural numeric order: an unstarted milestone is renumbered
+when priorities change, while anything with shipped work under it keeps
+its number. There is no M11 entry — an `M11` in a `.MD` file or a
+`// TODO(M11):` marker is stale and means M23.1 (joins) or M23.2
+(statistics, cost and composite keys). Retarget one when its file is
+open.
 
 ## Commands
 
@@ -520,7 +524,7 @@ crate-wide:
 
 - `crates/executor/src/operators/nested_loop_join.rs`'s
   `NestedLoopJoinExecutor::{left, right, predicate}` mark work that
-  belongs to a milestone not yet built (M24's join executor,
+  belongs to a milestone not yet built (M23.1's join executor,
   `docs/ROADMAP.md`) and should disappear when that milestone lands and
   starts reading them.
 - `crates/storage/src/disk.rs`'s `DiskManager::path` and

@@ -6,7 +6,7 @@ Status: Accepted
 
 ## Context
 
-`docs/ROADMAP.md`'s M14 gives this engine a network-facing SQL frontend.
+`docs/ROADMAP.md`'s M13 gives this engine a network-facing SQL frontend.
 A network protocol is a much larger, harder-to-reverse commitment than
 anything chosen so far in this project: clients, drivers, connection
 poolers, and BI tools all have to speak it, and changing it later means
@@ -50,7 +50,7 @@ nothing pedagogical from re-solving.
 format itself (message framing, the extended query protocol's
 parse/bind/execute/describe cycle, `COPY`, SSL negotiation) is large and
 mostly mechanical - correctly implementing it by hand would be a
-multi-milestone project of its own, orthogonal to everything M1–M13 were
+multi-milestone project of its own, orthogonal to everything M1–M12 were
 actually about. `pgwire` is actively maintained, has no dependency on any
 particular storage engine (unlike embedding a full Postgres-compatible
 SQL layer), and exposes exactly the seam this project needs: a trait for
@@ -78,8 +78,8 @@ generic failure. M10 was originally assumed to be a hard prerequisite
 here, on the reasoning that multiple wire connections mean multiple
 concurrent transactions for real, and `txn::LockManager`/`txn::mvcc`
 (currently unwired scaffolding, per `docs/adr/0004-acid-scope.md`) would
-need wiring into every read and write path before M14 could safely ship.
-That assumption is corrected in `docs/ROADMAP.md`'s M14 entry: M14.1 runs
+need wiring into every read and write path before M13 could safely ship.
+That assumption is corrected in `docs/ROADMAP.md`'s M13 entry: M13.1 runs
 the engine on one dedicated thread reached by message passing instead of
 sharing `Database` across connection threads, so every connection's
 statements execute serially in arrival order - real isolation by
@@ -88,5 +88,5 @@ construction, without needing M10's lock manager or MVCC. This is a
 storage is `Mutex`/`RwLock`/`Condvar`/atomics throughout and is
 `Send + Sync` already, so a later milestone remains free to share it
 across threads and lean on M10's lock manager instead. M10 stays valuable
-for the concurrency it adds on its own merits, but M14 no longer depends
+for the concurrency it adds on its own merits, but M13 no longer depends
 on it.
