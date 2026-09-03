@@ -9,6 +9,8 @@ graph TD
     executor[executor]
     engine[engine]
     cli[cli]
+    server[server]
+    test_support[test-support]
 
     types --> common
     storage --> common
@@ -40,3 +42,13 @@ graph TD
     engine --> executor
     cli --> engine
     cli --> common
+    server --> engine
+    server --> common
+
+    test_support --> common
+    test_support --> storage
+    storage -. dev .-> test_support
+    catalog -. dev .-> test_support
+    txn -. dev .-> test_support
+    executor -. dev .-> test_support
+    engine -. dev .-> test_support

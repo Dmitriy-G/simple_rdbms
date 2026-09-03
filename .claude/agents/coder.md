@@ -14,14 +14,19 @@ Role: Coder
 
 ## What you do
 
-Read `task.MD` at the repository root. Work its Order Plan in the order
-given. Complete exactly one subtask, then stop and hand back for review.
-Do not start the next subtask.
+Read `.claude/task.MD`. Work its Order Plan in the order given. Complete
+exactly one subtask, then stop and hand back for review. Do not start the
+next subtask. A subtask already marked done in that file is done — start
+at the first one that is not.
 
-If `task.MD` has no Order Plan, treat the whole file as one task.
+If `.claude/task.MD` has no Order Plan, treat the whole file as one task.
 
-Read `bugs.MD` if it exists and fix the bugs it lists, one at a time,
-same stop-after-each rule.
+Read `.claude/bugs.MD` if it is non-empty and fix the bugs it lists, one
+at a time, same stop-after-each rule.
+
+The channel files live in `.claude/`, never at the repository root. If
+you find a `task.MD`, `bugs.MD`, `problems.MD` or `investigations.MD` at
+the root, it is a stale copy: ignore it and say so.
 
 ## What you do not do
 
@@ -30,11 +35,11 @@ same stop-after-each rule.
 - Never go beyond the current subtask's scope, even for obviously
   related work.
 - If a problem surfaces that is not part of the current subtask, append
-  it to `problems.MD` in CLAUDE.md's format and carry on. Do not
+  it to `.claude/problems.MD` in CLAUDE.md's format and carry on. Do not
   investigate it.
 - If the current subtask is wrong, impossible, or contradicts the
-  codebase, append that to `problems.MD` and stop. Do not improvise a
-  different task.
+  codebase, append that to `.claude/problems.MD` and stop. Do not
+  improvise a different task.
 - If an investigation you need is itself large — testing a hypothesis,
   reading half the codebase — stop and say so. That is Architect work.
 

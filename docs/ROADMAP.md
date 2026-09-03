@@ -12,9 +12,13 @@ depends on M10 (the single-threaded engine thread removes the dependency
 — see M14's entry), and M10.1 shipped as part of an earlier storage-layer
 refactor. Read each entry's Problem/Solution for what it actually depends
 on rather than assuming strict numeric order. Each heading also carries a
-status: ✅ Done (shipped), 🚧 In Progress (someone is writing code for it
-right now — at most one milestone carries this status at a time; partial
-progress otherwise goes in the entry's prose), or 🆕 New (not started).
+status: ✅ Done (shipped), 🚧 In Progress, or 🆕 New (not started). On a
+sub-milestone (`M10.2`) 🚧 means someone is writing code for it right now,
+and at most one sub-milestone across the whole roadmap carries it. On a
+parent milestone (`M10`) it means partly delivered — some of its
+sub-milestones or components have shipped and others have not — so
+several parents can carry it at once. A parent becomes ✅ Done only when
+everything under it is Done.
 
 ## M1 — Durable, fixed-size storage ✅ Done
 **Problem:** a database needs a way to persist bytes to disk in units the
@@ -159,7 +163,7 @@ atomics rather than any single-threaded assumption, exercised by
 `buffer_pool_concurrency.rs` and `dwb_batch_exclusion.rs` driving the
 buffer pool from eight threads at once.
 
-### M10.2 — Concurrent execution under two-phase locking 🆕 New
+### M10.2 — Concurrent execution under two-phase locking 🚧 In Progress
 **Problem:** M14.1's single dedicated engine thread gets isolation for
 free by executing every statement, from every connection, serially — but
 that means only one transaction can be open at a time; a second `BEGIN`

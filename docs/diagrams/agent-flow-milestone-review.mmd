@@ -1,0 +1,37 @@
+---
+title: Milestone review
+---
+flowchart TD
+    classDef human fill:#fff3cd,stroke:#8a6d3b,color:#000
+    classDef role fill:#d9edf7,stroke:#31708f,color:#000
+    classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
+    classDef stop fill:#eeeeee,stroke:#777,color:#000
+
+    START(["Every subtask in .claude/task.MD<br/>has passed code review"]):::human
+    MR["Milestone Reviewer — whole-milestone scope"]:::role
+
+    C1["1. The roadmap entry:<br/>does the code satisfy the Solution and<br/>every line of Done-when?<br/>Not 'did each subtask land'"]
+    C2["2. Cross-cutting invariants across the<br/>milestone as a whole — multi-step protocols<br/>whose individual steps are each correct<br/>are the classic failure"]
+    C3["3. Documentation truth:<br/>every touched .MD still describes the code,<br/>every referenced ADR exists, decisions are<br/>recorded somewhere durable"]
+    C4["4. Status: roadmap markers match reality,<br/>sub-milestone ids referenced from code<br/>and .MD files resolve to real headings"]
+    C5["5. Forward dependencies: did this milestone<br/>leave work a later one now silently<br/>depends on?"]
+    C6["6. Deferred items: anything the Coder or<br/>Code Reviewer put off is written down,<br/>not in someone's head"]
+
+    VERDICT{"Verdict"}
+    BUGS[".claude/bugs.MD — defects,<br/>prevention field mandatory"]:::channel
+    PROB[".claude/problems.MD — findings that are<br/>not defects but need investigation"]:::channel
+    FWD["Write the forward dependency into the<br/>later milestone's docs/ROADMAP.md entry"]
+
+    LOOP(["Coder fixes<br/>— see agent-flow-bug-fixing.mmd"]):::stop
+    DONE["Set the milestone to ✅ Done in<br/>docs/ROADMAP.md.<br/>Only this role sets Done.<br/>A parent is Done only when every<br/>sub-milestone under it is Done"]
+    ARCHIVE["Task writer archives .claude/task.MD to<br/>docs/tasks/&lt;milestone&gt;-&lt;slug&gt;.md"]:::role
+    HUMAN["Human reviews and commits"]:::human
+    NEXT(["Next milestone<br/>— see agent-flow-milestone-planning.mmd"]):::stop
+
+    START --> MR --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> VERDICT
+    VERDICT -- "defects" --> BUGS --> LOOP
+    VERDICT -- "open questions" --> PROB
+    VERDICT -- "forward dependency" --> FWD
+    VERDICT -- "passes" --> DONE --> ARCHIVE --> HUMAN --> NEXT
+    PROB --> DONE
+    FWD --> DONE

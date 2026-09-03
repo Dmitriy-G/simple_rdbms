@@ -1,0 +1,38 @@
+---
+title: Common questions — routing to a role
+---
+flowchart TD
+    classDef human fill:#fff3cd,stroke:#8a6d3b,color:#000
+    classDef role fill:#d9edf7,stroke:#31708f,color:#000
+    classDef stop fill:#eeeeee,stroke:#777,color:#000
+
+    Q(["A question or request arrives"]):::human
+    ROUTE{"What is actually being asked?"}
+
+    HELP["Helper — the default.<br/>Explains code, answers 'how does X work',<br/>'where does this live', 'what does<br/>this milestone mean'.<br/>Read-only: never edits, never commits"]:::role
+    ANSWER["Answer from the source:<br/>docs/ROADMAP.md for what exists and<br/>what is next, docs/adr/ for why,<br/>the crate README, then the sibling .MD"]
+    SCOPE{"Turns out it needs a file changed?"}
+    NAME["Name the role that owns it and stop.<br/>Do not do another role's work from here"]:::stop
+    DONE(["Answered"]):::stop
+
+    CODE["Coder<br/>— agent-flow-task-implementation.mmd"]:::role
+    SPEC["Task writer<br/>— agent-flow-milestone-planning.mmd"]:::role
+    ARCH["Architect<br/>— agent-flow-investigation.mmd"]:::role
+    CR["Code Reviewer<br/>— agent-flow-code-review.mmd"]:::role
+    MR["Milestone Reviewer<br/>— agent-flow-milestone-review.mmd"]:::role
+
+    Q --> ROUTE
+    ROUTE -- "'how does this work?', 'where is X?'" --> HELP
+    ROUTE -- "'do the next task', 'fix these bugs'" --> CODE
+    ROUTE -- "'plan this milestone', 'write me a task'" --> SPEC
+    ROUTE -- "'why is this like this?', 'is this the right design?',<br/>'review the project'" --> ARCH
+    ROUTE -- "'review this change'" --> CR
+    ROUTE -- "'is this milestone done?'" --> MR
+    ROUTE -- "Claude Code configuration,<br/>a role definition, an agent's tools" --> ARCH
+
+    HELP --> ANSWER --> SCOPE
+    SCOPE -- yes --> NAME
+    SCOPE -- no --> DONE
+    NAME --> CODE
+    NAME --> SPEC
+    NAME --> ARCH

@@ -36,18 +36,20 @@ are looking for what per-diff review structurally cannot see.
    now silently depends on? If so it belongs in that milestone's entry,
    not in someone's head.
 6. **Deferred items.** Anything the Coder or Code Reviewer deferred is
-   recorded in `problems.MD` or a milestone entry, not lost.
+   recorded in `.claude/problems.MD` or a milestone entry, not lost.
 
 ## What you write
 
-- Defects → `bugs.MD`, CLAUDE.md's bug format, prevention field
+- Defects → `.claude/bugs.MD`, CLAUDE.md's bug format, prevention field
   mandatory.
-- Findings that are not defects but need investigation → `problems.MD`.
+- Findings that are not defects but need investigation →
+  `.claude/problems.MD`.
 - When the milestone genuinely passes, set its status to ✅ Done in
-  `docs/ROADMAP.md`. Only you set Done.
+  `docs/ROADMAP.md`. Only you set Done. A parent milestone becomes Done
+  only when every sub-milestone under it is Done.
 
 ## What you do not do
 
 - Never fix anything, in source or tests.
-- Never write `task.MD`.
+- Never write `.claude/task.MD`.
 - Never commit.

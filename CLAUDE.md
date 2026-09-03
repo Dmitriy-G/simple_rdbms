@@ -46,7 +46,7 @@ name a branch:
    and implementation order has twice diverged from numeric order without
    renumbering anything (M12 shipped ahead of M9; M14 no longer depends
    on M10 — see the roadmap's own introduction for why).
-2. `docs/adr/` — ten ADRs recording decisions that are expensive to
+2. `docs/adr/` — the ADRs recording decisions that are expensive to
    rediscover. The ones a change is most likely to violate without
    reading first: 0003 (index after the log), 0004 (what ACID means
    here today), 0005 (the durability boundary after the double-write
@@ -59,13 +59,13 @@ name a branch:
 
 When asked to **"do next task"**, follow this procedure:
 
-1. Read `.claude/task.MD` at the repository root. If it contains a numbered
+1. Read `.claude/task.MD`. If it contains a numbered
    subtasks list (1 to N), work through that list in the order given —
    that is the "recommended order." Complete one subtask, then stop and
    hand control back for review before starting the next one. If
    `.claude/task.MD` has no subtasks list, treat the whole file as a single task
    and do it in full.
-2. `.claude/problems.MD` at the repository root is where incidental discoveries
+2. `.claude/problems.MD` is where incidental discoveries
    go: if, while working a subtask, you notice a problem that is real but
    does not depend on or belong to the subtask in progress, record it in
    `.claude/problems.MD` rather than investigating or fixing it there. Fixing it
@@ -76,7 +76,11 @@ When asked to **"do next task"**, follow this procedure:
 
 ## LLM roles and channels
 
-This repository is worked through five LLM roles. Determine the role
+This repository is worked through six LLM roles, one file per role in
+`.claude/agents/`. Those files are authoritative for what each role may
+write; this section is the overview, and
+`docs/diagrams/README.md` indexes a flow diagram for each way work moves
+between the roles. Determine the role
 from the question being asked — a single session can switch roles
 between questions — and state the active role at the top of every reply
 about this project:
@@ -102,31 +106,52 @@ Role: <role name>
    next starts.
 2. **Architect** — asked to investigate an entry from `.claude/problems.MD` or
    review the project as a whole (documentation, module structure,
-   etc.). Record findings in `.claude/investigations.MD`. No role-specific rules
-   beyond the general ones in this file today.
+   etc.). Record findings in `.claude/investigations.MD`. Owns the
+   project's cross-cutting prose and its process: `docs/adr/**`, the
+   roadmap's entry text (never its status markers), this file, crate
+   `README.md`s, and `.claude/agents/*.md` plus `.claude/settings*.json`.
+   Never touches a `.rs` file, a test, or a sibling module `.MD`.
 3. **Task writer** — asked to turn a user request into a task for the
    Coder role. Write `.claude/task.MD` using the task format below: keep it
    understandable but short — the Coder role doesn't need root causes or
    other background, just the task. Decompose a large task or
    sub-milestone into several subtasks and order them with an Order
-   Plan.
-4. **Reviewer** — asked to do a code review. Check the code against
-   general conventions for the tech stack and against this file's
-   project-specific rules, and confirm it actually implements what
-   `.claude/task.MD` described. Record anything wrong in `.claude/bugs.MD` using the bug
-   format below, with concrete instructions on how to fix it.
-5. **Helper** — the default role: anything not covered by the four roles
-   above (answering a question about the project, changing Claude Code
-   configuration, etc.). No role-specific rules today.
+   Plan. Archives the finished `.claude/task.MD` to `docs/tasks/` and
+   sets 🚧 In Progress in `docs/ROADMAP.md`.
+4. **Code Reviewer** — asked to do a code review of one subtask's
+   change. Check the code against general conventions for the tech stack
+   and against this file's project-specific rules, and confirm it
+   actually implements what `.claude/task.MD` described. Record anything
+   wrong in `.claude/bugs.MD` using the bug format below, with concrete
+   instructions on how to fix it.
+5. **Milestone Reviewer** — asked to review a finished milestone as a
+   whole against its `docs/ROADMAP.md` entry, once every subtask has
+   passed code review: the milestone's Done-when, cross-cutting
+   invariants, documentation truth, forward dependencies it created, and
+   deferred items. Writes `.claude/bugs.MD` and `.claude/problems.MD`,
+   and is the only role that sets ✅ Done in `docs/ROADMAP.md`.
+6. **Helper** — the default role: anything not covered by the five roles
+   above, such as answering a question about the project. Read-only.
 
 ### Channels
 
-Four root-level files carry the roles' communication:
+Four files under `.claude/` carry the roles' communication. Each has one
+primary writer; the extra writers listed are deliberate:
 
-- Tasks channel — `.claude/task.MD`. Written by Task writer, read by Coder.
-- Problems channel — `.claude/problems.MD`. Written by Coder, read by Architect.
-- Investigations channel — `.claude/investigations.MD`. Written by Architect.
-- Bugs channel — `.claude/bugs.MD`. Written by Reviewer, read by Coder.
+- Tasks channel — `.claude/task.MD`. Written by Task writer (and by
+  Architect only when the human explicitly asks). Read by Coder and both
+  reviewers.
+- Problems channel — `.claude/problems.MD`. Written by Coder; also by
+  Milestone Reviewer for non-defect findings, and by Architect for
+  status lines and for problems an investigation uncovers. Read by
+  Architect.
+- Investigations channel — `.claude/investigations.MD`. Written by
+  Architect. Read by Task writer and by the human.
+- Bugs channel — `.claude/bugs.MD`. Written by Code Reviewer and
+  Milestone Reviewer. Read by Coder.
+
+No role commits. Finished work is left in the working tree for the human
+to review and commit.
 
 ### File formats
 

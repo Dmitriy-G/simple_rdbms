@@ -1,0 +1,44 @@
+---
+title: Bug fixing
+---
+flowchart TD
+    classDef human fill:#fff3cd,stroke:#8a6d3b,color:#000
+    classDef role fill:#d9edf7,stroke:#31708f,color:#000
+    classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
+    classDef gate fill:#f2dede,stroke:#a94442,color:#000
+    classDef stop fill:#eeeeee,stroke:#777,color:#000
+
+    SRC1["Code Reviewer — defects in one subtask's diff"]:::role
+    SRC2["Milestone Reviewer — defects the diff review<br/>structurally could not see"]:::role
+    BUGS[".claude/bugs.MD"]:::channel
+
+    CODER["Coder reads .claude/bugs.MD"]:::role
+    ONE["Take one entry. One at a time,<br/>same stop-after-each rule as a subtask"]
+    READ["Read its Reason, Description and<br/>'How to prevent in future' —<br/>the prevention is part of the fix,<br/>not a suggestion"]
+
+    KIND{"Is the entry a defect in the code,<br/>or a disagreement with the spec?"}
+    DISPUTE["Append to .claude/problems.MD and stop.<br/>Do not silently redefine the task"]:::stop
+
+    FIX["Fix the cause, not the symptom"]
+    PREVENT["Land the prevention with it:<br/>a regression test, a lint, or a CI step"]
+    GATE["Full gate: build, fmt --check,<br/>clippy -D warnings, check_docs.sh, test.<br/>Plus both crash harnesses if the fix<br/>touched storage, WAL, recovery or the DWB"]:::gate
+    PASS{"All green?"}
+
+    MARK["Mark the entry fixed in .claude/bugs.MD<br/>and stop"]
+    RECHECK["Code Reviewer re-checks the fix<br/>and the prevention"]:::role
+    GOOD{"Fixed?"}
+    MORE{"Entries left in bugs.MD?"}
+    HUMAN["Human reviews and commits"]:::human
+    DONE(["Back to the interrupted flow"]):::stop
+
+    SRC1 --> BUGS
+    SRC2 --> BUGS
+    BUGS --> CODER --> ONE --> READ --> KIND
+    KIND -- "disagreement" --> DISPUTE
+    KIND -- defect --> FIX --> PREVENT --> GATE --> PASS
+    PASS -- no --> FIX
+    PASS -- yes --> MARK --> RECHECK --> GOOD
+    GOOD -- no --> BUGS
+    GOOD -- yes --> MORE
+    MORE -- yes --> ONE
+    MORE -- no --> HUMAN --> DONE

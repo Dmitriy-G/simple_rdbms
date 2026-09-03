@@ -49,9 +49,10 @@ cargo test --workspace
 | [`cli`](crates/cli/README.md) | The interactive binary: a REPL over `engine`. |
 | [`server`](crates/server/README.md) | The headless binary: metrics, health/readiness, and graceful shutdown for a container. |
 
-See `docs/diagrams/crate-dependencies.mmd` for the dependency graph, and
-`docs/adr/0002-crate-splitting.md` for why the layers are crates rather
-than modules.
+See [`docs/diagrams/`](docs/diagrams/README.md) for the dependency graph
+and the agent-flow diagrams, and
+[`docs/adr/0002-crate-splitting.md`](docs/adr/0002-crate-splitting.md)
+for why the layers are crates rather than modules.
 
 ## REPL demo
 

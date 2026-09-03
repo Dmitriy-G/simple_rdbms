@@ -1,0 +1,36 @@
+---
+title: Milestone planning
+---
+flowchart TD
+    classDef human fill:#fff3cd,stroke:#8a6d3b,color:#000
+    classDef role fill:#d9edf7,stroke:#31708f,color:#000
+    classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
+    classDef stop fill:#eeeeee,stroke:#777,color:#000
+
+    START(["Human picks the next milestone,<br/>or the previous one just passed review"]):::human
+    UNCLEAR{"Is the milestone's shape<br/>settled enough to specify?"}
+
+    ARCH["Architect<br/>investigates: options, dependencies,<br/>what the milestone actually requires"]:::role
+    INV[".claude/investigations.MD<br/>problem, evidence, options, recommendation"]:::channel
+
+    TW["Task writer"]:::role
+    READ["Reads docs/ROADMAP.md entry:<br/>Problem, Solution, Done-when,<br/>plus any investigation and open bugs"]
+    ARCHIVE{"Is the previous .claude/task.MD<br/>finished in full?"}
+    MOVE["Move it to docs/tasks/&lt;milestone&gt;-&lt;slug&gt;.md"]
+    KEEP["Leave it in place —<br/>it is still the live task"]:::stop
+
+    SPLIT["Decompose into subtasks:<br/>each independently completable<br/>and independently reviewable"]
+    ORDER["Order Plan, 1..N —<br/>if a subtask cannot finish without a<br/>later one, it is two subtasks misordered"]
+    WRITE["Write .claude/task.MD:<br/>title, Order Plan, one section per subtask<br/>with how to test it. No rationale — that lives<br/>in investigations.MD"]
+    TASK[".claude/task.MD"]:::channel
+    STATUS["Set the sub-milestone to 🚧 In Progress<br/>in docs/ROADMAP.md.<br/>At most one sub-milestone at a time"]
+    ROADMAP["docs/ROADMAP.md"]:::channel
+    NEXT(["Coder starts subtask 1<br/>— see agent-flow-task-implementation.mmd"]):::stop
+
+    START --> UNCLEAR
+    UNCLEAR -- no --> ARCH --> INV --> TW
+    UNCLEAR -- yes --> TW
+    TW --> READ --> ARCHIVE
+    ARCHIVE -- yes --> MOVE --> SPLIT
+    ARCHIVE -- "no, subtasks still open" --> KEEP
+    SPLIT --> ORDER --> WRITE --> TASK --> STATUS --> ROADMAP --> NEXT

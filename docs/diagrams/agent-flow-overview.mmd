@@ -1,0 +1,52 @@
+---
+title: Agent roles and the channel files between them
+---
+flowchart LR
+    classDef human fill:#fff3cd,stroke:#8a6d3b,color:#000
+    classDef role fill:#d9edf7,stroke:#31708f,color:#000
+    classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
+
+    HUMAN["Human<br/>picks the work, reviews, commits"]:::human
+
+    ARCH["Architect"]:::role
+    TW["Task writer"]:::role
+    CODER["Coder"]:::role
+    CR["Code Reviewer"]:::role
+    MR["Milestone Reviewer"]:::role
+    HELP["Helper"]:::role
+
+    TASK[".claude/task.MD"]:::channel
+    PROB[".claude/problems.MD"]:::channel
+    INV[".claude/investigations.MD"]:::channel
+    BUGS[".claude/bugs.MD"]:::channel
+    ROADMAP["docs/ROADMAP.md"]:::channel
+
+    HUMAN --> ARCH
+    HUMAN --> TW
+    HUMAN --> CODER
+    HUMAN --> CR
+    HUMAN --> MR
+    HUMAN --> HELP
+
+    ARCH -- writes --> INV
+    ARCH -- "new entries, status lines" --> PROB
+    ARCH -- "ADRs, CLAUDE.md, entry prose, agent files" --> ROADMAP
+
+    INV -- read --> TW
+    ROADMAP -- read --> TW
+    TW -- writes --> TASK
+    TW -- "sets 🚧" --> ROADMAP
+
+    TASK -- read --> CODER
+    BUGS -- read --> CODER
+    CODER -- "incidental findings" --> PROB
+    CODER -- "source, tests, sibling .MD" --> CR
+
+    CR -- writes --> BUGS
+    CR -- "subtask accepted" --> HUMAN
+    MR -- writes --> BUGS
+    MR -- "non-defect findings" --> PROB
+    MR -- "sets ✅ Done" --> ROADMAP
+
+    PROB -- read --> ARCH
+    HELP -- "answers, or names the right role" --> HUMAN

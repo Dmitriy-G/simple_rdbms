@@ -1,0 +1,34 @@
+---
+title: Code review of one subtask
+---
+flowchart TD
+    classDef human fill:#fff3cd,stroke:#8a6d3b,color:#000
+    classDef role fill:#d9edf7,stroke:#31708f,color:#000
+    classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
+    classDef stop fill:#eeeeee,stroke:#777,color:#000
+
+    START(["Coder stopped after a subtask.<br/>Working tree uncommitted"]):::human
+    CR["Code Reviewer — diff-level scope,<br/>one subtask's worth of change"]:::role
+
+    C1["1. .claude/task.MD:<br/>does the code do what the subtask said,<br/>including its 'how to test it'?"]
+    C2["2. CLAUDE.md invariants first:<br/>log before page, latch ordering,<br/>one write guard per page per thread,<br/>all-zero pages valid, page-0 header logged,<br/>errors logged once at the engine boundary"]
+    C3["3. CLAUDE.md conventions:<br/>sibling .MD per .rs, no comments in .rs,<br/>no allow or expect attributes in source,<br/>dependency edges, logging levels,<br/>no user data above DEBUG"]
+    C4["4. Tests, read as carefully as the code:<br/>would this test pass without the change?<br/>deterministic? in tests/ unless the<br/>pure-private-function carve-out applies?"]
+    C5["5. General Rust practice for this stack"]
+    C6["6. Was the full gate actually run?"]
+
+    FOUND{"Any finding?"}
+    BUGS[".claude/bugs.MD — per entry:<br/>numbered title, Reason, Description,<br/>How to prevent in future.<br/>Prevention is a lint, a test or a CI step,<br/>never 'be careful next time'"]:::channel
+    BACK(["Coder fixes<br/>— see agent-flow-bug-fixing.mmd"]):::stop
+
+    OK["Say so plainly. Write nothing to bugs.MD"]
+    HUMAN["Human reviews and commits"]:::human
+    MORE{"Subtasks left in the Order Plan?"}
+    NEXTSUB(["Coder takes the next subtask"]):::stop
+    MSREVIEW(["Milestone Reviewer<br/>— see agent-flow-milestone-review.mmd"]):::stop
+
+    START --> CR --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> FOUND
+    FOUND -- yes --> BUGS --> BACK
+    FOUND -- no --> OK --> HUMAN --> MORE
+    MORE -- yes --> NEXTSUB
+    MORE -- no --> MSREVIEW

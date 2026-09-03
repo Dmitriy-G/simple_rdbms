@@ -1,0 +1,50 @@
+---
+title: Documentation — writing and validation
+---
+flowchart TD
+    classDef human fill:#fff3cd,stroke:#8a6d3b,color:#000
+    classDef role fill:#d9edf7,stroke:#31708f,color:#000
+    classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
+    classDef gate fill:#f2dede,stroke:#a94442,color:#000
+    classDef stop fill:#eeeeee,stroke:#777,color:#000
+
+    START(["A documentation change is needed"]):::human
+    WHICH{"Which kind?"}
+
+    subgraph WRITE["Writing — who owns what"]
+        direction TB
+        MOD["Sibling module docs: crates/**/*.MD<br/>one per .rs, tests included.<br/>Owner: whoever edits the .rs — the Coder.<br/>Ships in the same commit as the .rs"]:::role
+        NEWCRATE["A new crate's README.md.<br/>Owner: the Coder, same commit as the crate"]:::role
+        CROSS["Cross-cutting prose: docs/adr/**,<br/>docs/ROADMAP.md entry text, CLAUDE.md,<br/>crate README rewrites, .claude/agents/*.md.<br/>Owner: the Architect"]:::role
+        STATUS["Roadmap status markers.<br/>🚧 Task writer, ✅ Milestone Reviewer.<br/>Nobody else, Architect included"]:::role
+    end
+
+    RULES["Follow the fixed shapes:<br/>module .MD — title matching the stem,<br/>opening paragraph, Key Components,<br/>Usage Example, closing paragraph.<br/>README — role statement, Architecture,<br/>Key Components, Features, Dependencies,<br/>Configuration, Testing.<br/>A comment leaving a .rs file is a migration,<br/>not a deletion: the reasoning moves,<br/>it does not vanish"]
+
+    subgraph VALID["Validation"]
+        direction TB
+        SCRIPT["bash scripts/check_docs.sh — part of the<br/>Coder's gate and of CI.<br/>Catches: a missing .MD or .rs sibling,<br/>a missing Key Components or Usage Example<br/>heading, a title not matching its stem,<br/>an undocumented public item,<br/>a crate without a README,<br/>a disallowed comment in a .rs file"]:::gate
+        CRREV["Code Reviewer, per diff:<br/>every new .rs has its .MD,<br/>no .rs gained a comment"]:::role
+        MSREV["Milestone Reviewer, per milestone:<br/>documentation truth — does the prose still<br/>describe the code, does every referenced<br/>ADR exist, are decisions recorded durably"]:::role
+        HUMANEYE["What no script checks:<br/>whether the text is true.<br/>check_docs.sh verifies a public item is<br/>mentioned, never that the Usage Example<br/>still compiles against the source"]:::human
+    end
+
+    DRIFT{"Drift found?"}
+    PROB[".claude/problems.MD"]:::channel
+    ARCH["Architect investigates<br/>— see agent-flow-investigation.mmd"]:::role
+    ROUTE{"Whose fix is it?"}
+    VIATASK["Task writer turns it into<br/>a subtask in .claude/task.MD"]:::role
+    DIRECT["Architect edits the ADR, roadmap prose,<br/>CLAUDE.md or README directly"]:::role
+    OK(["Documented and validated"]):::stop
+
+    START --> WHICH
+    WHICH -- "describes one .rs file" --> MOD --> RULES
+    WHICH -- "a new crate" --> NEWCRATE --> RULES
+    WHICH -- "a decision, the roadmap, conventions, roles" --> CROSS --> RULES
+    WHICH -- "a milestone's status" --> STATUS --> OK
+    RULES --> SCRIPT --> CRREV --> MSREV --> HUMANEYE --> DRIFT
+    DRIFT -- no --> OK
+    DRIFT -- yes --> PROB --> ARCH --> ROUTE
+    ROUTE -- "a module .MD or code" --> VIATASK
+    ROUTE -- "cross-cutting prose" --> DIRECT --> OK
+    VIATASK --> OK
