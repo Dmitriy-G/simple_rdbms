@@ -92,8 +92,9 @@ first, the next milestone in `docs/ROADMAP.md` second, and neither if the
 current milestone is finished — in that last case the answer is to say so
 and ask the human whether to hand the tree to the Milestone Reviewer, not
 to invent work. "Schedulable" excludes anything signed `Created by:
-Architect`: those are raised for the human to consider, not for an agent
-to schedule. The full procedure is in `.claude/agents/task-writer.md`.
+Architect`: those are the Architect's own, and only the Architect turns
+one into a task or resolves it. The full procedure is in
+`.claude/agents/task-writer.md`.
 
 ## LLM roles and channels
 
@@ -128,11 +129,17 @@ Role: <role name>
    can be reviewed before the next starts.
 2. **Architect** — asked to investigate an entry from `.claude/problems.md` or
    review the project as a whole (documentation, module structure,
-   etc.). Record findings in `.claude/investigations.md`. Owns the
-   project's cross-cutting prose and its process: `docs/adr/**`, the
-   roadmap's entry text (never its status markers), this file, crate
-   `README.md`s, and `.claude/agents/*.md` plus `.claude/settings*.json`.
-   Never touches a `.rs` file, a test, or a sibling module `.MD`.
+   etc.). Records findings in that same file, as entries signed
+   `Created by: Architect`, carrying their own evidence — file paths and
+   line numbers — and what to do next. Those entries are the Architect's
+   alone: nobody else schedules them and nobody else deletes them, and
+   the Architect is the one role that may write `.claude/task.md` for its
+   own entries. A conclusion that must outlive the working tree becomes
+   an ADR, a roadmap entry or a paragraph here. Owns the project's
+   cross-cutting prose and its process: `docs/adr/**`, the roadmap's
+   entry text (never its status markers), this file, and
+   `.claude/agents/*.md` plus `.claude/settings*.json`. Never touches a
+   `.rs` file, a test, a sibling module `.MD` or a crate `README.md`.
 3. **Task writer** — asked to turn a user request, the open entries in
    `.claude/problems.md`, or the next milestone into a task for the Coder
    role. Write `.claude/task.md` using the task format below: keep it
@@ -159,14 +166,12 @@ Role: <role name>
 
 ### Channels
 
-Three files under `.claude/` carry the roles' communication, and together
+Two files under `.claude/` carry the roles' communication, and together
 with the roadmap each answers exactly one question. Keeping them to that
-one question is what stops them turning into four overlapping logs:
+one question is what stops them turning into three overlapping logs:
 
 - `.claude/problems.md` — what is wrong **right now**. Open problems
   only; an entry leaves the file when it is dealt with.
-- `.claude/investigations.md` — what was looked into, and what should be
-  done about it later.
 - `.claude/task.md` — the one task being worked at this moment.
 - `docs/ROADMAP.md` — the whole project, milestone by milestone.
 
@@ -182,26 +187,24 @@ than cosmetic.
 
 | File | Written by | Read by | Carries |
 | --- | --- | --- | --- |
-| `.claude/task.md` | Task writer (Architect only when the human asks; Coder for subtask status lines only) | Coder, Code Reviewer, Milestone Reviewer | The current task's subtasks and their Order Plan |
-| `.claude/problems.md` | Everyone who finds something: Coder, Code Reviewer, Milestone Reviewer, Architect. Entries are removed by the Task writer as it schedules them | Task writer first, Architect, human | A queue of everything found and not fixed on the spot: defects from review, incidental discoveries, and Architect notes for the human |
-| `.claude/investigations.md` | Architect | Task writer, human | Evidence, options, a recommendation, what to do next |
+| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; Coder for subtask status lines only) | Coder, Code Reviewer, Milestone Reviewer | The current task's subtasks and their Order Plan |
+| `.claude/problems.md` | Everyone who finds something: Coder, Code Reviewer, Milestone Reviewer, Architect | Task writer first, Architect, human | A queue of everything found and not fixed on the spot: defects from review, incidental discoveries, and the Architect's findings with their evidence |
 
-There was a fourth, `.claude/bugs.md`, carrying reviewer-found defects.
-It is deleted: it held the same thing as `.claude/problems.md` — work
-found by one role, to be scheduled and done by another — with a second
-numbering scheme and a second queue for the Task writer to reconcile.
-Every role now writes findings to `.claude/problems.md` and signs them
-with `Created by:`, and the difference between "a defect a reviewer
-found" and "something the Coder noticed in passing" is that line, not a
-separate file.
+Every finding goes to `.claude/problems.md`, whoever found it, signed
+with `Created by:`. That line is the whole difference between a defect a
+reviewer found, something the Coder noticed in passing, and an Architect
+finding that needs a decision — one queue, one numbering scheme, one
+place for the Task writer to look. An Architect entry carries its own
+evidence and citations in the entry itself; there is no separate place
+for that reasoning to accumulate.
 
-All three are in `.gitignore`. They are live working state, not history:
+Both files are in `.gitignore`. They are live working state, not history:
 a channel entry is either scheduled into a task, or promoted into
-something durable — an ADR, a roadmap entry, this file — before it
-matters. The durable copies are `docs/tasks/**` for finished tasks and
-`docs/adr/**` for decisions. An investigation whose conclusion must
-survive the working tree does not stay in `.claude/investigations.md`;
-it becomes an ADR.
+something durable — an ADR under `docs/adr/`, a `docs/ROADMAP.md` entry,
+this file — before it matters. The durable copies are `docs/tasks/**` for
+finished tasks and `docs/adr/**` for decisions. A conclusion that has to
+outlive the working tree is not finished until it is one of those, and
+deciding what graduates is part of the investigation that produced it.
 
 ### Who owns which files
 
@@ -221,8 +224,8 @@ it changed asks through a channel above.
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
 | `docs/tasks/**` | Task writer | Archived task specs, written once and then history. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
-| `.claude/task.md` | Task writer | Architect writes it only when the human explicitly asks. The Coder writes subtask `Status:` lines and nothing else in it. |
-| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Only the Task writer (on scheduling) and the Architect (on investigating) delete one, and deletion is the only way an entry leaves: the file is an open queue, never a history. |
+| `.claude/task.md` | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. The Coder writes subtask `Status:` lines and nothing else in it. |
+| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows the signature: the Task writer deletes what it schedules and never an Architect entry, the Architect deletes its own. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
 Milestone planning is the Task writer's, milestone review is the
@@ -254,14 +257,19 @@ Per entry:
 - Title: `P-<n>` + a short description.
 - `Created by:` the role that found it — Coder, Code Reviewer, Milestone
   Reviewer, or Architect. This line decides who acts on the entry, so it
-  is not optional. **`Created by: Architect` means the entry is for the
-  human**: something noticed that wants a judgement call, a design
-  decision, or an investigation before anyone writes code. The Task
-  writer skips those. Every other signature is schedulable work.
+  is not optional. **`Created by: Architect` means the entry belongs to
+  the Architect**: something noticed that wants a judgement call, a design
+  decision, or an investigation before anyone writes code. The Task writer
+  neither schedules nor deletes one; the Architect resolves it, or writes
+  the task for it itself, and reports it to the human either way. Every
+  other signature is schedulable work.
 - Reason: why it is a problem, in one or two sentences.
 - Description: full detail, with file paths and line numbers. Assume the
-  entry will be read once, by the Task writer, and then deleted — so it
-  must contain everything needed to specify the fix.
+  entry will be read once, by whoever writes the task, and then deleted —
+  so it must contain everything needed to specify the fix. An Architect
+  entry carries its evidence here too: what was checked, what was found,
+  what the options are and which one is recommended. There is no second
+  file for that reasoning to live in.
 - How to prevent in future: a concrete instruction — a lint, a test, a
   CI step. Mandatory when the entry is a defect found in review;
   "be careful next time" is not a prevention. Omit it only for an entry
@@ -269,13 +277,14 @@ Per entry:
 
 The file holds open problems only. There is no resolved state and no
 `Status:` line: an entry that has been dealt with is deleted, not
-annotated. Two roles delete: the Task writer, when the corresponding
-subtask exists in `.claude/task.md`, and the Architect, when an
-investigation has settled the entry — and then the investigation, which
-says what was decided, is the thing that survives. An Architect entry
-otherwise leaves the file when the human asks for a task naming it, which
-routes it back through the Task writer. Reading the file top to bottom
-should show exactly the outstanding work and nothing else.
+annotated. Two roles delete, and the signature decides which. The Task
+writer deletes an entry when the corresponding subtask exists in
+`.claude/task.md`, and never touches an Architect one. The Architect
+deletes its own: when the question is settled — and then whatever was
+decided has already graduated to an ADR, a roadmap entry or this file,
+because otherwise deleting the entry loses it — or when it has written
+the task for it. Reading the file top to bottom should show exactly the
+outstanding work and nothing else.
 
 ## Invariants that must not be broken
 
@@ -340,6 +349,9 @@ fresh session reads first:
   B+tree still permits duplicate keys.
 - `storage::btree::BTreeIndex::delete` — the method exists; its body is
   `todo!()` (M15).
+- `catalog::Catalog::drop_table` — the method exists
+  (`crates/catalog/src/catalog.rs:125`); its body is `todo!()` and nothing
+  in the tree calls it, since no grammar produces `DROP TABLE` (M29).
 - `executor::NestedLoopJoinExecutor` — exists and is wired into the
   executor factory; `init` and `next` are both `todo!()` (M24).
   `planner::LogicalPlan::Join`/`PhysicalPlan::NestedLoopJoin` already

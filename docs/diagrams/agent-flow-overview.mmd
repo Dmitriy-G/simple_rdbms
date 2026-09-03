@@ -17,7 +17,7 @@ flowchart LR
 
     TASK[".claude/task.md<br/>the one task being worked now"]:::channel
     PROB[".claude/problems.md<br/>the problems that are still open"]:::channel
-    INV[".claude/investigations.md<br/>what was looked into, and what to do"]:::channel
+    ADR["docs/adr/**<br/>decisions that outlive the working tree"]:::channel
     ROADMAP["docs/ROADMAP.md<br/>the whole project, milestone by milestone"]:::channel
     ARCHIVE["docs/tasks/**<br/>the only durable copy of a task"]:::channel
 
@@ -28,12 +28,12 @@ flowchart LR
     HUMAN --> MR
     HUMAN --> HELP
 
-    ARCH -- writes --> INV
-    ARCH -- "entries for the human;<br/>deletes one an investigation settled" --> PROB
-    ARCH -- "ADRs, CLAUDE.md, entry prose, agent files" --> ROADMAP
+    ARCH -- "findings with their evidence;<br/>deletes only its own, once settled<br/>or once it has written the task" --> PROB
+    ARCH -- "conclusions that must survive" --> ADR
+    ARCH -- "CLAUDE.md, entry prose, agent files" --> ROADMAP
+    ARCH -- "writes the task for its own entries" --> TASK
 
-    INV -- read --> TW
-    PROB -- "read first: open entries outrank<br/>new milestone work, except<br/>Architect-signed ones, which wait<br/>for the human" --> TW
+    PROB -- "read first: open entries outrank<br/>new milestone work, except<br/>Architect-signed ones, which the<br/>Task writer never touches" --> TW
     TW -- "deletes each entry it schedules" --> PROB
     ROADMAP -- "read second" --> TW
     TW -- writes --> TASK

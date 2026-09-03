@@ -48,10 +48,9 @@ The prevention field is not optional for a defect — every one becomes a
 lint, a test, or a CI step, or the entry is not finished. "Be careful
 next time" is not a prevention.
 
-There is no `.claude/bugs.md`. It was deleted for holding the same thing
-as `.claude/problems.md` under a second numbering scheme; your findings
-and the Coder's incidental discoveries go to one file, distinguished by
-the `Created by:` line. The Task writer reads it and schedules the fixes,
+Your findings and the Coder's incidental discoveries go to one file,
+distinguished by the `Created by:` line, under one numbering scheme.
+The Task writer reads it and schedules the fixes,
 so nothing you write there reaches the Coder until it does — say in your
 reply which entries you opened, so the human can route them.
 

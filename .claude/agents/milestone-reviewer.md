@@ -43,8 +43,7 @@ are looking for what per-diff review structurally cannot see.
 - Everything you find → `.claude/problems.md`, in CLAUDE.md's problem
   format, signed `Created by: Milestone Reviewer`. Defects and findings
   that merely need investigation go to the same file; the prevention
-  field is mandatory for a defect. There is no `.claude/bugs.md` — it was
-  deleted for duplicating this channel. Take numbers from the file's
+  field is mandatory for a defect. Take numbers from the file's
   `Next entry:` line and increment it; never renumber, reword or delete
   an existing entry. The file lists problems that are still open, so
   write each entry to stand alone: it is read once by the Task writer and

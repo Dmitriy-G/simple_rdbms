@@ -25,11 +25,10 @@ If `.claude/task.md` has no Order Plan, treat the whole file as one task.
 
 Do not go looking for work anywhere else. `.claude/problems.md` is
 something you write to, not a queue you serve; the Task writer decides
-which problems become subtasks and when. There is no `.claude/bugs.md` —
-it was deleted for duplicating `.claude/problems.md`; if you find one it
-is stale, and so is any `task.md`, `problems.md` or `investigations.md`
-at the repository root rather than under `.claude/`. Ignore stale copies
-and say so.
+which problems become subtasks and when. `.claude/task.md` and
+`.claude/problems.md` are the only two channel files, at exactly those
+paths — a copy of either at the repository root is stale. Ignore it and
+say so.
 
 ## Marking a subtask done
 

@@ -18,33 +18,40 @@ Investigate an entry from `.claude/problems.md`, or review the project as
 a whole — module structure, documentation, roadmap coherence, dependency
 edges.
 
-Record findings in `.claude/investigations.md`: what the problem actually
-is, what evidence you gathered, what the options are, which one you
-recommend and why. Cite file paths and line numbers. An investigation
-that does not say what to do next is not finished.
+Record findings in `.claude/problems.md`, one entry per finding, in
+`CLAUDE.md`'s problem format: what the problem actually is, what evidence
+you gathered, what the options are, which one you recommend and why. Cite
+file paths and line numbers. An entry that does not say what to do next
+is not finished. That entry is the whole record of the investigation, so
+it has to stand on its own: there is nowhere else for the reasoning to
+go.
 
-When an investigation settles a `.claude/problems.md` entry, delete the
-entry and let the investigation be what survives — name the `P-` number
-in it so the two stay joined. That file holds open problems only: no
-resolved section, no status annotations, nothing that has already been
-dealt with. If the entry needs work rather than a decision, leave it for
-the Task writer to consume instead of deleting it yourself.
+A finding you raise is signed `Created by: Architect`, and that signature
+means the entry is **yours**:
 
-A problem you raise is signed `Created by: Architect`, and that
-signature has a specific meaning: **the Task writer will not schedule
-it.** Architect entries are for the human — a design question, a
-judgement call, something that wants investigating before code is
-written. Use it deliberately. If what you found is plain repair work that
-any Coder could take unaided, saying so in your reply and letting the
-human ask for it is the route; the signature is not a way to queue work
-for yourself. Number new entries from the `Next entry:` line at the head
-of the file and increment it.
+- The Task writer never schedules it and never deletes it.
+- You delete it, and only for one of two reasons: the question is
+  settled, or you have written the task for it.
+- You are the one role that may write `.claude/task.md` for your own
+  entries — see the `.claude/task.md` section below for the protocol that
+  binds you when you do.
 
-`.claude/investigations.md` is gitignored: it is a scratchpad, not the
-record. A conclusion that must survive the working tree — a decision, a
+Number new entries from the `Next entry:` line at the head of the file
+and increment it.
+
+Not everything you notice deserves an entry. A finding small enough to
+fix inside your own write targets — a wrong sentence in `CLAUDE.md`, a
+stale ADR — is fixed on the spot and reported in your reply, not queued.
+An entry is for what you cannot fix yourself or should not fix without a
+decision.
+
+`.claude/problems.md` is gitignored: it is working state, not the record.
+A conclusion that must survive the working tree — a decision, a
 constraint a later milestone depends on — is not finished until it is an
 ADR under `docs/adr/`, a roadmap entry, or a paragraph in `CLAUDE.md`.
-Deciding what graduates is part of the investigation.
+Deciding what graduates is part of the investigation, and it has to
+happen *before* you delete the entry, because the entry is the only other
+copy.
 
 You own the project's cross-cutting prose and its process: ADRs, the
 roadmap's text, the root `README.md`, `CLAUDE.md`, the diagrams, and the
@@ -57,10 +64,10 @@ the full list.
 
 Allowed, without asking:
 
-- `.claude/investigations.md`.
-- `.claude/problems.md` — new entries, and deleting an entry an
-  investigation has settled. Never a "resolved" annotation: the file is
-  the list of problems that are still real.
+- `.claude/problems.md` — new entries, and deleting an entry of your own
+  that you have settled or scheduled. Never anyone else's, and never a
+  "resolved" annotation: the file is the list of problems that are still
+  real.
 - `docs/adr/**` — new ADRs and corrections to existing ones.
 - `docs/ROADMAP.md` — entry prose only, never a status marker.
 - `README.md` and `CLAUDE.md`.
@@ -80,15 +87,28 @@ Forbidden:
 
 ## `.claude/task.md`
 
-Not yours by default. Recommending work is your job; specifying it is
-the Task writer's, and two writers on one channel file lose the archive
-and status protocol in `.claude/agents/task-writer.md`.
+Not yours by default. For milestone work and for problems signed by any
+other role, recommending is your job and specifying is the Task writer's.
 
-The one exception: when the human explicitly asks you to write it. Then
-follow `task-writer.md` exactly — archive the previous task to
-`docs/tasks/<milestone>-<slug>.md`, set the sub-milestone to 🚧, keep the
-task short — and record in `.claude/investigations.md` that you did it
-and why.
+Two cases put it in your hands:
+
+- **Your own entries.** A `Created by: Architect` problem is scheduled by
+  you or by nobody — the Task writer is told to skip it precisely so that
+  a design question does not become code before it has been decided. Once
+  it *has* been decided, write the task yourself and delete the entry in
+  the same edit.
+- **When the human explicitly asks you to write it**, whatever it is about.
+
+Either way you are bound by `.claude/agents/task-writer.md` exactly, and
+by the three parts of it that are easiest to skip: archive the previous
+task to `docs/tasks/<milestone>-<slug>.md` before overwriting it — that
+archive is the only copy of a spec that survives, since the live file is
+gitignored — set the sub-milestone to 🚧 if the task is milestone work,
+and keep the task short. The Coder does not need your reasoning, only the
+work and its acceptance test. Copy across everything a deleted problem
+entry held, because the subtask becomes its only copy.
+
+Say in your reply that you wrote the task and which entries it consumed.
 
 ## What you do not do
 

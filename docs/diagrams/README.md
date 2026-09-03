@@ -21,7 +21,7 @@ actually move work between each other. Each role's own rules live in
 no single agent file has.
 
 - [`agent-flow-overview.mmd`](agent-flow-overview.mmd) — all six roles
-  and the three channel files, with who writes and who reads each. Read
+  and the two channel files, with who writes and who reads each. Read
   this one first.
 - [`agent-flow-milestone-planning.mmd`](agent-flow-milestone-planning.mmd)
   — how the Task writer decides what the next task is: open problems
@@ -35,17 +35,17 @@ no single agent file has.
 - [`agent-flow-problem-lifecycle.mmd`](agent-flow-problem-lifecycle.mmd)
   — a finding by any role, into `.claude/problems.md`, out of it again as
   a scheduled subtask, to a fix that ships with its prevention. Also
-  shows the other exit: an Architect-signed entry, which waits for the
-  human rather than being scheduled. This replaced
-  `agent-flow-bug-fixing.mmd` when `.claude/bugs.md` was merged into
-  `.claude/problems.md`.
+  shows the other exit: an Architect-signed entry, which the Task writer
+  never touches and the Architect either settles or writes the task for
+  itself.
 - [`agent-flow-milestone-review.mmd`](agent-flow-milestone-review.mmd) —
   whole-milestone review and the only path to ✅ Done.
 - [`agent-flow-documentation.mmd`](agent-flow-documentation.mmd) — who
   owns which documentation, and the four layers that validate it.
 - [`agent-flow-investigation.mmd`](agent-flow-investigation.mmd) — the
   Architect's loop: evidence, options, recommendation, and where the
-  recommendation goes next.
+  recommendation goes next — fixed on the spot, written into
+  `.claude/problems.md` as a signed entry, or graduated to an ADR.
 - [`agent-flow-questions.mmd`](agent-flow-questions.mmd) — routing an
   incoming request to the role that owns it.
 

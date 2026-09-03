@@ -19,17 +19,19 @@ flowchart TD
     OPTS["Lay out the real options,<br/>including 'do nothing', with the cost of each"]
     REC["Recommend one, and say why the others lose"]
 
-    WRITE["Write the entry in .claude/investigations.md:<br/>problem, evidence with file:line citations,<br/>options, recommendation, what to do next.<br/>An investigation that does not say<br/>what to do next is not finished"]
-    INV[".claude/investigations.md"]:::channel
+    FIXABLE{"Can the Architect fix it outright,<br/>inside its own write targets?"}
+    FIXNOW["Fix it and report it in the reply.<br/>No entry: the queue is for what<br/>cannot be fixed on the spot"]:::stop
+    WRITE["Write an entry in .claude/problems.md,<br/>signed Created by: Architect:<br/>problem, evidence with file:line citations,<br/>options, recommendation, what to do next.<br/>An entry that does not say<br/>what to do next is not finished"]
+    PROB[".claude/problems.md"]:::channel
 
-    CLOSES{"Does it close a .claude/problems.md entry?"}
-    MARK["Mark that entry resolved and point it<br/>at the investigation. Never delete it —<br/>the record of what was wrong is the point"]
+    CLOSES{"Does it settle an existing entry?"}
+    GRAD["Graduate the conclusion first —<br/>ADR, roadmap entry or CLAUDE.md —<br/>then delete the entry. The file is<br/>gitignored: deleting without<br/>graduating loses it"]
     NEWPROB["Uncovered something else on the way?<br/>New numbered entry in .claude/problems.md"]:::channel
 
     KIND{"What does the recommendation require?"}
-    DOC["Architect does it: an ADR recording the<br/>decision, roadmap prose, CLAUDE.md,<br/>a crate README, a role definition"]:::role
-    CODE["Task writer turns it into .claude/task.md<br/>— see agent-flow-milestone-planning.mmd"]:::role
-    NOTHING["Recommendation is 'leave it'.<br/>The investigation is still the deliverable:<br/>next time the question is already answered"]:::stop
+    DOC["Architect does it: an ADR recording the<br/>decision, roadmap prose, CLAUDE.md,<br/>a role definition, a diagram"]:::role
+    CODE["Architect writes .claude/task.md itself<br/>for its own entries, bound by<br/>task-writer.md — archive, 🚧, keep it short"]:::role
+    NOTHING["Recommendation is 'leave it'.<br/>Say so in the reply and delete the entry:<br/>next time the question is already answered"]:::stop
     HUMAN["Human decides and commits"]:::human
 
     T1 --> ARCH
@@ -37,8 +39,10 @@ flowchart TD
     T3 --> ARCH
     T4 --> ARCH
     T5 --> ARCH
-    ARCH --> GATHER --> STATE --> OPTS --> REC --> WRITE --> INV --> CLOSES
-    CLOSES -- yes --> MARK --> KIND
+    ARCH --> GATHER --> STATE --> OPTS --> REC --> FIXABLE
+    FIXABLE -- yes --> FIXNOW
+    FIXABLE -- no --> WRITE --> PROB --> CLOSES
+    CLOSES -- yes --> GRAD --> KIND
     CLOSES -- no --> KIND
     GATHER --> NEWPROB
     KIND -- "prose or a decision" --> DOC --> HUMAN
