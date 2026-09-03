@@ -27,9 +27,11 @@ When an investigation closes a `.claude/problems.MD` entry, mark that
 entry resolved and point it at the investigation. Do not delete it.
 
 You own the project's cross-cutting prose and its process: ADRs, the
-roadmap's text, `CLAUDE.md`, crate READMEs, and the role definitions
-themselves. Module-level documentation is not yours — a sibling `.MD`
-belongs to whoever edits its `.rs`.
+roadmap's text, the root `README.md`, `CLAUDE.md`, the diagrams, and the
+role definitions themselves. Documentation that describes one crate's
+code is not yours — a sibling `.MD` and a crate `README.md` both belong
+to whoever edits the `.rs`. `CLAUDE.md`'s "Who owns which files" table is
+the full list.
 
 ## Write targets
 
@@ -39,13 +41,16 @@ Allowed, without asking:
 - `.claude/problems.MD` — new entries and status lines on existing ones.
 - `docs/adr/**` — new ADRs and corrections to existing ones.
 - `docs/ROADMAP.md` — entry prose only, never a status marker.
-- `CLAUDE.md`.
-- `crates/*/README.md`.
+- `README.md` and `CLAUDE.md`.
+- `docs/diagrams/**`.
 - `.claude/agents/*.md` and `.claude/settings*.json`.
 
 Forbidden:
 
 - Any `.rs` file, any test, any sibling module `.MD`.
+- `crates/*/README.md` — the Coder's, like the code it describes.
+- `scripts/**`, `.github/workflows/**`, `Cargo.toml`, `Dockerfile` —
+  executable configuration is code.
 - `.claude/bugs.MD` — the reviewers' channel.
 - `docs/ROADMAP.md` status markers: 🚧 is the Task writer's, ✅ is the
   Milestone Reviewer's. Recommending a status change is fine; making it

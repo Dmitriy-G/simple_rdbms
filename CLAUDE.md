@@ -136,19 +136,39 @@ Role: <role name>
 ### Channels
 
 Four files under `.claude/` carry the roles' communication. Each has one
-primary writer; the extra writers listed are deliberate:
+primary writer; the extra writers listed are deliberate. Nothing is
+written that nobody reads — a channel with no reader is a bug in this
+table, not a file to keep writing.
 
-- Tasks channel — `.claude/task.MD`. Written by Task writer (and by
-  Architect only when the human explicitly asks). Read by Coder and both
-  reviewers.
-- Problems channel — `.claude/problems.MD`. Written by Coder; also by
-  Milestone Reviewer for non-defect findings, and by Architect for
-  status lines and for problems an investigation uncovers. Read by
-  Architect.
-- Investigations channel — `.claude/investigations.MD`. Written by
-  Architect. Read by Task writer and by the human.
-- Bugs channel — `.claude/bugs.MD`. Written by Code Reviewer and
-  Milestone Reviewer. Read by Coder.
+| File | Written by | Read by | Carries |
+| --- | --- | --- | --- |
+| `.claude/task.MD` | Task writer (Architect only when the human asks) | Coder, Code Reviewer, Milestone Reviewer | The current milestone's subtasks and their Order Plan |
+| `.claude/problems.MD` | Coder, Milestone Reviewer, Architect (new entries + status lines) | Architect | Real problems found while doing something else |
+| `.claude/investigations.MD` | Architect | Task writer, human | Evidence, options, a recommendation, what to do next |
+| `.claude/bugs.MD` | Code Reviewer, Milestone Reviewer | Coder | Defects, each with a prevention that must ship with the fix |
+
+### Who owns which files
+
+Every path in the repository has exactly one role that may change it.
+"Owns" means: that role makes the change, and any other role that wants
+it changed asks through a channel above.
+
+| Area | Owner | Notes |
+| --- | --- | --- |
+| `crates/**/*.rs` — source and tests | Coder | The only role that writes Rust. Tests are not a separate area: a subtask's tests ship with its code. |
+| `crates/**/*.MD` — sibling module docs | Coder | Ships in the same commit as its `.rs`. Whoever edits the code edits the doc. |
+| `crates/*/README.md` | Coder | Same rule: it documents that crate's code, so it goes stale the moment code lands without it. |
+| `README.md`, `CLAUDE.md` | Architect | Repository-level prose. "What works today" claims here are checked by the Milestone Reviewer at the end of each milestone. |
+| `docs/adr/**` | Architect | A decision worth an ADR is recorded by the role that investigated it. |
+| `docs/ROADMAP.md` — entry prose | Architect | Including retiring or splitting an entry. |
+| `docs/ROADMAP.md` — status markers | Task writer sets 🚧, Milestone Reviewer sets ✅ | Nobody else, Architect included. This is the gate that makes "Done" mean something. |
+| `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
+| `docs/tasks/**` | Task writer | Archived task specs, written once and then history. |
+| `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
+| `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
+
+Milestone planning is the Task writer's, milestone review is the
+Milestone Reviewer's, and neither is a file the other may write.
 
 No role commits. Finished work is left in the working tree for the human
 to review and commit.
@@ -236,10 +256,19 @@ fresh session reads first:
 - `storage::btree::BTreeIndex::delete` — the method exists; its body is
   `todo!()` (M15).
 - `executor::NestedLoopJoinExecutor` — exists and is wired into the
-  executor factory; `init` and `next` are both `todo!()` (M11).
+  executor factory; `init` and `next` are both `todo!()` (M24).
   `planner::LogicalPlan::Join`/`PhysicalPlan::NestedLoopJoin` already
   exist as the node kinds it would run, but nothing in `sql`'s grammar
-  can produce them yet — `FROM` accepts exactly one table (M11).
+  can produce them yet — `FROM` accepts exactly one table (M24).
+- `txn::LockManager` — implemented and unit-tested as of M10.2's first
+  subtask, but nothing above it calls `lock`/`lock_table`/`release_all`
+  yet; the executors and `TransactionManager` wire it up later in the
+  same sub-milestone.
+- `txn::VersionChain::visible_version` — `todo!()`; MVCC is M10.3.
+
+Milestone numbers here are the roadmap's. `M11` appears in older
+`.MD` files and `// TODO(M11):` markers and no longer resolves to a live
+entry — see `docs/ROADMAP.md`'s M11 tombstone for where that work went.
 
 ## Commands
 
@@ -387,22 +416,23 @@ file. This follows from the no-comments convention above: code stays
 clean and the prose explaining a suppression lives elsewhere, not next to
 it.
 
-The current exceptions are a known, closed set - six `#[allow(dead_code)]`
-attributes across four files, none of them expressible in configuration
+The current exceptions are a known, closed set - five `#[allow(dead_code)]`
+attributes across three files, none of them expressible in configuration
 since each silences one specific field or item rather than a lint
 crate-wide:
 
-- `crates/txn/src/lock_manager.rs`'s `LockManager::holders` and
-  `crates/executor/src/operators/nested_loop_join.rs`'s
+- `crates/executor/src/operators/nested_loop_join.rs`'s
   `NestedLoopJoinExecutor::{left, right, predicate}` mark work that
-  belongs to a milestone not yet built (M10's lock manager, M11's join
-  executor, `docs/ROADMAP.md`) and should disappear when that milestone
-  lands and starts reading them.
+  belongs to a milestone not yet built (M24's join executor,
+  `docs/ROADMAP.md`) and should disappear when that milestone lands and
+  starts reading them.
 - `crates/storage/src/disk.rs`'s `DiskManager::path` and
   `crates/storage/src/replacer.rs`'s `LruKReplacer::capacity` are fields
   kept for future use that nothing reads yet.
 
-Do not add a seventh without updating this list.
+Do not add a sixth without updating this list. `LockManager::holders` was
+the sixth until M10.2's first subtask made it live; a suppression that
+becomes unnecessary is deleted here as well as in the source.
 
 ## Error handling
 

@@ -14,8 +14,8 @@ flowchart TD
     subgraph WRITE["Writing — who owns what"]
         direction TB
         MOD["Sibling module docs: crates/**/*.MD<br/>one per .rs, tests included.<br/>Owner: whoever edits the .rs — the Coder.<br/>Ships in the same commit as the .rs"]:::role
-        NEWCRATE["A new crate's README.md.<br/>Owner: the Coder, same commit as the crate"]:::role
-        CROSS["Cross-cutting prose: docs/adr/**,<br/>docs/ROADMAP.md entry text, CLAUDE.md,<br/>crate README rewrites, .claude/agents/*.md.<br/>Owner: the Architect"]:::role
+        NEWCRATE["A crate's README.md, new or changed.<br/>Owner: the Coder — it describes that<br/>crate's code, so it goes stale the moment<br/>code lands without it"]:::role
+        CROSS["Cross-cutting prose: docs/adr/**,<br/>docs/ROADMAP.md entry text,<br/>README.md, CLAUDE.md, docs/diagrams/**,<br/>.claude/agents/*.md.<br/>Owner: the Architect"]:::role
         STATUS["Roadmap status markers.<br/>🚧 Task writer, ✅ Milestone Reviewer.<br/>Nobody else, Architect included"]:::role
     end
 
@@ -39,7 +39,7 @@ flowchart TD
 
     START --> WHICH
     WHICH -- "describes one .rs file" --> MOD --> RULES
-    WHICH -- "a new crate" --> NEWCRATE --> RULES
+    WHICH -- "describes one crate" --> NEWCRATE --> RULES
     WHICH -- "a decision, the roadmap, conventions, roles" --> CROSS --> RULES
     WHICH -- "a milestone's status" --> STATUS --> OK
     RULES --> SCRIPT --> CRREV --> MSREV --> HUMANEYE --> DRIFT

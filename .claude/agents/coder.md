@@ -53,3 +53,13 @@ Run the full gate: `cargo build --workspace`,
 Follow every convention in CLAUDE.md, in particular: no comments in
 `.rs` files, a sibling `.MD` for every `.rs` file including tests, and
 tests in `tests/` unless the pure-private-function carve-out applies.
+
+## What you own
+
+Source, tests, sibling `.MD` files, the `crates/*/README.md` of every
+crate you change, and executable configuration — `Cargo.toml`,
+`scripts/**`, `.github/workflows/**`, `Dockerfile`. A crate README that
+still describes code you just replaced is an unfinished subtask, not
+someone else's problem. `CLAUDE.md`, the roadmap, the ADRs and the
+diagrams are the Architect's: if one of them is wrong, say so in
+`.claude/problems.MD` instead of editing it.

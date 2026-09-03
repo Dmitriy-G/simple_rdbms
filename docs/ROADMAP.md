@@ -18,7 +18,9 @@ and at most one sub-milestone across the whole roadmap carries it. On a
 parent milestone (`M10`) it means partly delivered — some of its
 sub-milestones or components have shipped and others have not — so
 several parents can carry it at once. A parent becomes ✅ Done only when
-everything under it is Done.
+everything under it is Done. One entry carries ⚰️ Retired: M11, kept as a
+tombstone because its number is referenced from the tree and milestone
+numbers are never recycled.
 
 ## M1 — Durable, fixed-size storage ✅ Done
 **Problem:** a database needs a way to persist bytes to disk in units the
@@ -185,6 +187,29 @@ which a snapshot-isolated database does not require.
 **Solution:** multi-version concurrency control so a reader sees a
 consistent snapshot without taking row locks, letting readers and writers
 stop blocking each other.
+
+## M11 — Joins and cost-based planning ⚰️ Retired, split into M24/M26/M27
+**What happened:** M11 once held "joins plus a cost model" as one
+milestone. It was split — `JOIN` syntax and the nested-loop executor
+became M24, single-table statistics and cost became M26, and join
+ordering became M27 — but the number was reused nowhere and the entry was
+deleted outright, leaving every `M11` reference in the tree pointing at
+nothing. Milestone numbers are permanent identifiers (see this file's
+introduction), so the entry comes back as a tombstone rather than the
+number being recycled.
+
+**Where its work went:**
+- `JOIN` syntax, a multi-table `FROM`, and `NestedLoopJoinExecutor` — M24.
+- Choosing among viable access paths by estimated cost, and dropping a
+  filter an equality index scan already satisfies — M26.
+- Ordering the relations in a multi-way join — M27.
+- Composite/multi-column index keys — M26's statistics work assumes them;
+  until then `// TODO(M11): composite key encoding` in
+  `crates/types/src/memcomparable.rs` is the marker.
+
+An `M11` in a `.MD` file or a `// TODO(M11):` marker means one of the
+above. Retarget each to its real milestone the next time the file it
+sits in is touched; do not resurrect this entry as live work.
 
 ## M12 — Surviving a torn page write ✅ Done
 **Problem:** even a single page write is not atomic at the hardware level —

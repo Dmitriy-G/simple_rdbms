@@ -5,10 +5,14 @@ format, buffer pool, B+tree, write-ahead log, SQL lexer/parser, planner,
 and Volcano-style executor. No `sqlparser`, no embedded storage engine, no
 async runtime — synchronous, single-node, and hand-written end to end.
 
-This is a learning project. `CREATE TABLE`/`INSERT`/`SELECT` work end to
-end — SQL text in, rows out, durable across a restart — but a database has
-no indexes yet, no crash recovery, and no concurrency: everything past a
-sequential scan under a single implicit transaction is still `todo!()`. See
+This is a learning project. `CREATE TABLE`/`CREATE INDEX`/`INSERT`/
+`SELECT` work end to end — SQL text in, rows out, durable across a
+restart — on top of a write-ahead log, ARIES-style crash recovery with
+fuzzy checkpointing, a double-write buffer against torn pages,
+`BEGIN`/`COMMIT`/`ROLLBACK`, and a B+tree index the optimizer picks over a
+sequential scan on its own. What is missing is most of SQL and all of
+concurrency: no `UPDATE`/`DELETE`, no joins, no constraints, no network
+protocol, and one statement at a time on a single engine thread. See
 `docs/ROADMAP.md` for the order the rest gets built in.
 
 ## Build & run
@@ -27,11 +31,20 @@ the prompt rather than ending the session; only `.exit` or EOF does that.
 
 ## Test & lint
 
+All five must pass on a clean checkout; CI runs the same five on every
+PR:
+
 ```sh
+cargo build --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
+bash scripts/check_docs.sh
 cargo test --workspace
 ```
+
+`check_docs.sh` enforces the sibling-`.MD` documentation rule described
+under [Docs](#docs). `CLAUDE.md` is the single source for this list — if
+the two disagree, `CLAUDE.md` is right.
 
 ## Crate map
 
@@ -40,7 +53,7 @@ cargo test --workspace
 | [`common`](crates/common/README.md) | Shared error type, `Result` alias, newtype ids, top-level config. |
 | [`types`](crates/types/README.md) | `DataType`/`Value`, null handling, comparison, tuple encode/decode. |
 | [`storage`](crates/storage/README.md) | Disk manager, buffer pool, slotted-page heap files, B+tree, WAL. |
-| [`catalog`](crates/catalog/README.md) | Table/column metadata, in-memory for now. |
+| [`catalog`](crates/catalog/README.md) | Table/column/index metadata, persisted in its own heap files. |
 | [`sql`](crates/sql/README.md) | Hand-written lexer and recursive-descent parser, AST types. |
 | [`txn`](crates/txn/README.md) | Transaction lifecycle, lock manager, isolation levels, MVCC types. |
 | [`planner`](crates/planner/README.md) | Binder, logical/physical plans, optimizer rule trait. |
@@ -48,6 +61,7 @@ cargo test --workspace
 | [`engine`](crates/engine/README.md) | `Database` facade: wires every layer together behind `execute(sql)`. |
 | [`cli`](crates/cli/README.md) | The interactive binary: a REPL over `engine`. |
 | [`server`](crates/server/README.md) | The headless binary: metrics, health/readiness, and graceful shutdown for a container. |
+| [`test-support`](crates/test-support/README.md) | Fixtures shared by the `tests/` suites. A dev-dependency only — never in a shipped binary. |
 
 See [`docs/diagrams/`](docs/diagrams/README.md) for the dependency graph
 and the agent-flow diagrams, and
