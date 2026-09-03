@@ -9,8 +9,11 @@ flowchart TD
 
     classDef gate fill:#f2dede,stroke:#a94442,color:#000
 
-    START(["Coder stopped after a subtask.<br/>It stands at 👀 Review.<br/>Working tree uncommitted"]):::human
+    START(["Human asks for a review"]):::human
     CR["Code Reviewer — diff-level scope,<br/>one subtask's worth of change"]:::role
+    FIND{"Any subtask at 👀 Review<br/>in .claude/task.md?"}
+    NONE["Nothing to review. Say so and stop —<br/>do not review the tree anyway, and do not<br/>guess from what looks recently touched"]:::stop
+    LOCATE["Find that subtask's code:<br/>uncommitted (git status/diff) normally,<br/>or commits after the last ✅ Done subtask<br/>if the work was committed early"]
 
     C1["1. .claude/task.md:<br/>does the code do what the subtask said,<br/>including its 'how to test it'?"]
     C2["2. CLAUDE.md invariants first:<br/>log before page, latch ordering,<br/>one write guard per page per thread,<br/>all-zero pages valid, page-0 header logged,<br/>errors logged once at the engine boundary"]
@@ -31,7 +34,9 @@ flowchart TD
     NEXTSUB(["Coder takes the next subtask"]):::stop
     MSREVIEW(["Milestone Reviewer<br/>— see agent-flow-milestone-review.mmd"]):::stop
 
-    START --> CR --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> FOUND
+    START --> CR --> FIND
+    FIND -- no --> NONE
+    FIND -- yes --> LOCATE --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> FOUND
     FOUND -- yes --> BUGS --> BACKTO --> BACK
     FOUND -- no --> SETDONE --> OK --> HUMAN --> MORE
     MORE -- yes --> NEXTSUB

@@ -153,15 +153,19 @@ Role: <role name>
    Plan, each subtask starting at 🆕 New. Archives the finished
    `.claude/task.md` to `docs/tasks/` and sets 🚧 In Progress in
    `docs/ROADMAP.md` when it writes a milestone's first task.
-4. **Code Reviewer** — asked to do a code review of one subtask's
-   change. Check the code against general conventions for the tech stack
-   and against this file's project-specific rules, and confirm it
-   actually implements what `.claude/task.md` described. Record anything
-   wrong in `.claude/problems.md` using the problem format below —
-   signed `Created by: Code Reviewer`, with concrete instructions on how
-   to fix it and how to prevent it recurring. It is the only role that
-   sets a subtask ✅ Done, and it does so only when the review passes;
-   a failed review goes back to 🚧 In Progress with the findings filed.
+4. **Code Reviewer** — asked simply to review, and works out the rest:
+   find the subtask standing at 👀 Review in `.claude/task.md`, find that
+   subtask's code (uncommitted in the working tree, or committed after
+   the last ✅ Done subtask), and review it. If no subtask is at 👀
+   Review there is nothing to review — say so rather than picking
+   something. Check the code against general conventions for the tech
+   stack and against this file's project-specific rules, and confirm it
+   actually implements what the subtask described. Passing sets that
+   subtask ✅ Done — it is the only role that may. Failing sets it back
+   to 🚧 In Progress and records each finding in `.claude/problems.md`
+   using the problem format below, signed `Created by: Code Reviewer`,
+   with concrete instructions on how to fix it and how to prevent it
+   recurring.
 5. **Milestone Reviewer** — asked to review a finished milestone as a
    whole against its `docs/ROADMAP.md` entry, once every subtask has
    passed code review: the milestone's Done-when, cross-cutting
