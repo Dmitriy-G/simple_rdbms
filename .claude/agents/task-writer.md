@@ -97,6 +97,17 @@ Order subtasks so each one is independently completable and reviewable.
 A subtask that cannot be finished without a later one is two subtasks in
 the wrong order.
 
+**Grep every identifier you write into the file.** A subtask that names a
+function, field or type must name one that exists and does what the
+subtask claims. This is not pedantry: a spec once said "delete `waiters`"
+and, two lines later, "keep `expire_waiters`' idle-in-transaction
+timeout" — two different functions, one of which takes the deleted deque
+as its only argument, and neither of which was the idle timeout. The
+instruction could not be carried out, and the obvious way to make it
+compile would have defeated the subtask. Check also that what you say a
+function *does* survives the change: a function kept by name may still
+need rewriting if the subtask removes the state it reads.
+
 ## Archiving
 
 Before writing a new `.claude/task.md`, move the previous one to
