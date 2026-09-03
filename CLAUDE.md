@@ -222,7 +222,8 @@ it changed asks through a channel above.
 | `docs/ROADMAP.md` — entry prose | Architect | Including retiring or splitting an entry. |
 | `docs/ROADMAP.md` — status markers | Task writer sets 🚧, Milestone Reviewer sets ✅ | Nobody else, Architect included. This is the gate that makes "Done" mean something. |
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
-| `docs/tasks/**` | Task writer | Archived task specs, written once and then history. |
+| `docs/tasks/*.md` — archived specs | Task writer | Written once when a task is archived, and history from then on. |
+| `docs/tasks/README.md` | Architect | Not an archived spec: it explains what the archive is for, which is process prose and goes stale like any other. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
 | `.claude/task.md` | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. The Coder writes subtask `Status:` lines and nothing else in it. |
 | `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows the signature: the Task writer deletes what it schedules and never an Architect entry, the Architect deletes its own. |
