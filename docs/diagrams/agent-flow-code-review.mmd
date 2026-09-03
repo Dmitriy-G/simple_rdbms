@@ -15,12 +15,12 @@ flowchart TD
     NONE["Nothing to review. Say so and stop —<br/>do not review the tree anyway, and do not<br/>guess from what looks recently touched"]:::stop
     LOCATE["Find that subtask's code:<br/>uncommitted (git status/diff) normally,<br/>or commits after the last ✅ Done subtask<br/>if the work was committed early"]
 
-    C1["1. .claude/task.md:<br/>does the code do what the subtask said,<br/>including its 'how to test it'?"]
-    C2["2. CLAUDE.md invariants first:<br/>log before page, latch ordering,<br/>one write guard per page per thread,<br/>all-zero pages valid, page-0 header logged,<br/>errors logged once at the engine boundary"]
-    C3["3. CLAUDE.md conventions:<br/>sibling .MD per .rs, no comments in .rs,<br/>no allow or expect attributes in source,<br/>dependency edges, logging levels,<br/>no user data above DEBUG"]
-    C4["4. Tests, read as carefully as the code:<br/>would this test pass without the change?<br/>deterministic? in tests/ unless the<br/>pure-private-function carve-out applies?"]
-    C5["5. General Rust practice for this stack"]
-    C6["6. Was the full gate actually run?"]
+    C1["1. Is it FINISHED?<br/>every part of the subtask, not the easy parts.<br/>A dropped bullet, a todo! left where the work<br/>should be, an edge case the subtask named<br/>and the code ignores"]
+    C2["2. Is it CORRECT?<br/>CLAUDE.md invariants first: log before page,<br/>latch ordering, one write guard per page<br/>per thread, all-zero pages valid, page-0<br/>header logged, errors logged once"]
+    C3["3. Is it the RIGHT SOLUTION?<br/>wrong layer, machinery the tree already has,<br/>an abstraction that blocks the next milestone,<br/>a special case where the general one was<br/>cheaper. CI can never ask this"]
+    C4["4. Is it WELL MADE?<br/>CLAUDE.md conventions, Rust practice,<br/>naming, error handling, logging levels,<br/>no user data above DEBUG,<br/>no comments in .rs"]
+    C5["All four asked of the DOCUMENTATION too:<br/>does each .MD still describe its .rs?<br/>Usage Example still valid? Did the change<br/>falsify a crate README or CLAUDE.md?<br/>check_docs.sh has the mechanical half"]
+    C6["NOT yours: tests, and whether the gate<br/>was run. Both are the Coder's and both<br/>are automated — CI reports them louder<br/>and sooner than you could"]:::stop
 
     FOUND{"Any finding?"}
     BACKTO["Set the subtask back to 🚧 In Progress.<br/>The same subtask gets finished, rather than<br/>its defects becoming new work"]
@@ -36,7 +36,8 @@ flowchart TD
 
     START --> CR --> FIND
     FIND -- no --> NONE
-    FIND -- yes --> LOCATE --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> FOUND
+    FIND -- yes --> LOCATE --> C1 --> C2 --> C3 --> C4 --> C5 --> FOUND
+    C5 -.-> C6
     FOUND -- yes --> BUGS --> BACKTO --> BACK
     FOUND -- no --> SETDONE --> OK --> HUMAN --> MORE
     MORE -- yes --> NEXTSUB

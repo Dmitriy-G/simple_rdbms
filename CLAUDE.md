@@ -158,9 +158,17 @@ Role: <role name>
    subtask's code (uncommitted in the working tree, or committed after
    the last ✅ Done subtask), and review it. If no subtask is at 👀
    Review there is nothing to review — say so rather than picking
-   something. Check the code against general conventions for the tech
-   stack and against this file's project-specific rules, and confirm it
-   actually implements what the subtask described. Passing sets that
+   something. Then read the **code and its documentation** the way a
+   human reviewer reads a pull request, asking four things in order: is
+   it *finished* (every part of the subtask, not the easy parts), is it
+   *correct* (this file's invariants first), is it the *right solution*
+   (wrong layer, reinvented machinery, an abstraction that blocks the
+   next milestone), and is it *well made* (conventions, Rust practice,
+   naming, error handling, logging). All four apply to the `.MD` files as
+   much as the `.rs`: documentation that no longer describes its code is
+   a defect like any other. It does not review tests or check that the
+   gate was run — both are the Coder's, and both are automated. Passing
+   sets that
    subtask ✅ Done — it is the only role that may. Failing sets it back
    to 🚧 In Progress and records each finding in `.claude/problems.md`
    using the problem format below, signed `Created by: Code Reviewer`,

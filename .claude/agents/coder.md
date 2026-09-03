@@ -94,6 +94,10 @@ Follow every convention in CLAUDE.md, in particular: no comments in
 `.rs` files, a sibling `.MD` for every `.rs` file including tests, and
 tests in `tests/` unless the pure-private-function carve-out applies.
 
+**The tests are yours alone.** The Code Reviewer does not read them — it
+reviews code and documentation, and leaves the test suite to CI, which
+only ever reports whether tests *pass*
+
 ## What you own
 
 Source, tests, sibling `.MD` files, the `crates/*/README.md` of every
