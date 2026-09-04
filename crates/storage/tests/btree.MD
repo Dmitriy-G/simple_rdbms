@@ -109,27 +109,53 @@ isolation, independent of that higher-layer wiring, which
   the buffer pool's per-frame `RwLock`), calls `get` on one baseline key
   per iteration and asserts it returns exactly that key's original `Rid`,
   and every 20th iteration also runs a full `range_scan` and asserts every
-  baseline key is present in it with its correct `Rid` - the property
-  M10.2 subtask 2 actually asks for ("every read returns either the
-  pre-insert or post-insert value and never an error or a missing key"),
-  not a stronger duplicate-free guarantee that P-6 found `range_scan`
-  does not have across a concurrent leaf-boundary crossing. Ends by
-  joining every reader (any
-  `Err` fails the test with the exact key and mismatch) and running
-  `check_invariants` on the writer's own final tree. Timing-dependent like
-  `crates/storage/tests/buffer_pool_concurrency.rs`'s races: it exercises
-  the crabbing fix under real thread scheduling rather than deterministically
-  forcing the exact interleaving, so a clean run is evidence, not proof -
-  see that file's `.MD` for the same caveat.
+  baseline key is present in it with its correct `Rid`, *and* that the
+  whole scan comes back strictly ascending by `(key, rid)` end to end -
+  no duplicate, no out-of-order pair. That second half used to be a
+  weaker check ("every read returns either the pre-insert or post-insert
+  value and never an error or a missing key") because P-6 found
+  `range_scan` re-delivering an already-yielded entry across a concurrent
+  leaf-boundary crossing; `scan_leaf`'s resume-by-sort-key fix
+  (`btree.MD`'s `scan_leaf`/`LeafScan` entries) is what makes the
+  stronger, duplicate-free assertion hold now. Ends by joining every
+  reader (any `Err` fails the test with the exact key and mismatch) and
+  running `check_invariants` on the writer's own final tree.
+  Timing-dependent like `crates/storage/tests/buffer_pool_concurrency.rs`'s
+  races: it exercises the crabbing and resume fixes under real thread
+  scheduling rather than deterministically forcing the exact
+  interleaving, so a clean run is evidence, not proof - see that file's
+  `.MD` for the same caveat.
+- `DUP_GET_BASELINE_KEYS` / `DUP_GET_INITIAL_DUPLICATES` /
+  `DUP_GET_READER_THREADS` / `DUP_GET_READER_ITERATIONS` /
+  `DUP_GET_WRITER_DUPLICATES` - sizing constants for the test below: 200
+  distinct keys plus 40 duplicates of one key inserted single-threaded
+  (enough to already span a leaf split, matching
+  `duplicate_keys_spanning_a_split_are_all_returned_by_get`'s magnitude),
+  4 reader threads running 400 iterations each while the main thread
+  inserts 3,000 more duplicates of that same key.
+- `get_on_a_duplicated_key_never_returns_a_rid_twice_while_its_own_run_keeps_splitting` -
+  the regression test for `get`'s own sibling-crossing fix (`btree.MD`'s
+  "Latch crabbing during descent"): grows one key's duplicate run
+  concurrently with reader threads repeatedly calling `get` on that exact
+  key and asserting the returned `Rid`s are never repeated (sorted, then
+  `Vec::dedup`'d, and compared by length) - the property latch-coupling
+  `get`'s leaf crossing restores. Deliberately targets the key's *own*
+  chain rather than a neighboring key's, since growing a neighbor's run
+  heavily enough to reliably force splits near this key surfaced a
+  separate, deeper bug in `insert`'s multi-level split cascade - filed
+  rather than fixed here (P-18). Ends with `check_invariants` on the
+  writer's own final tree. Same timing-dependent caveat as the test
+  above.
 - `scan_leaf_and_leaf_for_start_cross_a_leaf_boundary_like_range_scan_does` -
   drives `leaf_for_start`/`scan_leaf` by hand, the same way
-  `executor::IndexScanExecutor` must (owned `(PageId, u16)` cursor state,
-  no live `BTreeIndex` held across calls), over the same 3,000-key tree
-  `range_scan_yields_keys_in_order_across_leaf_boundaries` uses: asserts
-  the manually-driven walk crosses at least one `LeafScan::EndOfLeaf`
-  boundary, yields the same 3,000 keys in the same ascending order
-  `range_scan` does, and that `leaf_for_start(Some(key))` lands exactly on
-  that key's slot.
+  `executor::IndexScanExecutor` must (owned `(PageId, Option<Vec<u8>>)`
+  cursor state, no live `BTreeIndex` held across calls), over the same
+  3,000-key tree `range_scan_yields_keys_in_order_across_leaf_boundaries`
+  uses: asserts the manually-driven walk crosses at least one
+  `LeafScan::EndOfLeaf` boundary, yields the same 3,000 keys in the same
+  ascending order `range_scan` does, and that `scan_leaf` called with
+  `leaf_for_start(Some(key))`'s leaf and `Some(key)` as `after` lands
+  exactly on that key.
 
 ## Usage Example
 

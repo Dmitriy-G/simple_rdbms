@@ -16,7 +16,7 @@ pub struct IndexScanExecutor {
     column_types: Vec<DataType>,
     table_first_page_id: Option<PageId>,
     current_leaf: Option<PageId>,
-    next_slot: u16,
+    next_after: Option<Vec<u8>>,
 }
 
 impl IndexScanExecutor {
@@ -34,7 +34,7 @@ impl IndexScanExecutor {
             column_types: Vec::new(),
             table_first_page_id: None,
             current_leaf: None,
-            next_slot: 0,
+            next_after: None,
         }
     }
 }
@@ -48,9 +48,9 @@ impl Executor for IndexScanExecutor {
 
         let root_page_id = ctx.catalog.index_root_page(self.index_id)?;
         let index = BTreeIndex::open(ctx.buffer_pool, root_page_id);
-        let (leaf, slot) = index.leaf_for_start(self.start.as_deref())?;
+        let leaf = index.leaf_for_start(self.start.as_deref())?;
         self.current_leaf = Some(leaf);
-        self.next_slot = slot;
+        self.next_after = self.start.clone();
         Ok(())
     }
 
@@ -61,9 +61,9 @@ impl Executor for IndexScanExecutor {
         let heap = TableHeap::open(ctx.buffer_pool, table_first_page_id);
 
         while let Some(leaf) = self.current_leaf {
-            match BTreeIndex::scan_leaf(ctx.buffer_pool, leaf, self.next_slot)? {
-                LeafScan::Entry { slot, key, rid } => {
-                    self.next_slot = slot + 1;
+            match BTreeIndex::scan_leaf(ctx.buffer_pool, leaf, self.next_after.as_deref())? {
+                LeafScan::Entry { key, sort_key, rid, .. } => {
+                    self.next_after = Some(sort_key);
                     if self.end.as_ref().is_some_and(|end| key.as_slice() >= end.as_slice()) {
                         self.current_leaf = None;
                         return Ok(None);
@@ -80,7 +80,6 @@ impl Executor for IndexScanExecutor {
                 }
                 LeafScan::EndOfLeaf { next_leaf_page_id } => {
                     self.current_leaf = next_leaf_page_id;
-                    self.next_slot = 0;
                 }
             }
         }

@@ -488,33 +488,42 @@ impl<'pool> BTreeIndex<'pool> {
         }
     }
 
-    pub fn leaf_for_start(&self, start: Option<&[u8]>) -> Result<(PageId, u16), StorageError> {
+    pub fn leaf_for_start(&self, start: Option<&[u8]>) -> Result<PageId, StorageError> {
         match start {
             Some(key) => {
                 let (leaf, _path) = self.descend_to_leaf(key)?;
-                let guard = self.buffer_pool.fetch_page_read(leaf)?;
-                let slot = lower_bound_leaf(guard.page().data(), key, leaf)?;
-                Ok((leaf, slot))
+                Ok(leaf)
             }
-            None => Ok((self.leftmost_leaf()?, 0)),
+            None => self.leftmost_leaf(),
         }
     }
 
     pub fn scan_leaf(
         buffer_pool: &BufferPool,
         leaf_page_id: PageId,
-        from_slot: u16,
+        after: Option<&[u8]>,
     ) -> Result<LeafScan, StorageError> {
         let guard = buffer_pool.fetch_page_read(leaf_page_id)?;
         let bytes = guard.page().data();
         let count = checked_slot_count(bytes, leaf_page_id)?;
-        if from_slot >= count {
+        let mut slot = match after {
+            Some(sort_key) => lower_bound_leaf(bytes, sort_key, leaf_page_id)?,
+            None => 0,
+        };
+        if let Some(sort_key) = after {
+            if slot < count && leaf_sort_key(entry_payload(bytes, slot, leaf_page_id)?) == sort_key
+            {
+                slot += 1;
+            }
+        }
+        if slot >= count {
             return Ok(LeafScan::EndOfLeaf { next_leaf_page_id: tail_raw(bytes) });
         }
-        let payload = entry_payload(bytes, from_slot, leaf_page_id)?;
+        let payload = entry_payload(bytes, slot, leaf_page_id)?;
         Ok(LeafScan::Entry {
-            slot: from_slot,
+            slot,
             key: entry_key(payload).to_vec(),
+            sort_key: leaf_sort_key(payload).to_vec(),
             rid: leaf_rid(payload),
         })
     }
@@ -779,13 +788,13 @@ struct InvariantState {
 }
 
 pub enum LeafScan {
-    Entry { slot: u16, key: Vec<u8>, rid: Rid },
+    Entry { slot: u16, key: Vec<u8>, sort_key: Vec<u8>, rid: Rid },
     EndOfLeaf { next_leaf_page_id: Option<PageId> },
 }
 
 enum RangeState {
     NotStarted { start: Option<Vec<u8>> },
-    InLeaf { page_id: PageId, slot: u16 },
+    InLeaf { page_id: PageId, after: Option<Vec<u8>> },
     Done,
 }
 
@@ -803,18 +812,23 @@ impl Iterator for BTreeRangeIterator<'_, '_> {
             match &self.state {
                 RangeState::Done => return None,
                 RangeState::NotStarted { start } => {
-                    let (page_id, slot) = match self.index.leaf_for_start(start.as_deref()) {
-                        Ok(location) => location,
+                    let page_id = match self.index.leaf_for_start(start.as_deref()) {
+                        Ok(page_id) => page_id,
                         Err(err) => {
                             self.state = RangeState::Done;
                             return Some(Err(err));
                         }
                     };
-                    self.state = RangeState::InLeaf { page_id, slot };
+                    self.state = RangeState::InLeaf { page_id, after: start.clone() };
                 }
-                RangeState::InLeaf { page_id, slot } => {
-                    let (page_id, slot) = (*page_id, *slot);
-                    let scan = match BTreeIndex::scan_leaf(self.index.buffer_pool, page_id, slot) {
+                RangeState::InLeaf { page_id, after } => {
+                    let page_id = *page_id;
+                    let after = after.clone();
+                    let scan = match BTreeIndex::scan_leaf(
+                        self.index.buffer_pool,
+                        page_id,
+                        after.as_deref(),
+                    ) {
                         Ok(scan) => scan,
                         Err(err) => {
                             self.state = RangeState::Done;
@@ -824,17 +838,17 @@ impl Iterator for BTreeRangeIterator<'_, '_> {
                     match scan {
                         LeafScan::EndOfLeaf { next_leaf_page_id } => {
                             self.state = match next_leaf_page_id {
-                                Some(next) => RangeState::InLeaf { page_id: next, slot: 0 },
+                                Some(next) => RangeState::InLeaf { page_id: next, after },
                                 None => RangeState::Done,
                             };
                         }
-                        LeafScan::Entry { slot, key, rid } => {
+                        LeafScan::Entry { key, sort_key, rid, .. } => {
                             if self.end.as_ref().is_some_and(|end| key.as_slice() >= end.as_slice())
                             {
                                 self.state = RangeState::Done;
                                 return None;
                             }
-                            self.state = RangeState::InLeaf { page_id, slot: slot + 1 };
+                            self.state = RangeState::InLeaf { page_id, after: Some(sort_key) };
                             return Some(Ok((key, rid)));
                         }
                     }

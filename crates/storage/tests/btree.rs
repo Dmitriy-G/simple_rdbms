@@ -255,20 +255,19 @@ fn scan_leaf_and_leaf_for_start_cross_a_leaf_boundary_like_range_scan_does()
         index.insert(TXN, &key_of(i), Rid::new(PageId(1), 0))?;
     }
 
-    let (mut page_id, mut slot) = index.leaf_for_start(None)?;
+    let mut page_id = index.leaf_for_start(None)?;
+    let mut after: Option<Vec<u8>> = None;
     let mut collected = Vec::new();
     let mut crossed_a_leaf_boundary = false;
     loop {
-        match BTreeIndex::scan_leaf(&pool, page_id, slot)? {
-            LeafScan::Entry { slot: found_slot, key, rid } => {
-                assert_eq!(found_slot, slot, "scan_leaf must report back the slot it read");
+        match BTreeIndex::scan_leaf(&pool, page_id, after.as_deref())? {
+            LeafScan::Entry { key, sort_key, rid, .. } => {
                 collected.push((key, rid));
-                slot += 1;
+                after = Some(sort_key);
             }
             LeafScan::EndOfLeaf { next_leaf_page_id: Some(next) } => {
                 crossed_a_leaf_boundary = true;
                 page_id = next;
-                slot = 0;
             }
             LeafScan::EndOfLeaf { next_leaf_page_id: None } => break,
         }
@@ -280,8 +279,9 @@ fn scan_leaf_and_leaf_for_start_cross_a_leaf_boundary_like_range_scan_does()
         assert!(w[0].0 < w[1].0, "scan_leaf must yield keys in ascending order");
     }
 
-    let (start_page, start_slot) = index.leaf_for_start(Some(&key_of(100)))?;
-    let LeafScan::Entry { key, .. } = BTreeIndex::scan_leaf(&pool, start_page, start_slot)? else {
+    let start_page = index.leaf_for_start(Some(&key_of(100)))?;
+    let LeafScan::Entry { key, .. } = BTreeIndex::scan_leaf(&pool, start_page, Some(&key_of(100)))?
+    else {
         panic!("leaf_for_start(Some(key_of(100))) must land on a present entry");
     };
     assert_eq!(key, key_of(100), "leaf_for_start must land exactly on the requested key");
@@ -386,6 +386,16 @@ fn concurrent_readers_see_a_consistent_view_while_a_writer_forces_repeated_split
                         let scanned: Result<Vec<(Vec<u8>, Rid)>, StorageError> =
                             reader.range_scan(None, None).collect();
                         let scanned = scanned.map_err(|e| e.to_string())?;
+                        for w in scanned.windows(2) {
+                            if w[0] >= w[1] {
+                                return Err(format!(
+                                    "range_scan yielded {:?} immediately followed by {:?} - a \
+                                     concurrent leaf split must never make it re-deliver or \
+                                     reorder an entry it already yielded",
+                                    w[0], w[1]
+                                ));
+                            }
+                        }
                         let mut seen: std::collections::HashMap<Vec<u8>, Rid> =
                             std::collections::HashMap::with_capacity(scanned.len());
                         for (key, rid) in scanned {

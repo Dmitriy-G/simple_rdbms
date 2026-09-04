@@ -111,6 +111,10 @@ into `results`. `range_scan`/`scan_leaf`'s own crossing
 separate, uncoupled fetch: their caller yields a row back between one
 leaf-crossing call and the next, so no latch can be held across that
 gap, and latch-coupling cannot close it the way it closes `get`'s.
+Instead, `scan_leaf` resumes by comparing against the last entry's own
+sort key rather than trusting a remembered slot - see `scan_leaf`'s
+"Key Components" entry below for why that closes the same class of bug
+without needing a latch held across the gap at all.
 
 ## Splitting
 
@@ -362,22 +366,55 @@ the same as every other page nothing in this codebase frees yet.
   design; the signature itself will also gain an `rid: Rid` parameter
   once M15 implements it, to locate the exact duplicate entry by its full
   sort key rather than removing an arbitrary one sharing `key`.
-  `leaf_for_start(&self, start) -> Result<(PageId, u16),
-  StorageError>` and the associated function `scan_leaf(buffer_pool,
-  leaf_page_id, from_slot) -> Result<LeafScan, StorageError>` are the
-  primitives `BTreeRangeIterator` is itself built on (below) and exist as
-  their own public API for `executor::IndexScanExecutor`
-  (`executor::operators::index_scan.MD`), which cannot hold a
-  `BTreeRangeIterator` (or any `BTreeIndex`) across its `Executor::next`
-  calls - the `Executor` trait reborrows its `ExecutorContext` fresh every
-  call, so nothing borrowed from it may live in executor struct fields.
-  `leaf_for_start` does the one-time, `&self`-borrowing work of locating a
-  starting leaf and slot (cheap to call once, in `IndexScanExecutor::init`,
-  then drop); `scan_leaf` is deliberately an associated function, not a
-  method, taking `buffer_pool: &BufferPool` directly rather than `&self` -
-  exactly `heap::TableHeap::scan_page`'s shape - so a caller can drive it
-  from owned `(PageId, u16)` cursor state across repeated calls without
-  ever holding a `BTreeIndex` alive between them. `check_invariants(&self,
+  `leaf_for_start(&self, start) -> Result<PageId, StorageError>` and the
+  associated function `scan_leaf(buffer_pool, leaf_page_id, after) ->
+  Result<LeafScan, StorageError>` are the primitives `BTreeRangeIterator`
+  is itself built on (below) and exist as their own public API for
+  `executor::IndexScanExecutor` (`executor::operators::index_scan.MD`),
+  which cannot hold a `BTreeRangeIterator` (or any `BTreeIndex`) across
+  its `Executor::next` calls - the `Executor` trait reborrows its
+  `ExecutorContext` fresh every call, so nothing borrowed from it may
+  live in executor struct fields. `leaf_for_start` does the one-time,
+  `&self`-borrowing work of locating a starting leaf (cheap to call once,
+  in `IndexScanExecutor::init`, then drop) - just the leaf, no slot: it
+  used to also compute a starting slot via `lower_bound_leaf`, but that
+  position is now `scan_leaf`'s own job, computed fresh from `after` on
+  every call rather than trusted from an earlier snapshot. `scan_leaf` is
+  deliberately an associated function, not a method, taking
+  `buffer_pool: &BufferPool` directly rather than `&self` - exactly
+  `heap::TableHeap::scan_page`'s shape - so a caller can drive it from
+  owned `(PageId, Option<Vec<u8>>)` cursor state across repeated calls
+  without ever holding a `BTreeIndex` alive between them. `after` is
+  `None` for the very first call on a fresh, unbounded scan, or the bare
+  probe key for a bounded `start` (`BTreeRangeIterator`/
+  `IndexScanExecutor` pass their own `start` straight through as the
+  first call's `after`, which is why `leaf_for_start` no longer needs to
+  compute a position itself); every call after the first passes the full
+  `leaf_sort_key` of the last entry the caller actually yielded.
+  `scan_leaf` finds the first entry whose `leaf_sort_key` is *strictly
+  greater* than `after` (`lower_bound_leaf`, skipping one slot forward on
+  an exact match - which only happens when `after` is itself a full sort
+  key from a previous entry, never for a bare probe key, since a bare key
+  can never equal a stored sort key - see "Ordering" below), rather than
+  trusting a raw slot index a concurrent split could have invalidated.
+  This is what makes crossing from one leaf to the next safe even though
+  no latch is held across the caller's yield (`BTreeRangeIterator::next`
+  returns between leaves, and `IndexScanExecutor::next` returns between
+  every row): wherever the next matching entry physically ends up - the
+  same leaf, a leaf it split into, or a leaf several splits further along
+  - comparing against the last entry's own sort key finds it exactly
+  once, never by re-trusting a position that may no longer mean what it
+  meant when it was recorded. Latch-coupling (the fix `get`'s sibling
+  crossing uses, see "Latch crabbing during descent" above) cannot do
+  this job here, because it only helps a caller that never lets go of a
+  guard across the race window - `BTreeRangeIterator`/`IndexScanExecutor`
+  always do, by design: `executor::IndexScanExecutor` cannot hold a page
+  guard across a yielded row at all, since the `Executor` trait reborrows
+  its `ExecutorContext` fresh on every call (`executor::operators::index_scan.MD`),
+  and `BTreeRangeIterator` gives up its guard between `next()` calls for
+  the same reason `scan_leaf` is a free function rather than a method -
+  so neither can be "the caller that never lets go" latch-coupling
+  needs. `check_invariants(&self,
   key_type: Option<types::DataType>) -> Result<(), String>` walks the
   whole tree from the root and checks, in order: every leaf is
   at the same depth; keys within a node are strictly increasing bytewise -
@@ -393,22 +430,34 @@ the same as every other page nothing in this codebase frees yet.
   exactly the same leaves, in the same order, as a left-to-right tree
   walk does; and each node's `data_used` matches the sum of its own entry
   payload lengths, with no entry overlapping the slot array.
-- `LeafScan` - the result of `scan_leaf`: `Entry { slot, key, rid }` for a
-  present slot, or `EndOfLeaf { next_leaf_page_id }` once `from_slot`
-  reaches the leaf's slot count - mirroring `heap::PageScan` exactly, down
-  to the name of its "keep going" field.
+- `LeafScan` - the result of `scan_leaf`: `Entry { slot, key, sort_key,
+  rid }` for a present slot, or `EndOfLeaf { next_leaf_page_id }` once no
+  entry past `after` remains on the leaf - mirroring `heap::PageScan`
+  exactly, down to the name of its "keep going" field. `sort_key` is the
+  entry's full `leaf_sort_key` (key bytes plus the `Rid` trailer,
+  precomputed here so a caller resuming the scan never has to rebuild
+  that encoding itself); `slot` is the position `scan_leaf` actually
+  found the entry at on this call, informational only - a caller must
+  never carry it into a *later* call the way it used to, which is exactly
+  the bug this shape replaces.
 - `BTreeRangeIterator<'a, 'pool>` - the `range_scan` iterator. Lazily
-  resolves its starting leaf and slot on the first `next()` call rather
-  than in `range_scan` itself (`RangeState::NotStarted`, via
-  `leaf_for_start`), then drives `scan_leaf` one entry at a time
-  (`RangeState::InLeaf`), crossing into the next leaf on `EndOfLeaf` until
-  either the `end` bound is reached or the sibling chain runs out
-  (`RangeState::Done`). Everything this type does is now a thin wrapper
-  over `leaf_for_start`/`scan_leaf` - kept as its own type rather than
-  folded away because its `Iterator` contract (yielding `(Vec<u8>, Rid)`
-  pairs directly) is the more convenient shape for a caller like `get`'s
-  sibling-chain walk that *can* hold a live `BTreeIndex` borrow for the
-  duration of its use, unlike `executor::IndexScanExecutor`.
+  resolves its starting leaf on the first `next()` call rather than in
+  `range_scan` itself (`RangeState::NotStarted`, via `leaf_for_start`),
+  then drives `scan_leaf` one entry at a time (`RangeState::InLeaf { page_id,
+  after }`), crossing into the next leaf on `EndOfLeaf` until either the
+  `end` bound is reached or the sibling chain runs out (`RangeState::Done`).
+  `after` starts as `NotStarted`'s own `start` bound and, from the first
+  yielded entry onward, is always that entry's `sort_key` - carried
+  unchanged across an `EndOfLeaf` crossing into the next leaf, precisely
+  so a leaf that split between two `next()` calls can never cause an
+  already-yielded entry to be re-yielded from whichever physical page it
+  ended up on (see `scan_leaf`'s entry above). Everything this type does
+  is now a thin wrapper over `leaf_for_start`/`scan_leaf` - kept as its
+  own type rather than folded away because its `Iterator` contract
+  (yielding `(Vec<u8>, Rid)` pairs directly) is the more convenient shape
+  for a caller like `get`'s sibling-chain walk that *can* hold a live
+  `BTreeIndex` borrow for the duration of its use, unlike
+  `executor::IndexScanExecutor`.
 - `Node<'a, 'pool>` - private. Wraps a `&mut PageGuard` plus the `TxnId`
   writes should be logged under, and is where every mutating operation on
   a single node's bytes lives: `init` (used by `create`), `will_fit`,
