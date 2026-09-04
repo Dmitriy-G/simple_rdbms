@@ -16,8 +16,8 @@ database, and blocks waiting for a shutdown signal. Forcing both into one
 binary would mean those two loops fighting over what "the main loop"
 even means.
 
-There is no SQL wire protocol yet (that's `docs/ROADMAP.md`'s M14, which
-this crate is an explicit skeleton for) — today `server` opens a
+There is no SQL wire protocol yet (that's `docs/ROADMAP.md`'s M13.2,
+which this crate is an explicit skeleton for) — today `server` opens a
 `Database` purely so its metrics reflect a real, running engine and its
 readiness check reflects a real, completed recovery, not because anything
 external can submit it a statement yet.
@@ -61,7 +61,7 @@ query duration by statement kind — see `docs/ROADMAP.md`'s M13 entry),
 liveness, readiness, and graceful `SIGTERM`/`Ctrl-C` shutdown all work
 today. What doesn't: anything that lets an external client actually run a
 statement against the `Database` this binary opens — no wire protocol, no
-other network-facing route. That's M14, deliberately out of scope here.
+other network-facing route. That's M13.2, deliberately out of scope here.
 
 ## Dependencies
 

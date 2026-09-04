@@ -10,8 +10,8 @@ pipeline, against a real (tempfile-backed) database file.
   to its `.expect(...)` call - see `storage/tests/recovery_logging.MD` for
   why a free function in a `tests/` file needs the attribute spelled out
   explicitly.
-- `rows_of(result) -> (Vec<String>, Vec<Vec<Value>>)` - unwraps a
-  `ResultSet::Rows` into its columns and each row's values, panicking on
+- `rows_and_columns_of(result) -> (Vec<String>, Vec<Vec<Value>>)` - unwraps
+  a `ResultSet::Rows` into its columns and each row's values, panicking on
   `RowsAffected`.
 - `create_insert_and_select_star_preserves_insertion_order` - `CREATE
   TABLE`, a multi-row `INSERT`, and `SELECT *` come back in insertion
@@ -93,7 +93,7 @@ let dir = tempfile::tempdir().expect("create temp dir");
 let mut db = open(&dir);
 db.execute("CREATE TABLE t (a INTEGER, b INTEGER)").expect("create table");
 db.execute("INSERT INTO t VALUES (1, 10), (2, 20)").expect("insert");
-let (columns, rows) = rows_of(db.execute("SELECT * FROM t").expect("select"));
+let (columns, rows) = rows_and_columns_of(db.execute("SELECT * FROM t").expect("select"));
 ```
 
 Run as part of `cargo test --workspace`; each test drives `Database`

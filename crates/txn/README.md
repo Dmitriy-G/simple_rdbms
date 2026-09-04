@@ -52,10 +52,15 @@ a type, not yet wired into anything.
 
 `BEGIN`/`COMMIT`/`ROLLBACK` work today with real atomicity and durability,
 and checkpointing is wired into `engine::Database` on a byte-growth
-threshold. Isolation holds only trivially, because `engine::Database`
-executes one statement at a time on a single thread — there is no
-concurrent transaction for one transaction's uncommitted writes to be
-isolated *from* yet.
+threshold. Isolation is enforced by two-phase locking rather than by the
+absence of concurrency: `engine::Database` runs different sessions'
+statements concurrently on a worker pool (`docs/ROADMAP.md`'s M10.2), and
+every reader and writer holds its table/row locks until its transaction
+ends (see below), so one transaction's uncommitted writes are never
+visible to, or overwritten by, another. What 2PL alone does not give is a
+repeatable-read or snapshot guarantee - a transaction that reads the same
+row twice, releasing and reacquiring the lock in between, can still see it
+change - until MVCC (`docs/ROADMAP.md`'s M10.3) lands.
 
 `LockManager::lock`/`lock_table`/`release_all` are implemented, with
 deadlock detection (there is no `unlock` method - strict two-phase locking
