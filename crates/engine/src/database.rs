@@ -1,4 +1,6 @@
 use catalog::Schema;
+#[cfg(feature = "test-util")]
+use common::TxnId;
 use common::{DbConfig, Result};
 
 use crate::result_set::ResultSet;
@@ -70,6 +72,16 @@ impl Database {
     #[cfg(feature = "test-util")]
     pub fn stats(&self) -> Result<EngineStats> {
         self.session.stats()
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn current_txn_id(&self) -> Result<Option<TxnId>> {
+        self.session.current_txn_id()
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn lock_count_for_txn(&self, txn_id: TxnId) -> Result<usize> {
+        self.session.lock_count_for_txn(txn_id)
     }
 }
 

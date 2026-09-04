@@ -161,14 +161,21 @@ instead of failing loudly.
   the live catalog), `Checkpoint` (the engine-wide work `Database::close`
   needs), `BestEffortFlush` (the engine-wide work `Drop for Database`
   needs), `Disconnect` (no reply - fire-and-forget session teardown, sent
-  from `Drop for SessionHandle`), and `Shutdown` (`#[cfg(any(test,
-  feature = "test-util"))]` - stops the dispatch thread on request, for
+  from `Drop for SessionHandle`), and `Shutdown` (`#[cfg(feature =
+  "test-util")]` - stops the dispatch thread on request, for
   `a_dead_engine_thread_fails_every_session_with_a_fatal_error` in
-  `tests/sessions.MD`), and `Stats` (`#[cfg(any(test, feature =
-  "test-util"))]` - reads `EngineShared::stats()` back to the caller, for a
-  test to assert a behavioral invariant like "checkpoints don't multiply
-  with sessions" against a real counter instead of grepping captured log
-  text).
+  `tests/sessions.MD`), `Stats` (`#[cfg(feature = "test-util")]` - reads
+  `EngineShared::stats()` back to the caller, for a test to assert a
+  behavioral invariant like "checkpoints don't multiply with sessions"
+  against a real counter instead of grepping captured log text),
+  `CurrentTxnId` (`#[cfg(feature = "test-util")]` - reads this session's
+  own `TxnSlot::txn_id()` straight off the session table, handled inline
+  in `dispatch_message` rather than submitted to the worker pool, since a
+  `HashMap` lookup and a `try_lock`-free `recover_lock` never blocks on
+  anything client-controlled), and `LockCountForTxn` (`#[cfg(feature =
+  "test-util")]` - reads `EngineShared::lock_count_for(txn_id)`, for a
+  test to ask how many locks a specific, possibly already-finished
+  transaction still holds).
 - `engine_unavailable() -> common::Error` - private free function.
   Builds `Error::EngineUnavailable`; used everywhere a channel
   `send`/`recv` fails, which only happens if the dispatch thread has
@@ -226,8 +233,9 @@ instead of failing loudly.
   `EngineMessage` through `self.engine.send`, and block on the reply.
   `best_effort_flush(&self)` sends `BestEffortFlush` and waits for the
   reply, discarding whatever it gets - used only from `Drop for Database`.
-  `kill_engine_for_test(&self)`/`stats(&self) -> Result<EngineStats>` -
-  `#[cfg(any(test, feature = "test-util"))]`, test-only.
+  `kill_engine_for_test(&self)`/`stats(&self) -> Result<EngineStats>`/
+  `current_txn_id(&self) -> Result<Option<TxnId>>`/`lock_count_for_txn(&self,
+  txn_id) -> Result<usize>` - `#[cfg(feature = "test-util")]`, test-only.
 - `impl Drop for SessionHandle` - sends `Disconnect` for this session
   through `self.engine.send`, ignoring a failure. This is what actually
   removes the session's `SessionState` from the session table; without
@@ -255,7 +263,11 @@ instead of failing loudly.
   `Shutdown`. `Execute` goes through `dispatch_execute` rather than
   running inline, and `Disconnect` goes through the free function
   `disconnect` (below) rather than a bare `sessions.remove`, since it
-  still has an open transaction to abort if one exists.
+  still has an open transaction to abort if one exists. `CurrentTxnId`
+  and `LockCountForTxn` (both `#[cfg(feature = "test-util")]`) answer
+  inline too, for the same reason `TableNames`/`TableSchema` do: a
+  `HashMap`/lock-manager lookup can never block on anything a client
+  controls, so there is nothing a worker-pool job would buy here.
 - `tick(state, sessions)` - private free function, run once per
   `TICK_INTERVAL` with no message pending. Calls `expire_idle_transaction`;
   unlike the pre-M10.2 version there is no waiter queue left to expire or
@@ -325,8 +337,12 @@ instead of failing loudly.
 - `EngineShared::record_checkpoint_written(&self)` - locks `checkpoint`,
   increments `checkpoints_written` and
   `metrics::counter!("checkpoints_written_total")` together.
-  `stats(&self) -> EngineStats` - `#[cfg(any(test, feature =
-  "test-util"))]`. Copies the current counter.
+  `stats(&self) -> EngineStats` - `#[cfg(feature = "test-util")]`. Copies
+  the current counter. `lock_count_for(&self, txn_id) -> usize` -
+  `#[cfg(feature = "test-util")]`. Locks `txn_manager` just long enough to
+  call `txn::TransactionManager::lock_manager().held_lock_count(txn_id)` -
+  test-only introspection into how many locks a transaction (commonly one
+  a test already committed or aborted) still holds.
   `checkpoint_and_flush(&self) -> Result<()>` - the work `Database::close`
   needs: `write_checkpoint` (under a brief `txn_manager` lock),
   `record_checkpoint_written`, `flush_log_all`, `flush_all`, `sync`, in
@@ -419,13 +435,20 @@ instead of failing loudly.
   (`get_table_by_id`, `index_root_page`, `update_index_root_page`) only
   ever needed `&Catalog` in the first place.
 - `EngineShared::run(&self, physical, txn_id) -> Result<Vec<Tuple>>` -
-  clones the transaction out of `txn_manager` (a brief lock; `txn::Transaction`
-  is cheap `Clone` data with no ties back to the manager, so the clone is
-  the *only* borrow the executor ever needs - this is what keeps a
-  possibly-long-running scan from holding `txn_manager` for its whole
-  duration), then takes a `catalog` read lock spanning `ExecutorContext`
-  construction and the entire `init`/`next` loop, since `ExecutorContext`
-  borrows `&Catalog` for as long as the executor runs.
+  clones the transaction and an `Arc<txn::LockManager>` clone out of
+  `txn_manager` (a brief lock; `txn::Transaction` is cheap `Clone` data
+  with no ties back to the manager, and cloning the `Arc` is just a
+  refcount bump, so together they're the *only* borrow the executor ever
+  needs - this is what keeps a possibly-long-running scan from holding
+  `txn_manager` for its whole duration), then takes a `catalog` read lock
+  spanning `ExecutorContext` construction and the entire `init`/`next`
+  loop, since `ExecutorContext` borrows `&Catalog` for as long as the
+  executor runs. The same shared `LockManager` every transaction against
+  this database locks and unlocks through is what lets one session's
+  `SeqScanExecutor`/`IndexScanExecutor`/`InsertExecutor` (`executor`'s own
+  `seq_scan.MD`/`index_scan.MD`/`insert.MD`) block behind another
+  session's conflicting table or row lock, taken through the same
+  instance.
 - `new_connection_span(session_id) -> tracing::Span` - private free
   function. Creates an `info_span!("connection", conn_id)`, enters it just
   long enough to log `info!` "connection opened", then exits and returns

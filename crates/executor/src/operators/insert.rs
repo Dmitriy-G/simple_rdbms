@@ -2,6 +2,7 @@ use common::{IndexId, PageId, TableId};
 use planner::BoundExpr;
 use storage::btree::BTreeIndex;
 use storage::heap::TableHeap;
+use txn::LockMode;
 use types::{Encode, MemcomparableEncode, Tuple, Value};
 
 use crate::context::ExecutorContext;
@@ -31,6 +32,7 @@ impl InsertExecutor {
 impl Executor for InsertExecutor {
     fn init(&mut self, ctx: &mut ExecutorContext<'_>) -> Result<(), ExecutorError> {
         let table = ctx.catalog.get_table_by_id(self.table_id)?;
+        ctx.lock_manager.lock_table(ctx.txn.txn_id, self.table_id, LockMode::Exclusive)?;
         self.first_page_id = Some(table.first_page_id);
         Ok(())
     }
@@ -65,6 +67,7 @@ impl Executor for InsertExecutor {
             let mut bytes = Vec::new();
             tuple.encode(&mut bytes);
             let rid = heap.insert_tuple(ctx.txn.txn_id, &bytes)?;
+            ctx.lock_manager.lock(ctx.txn.txn_id, rid, LockMode::Exclusive)?;
 
             for target in &mut targets {
                 let value = &tuple.values()[target.column_index];

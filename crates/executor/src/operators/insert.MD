@@ -7,6 +7,17 @@ for `INSERT ... SELECT` in this grammar, so unlike the other operators
 this is a leaf: `rows` are literal value expressions from the `VALUES`
 clause, not pulled from a child executor.
 
+**Locking.** `init` takes `ctx.lock_manager.lock_table(ctx.txn.txn_id,
+table_id, LockMode::Exclusive)` before resolving `first_page_id`, and
+`next` takes `ctx.lock_manager.lock(ctx.txn.txn_id, rid,
+LockMode::Exclusive)` on each row's `Rid` immediately after
+`heap.insert_tuple` returns it, before any index maintenance for that row
+- see `txn::lock_manager.MD`. Locking a row this executor itself just
+inserted can never block (no other transaction can know its `Rid` yet),
+but it still registers the row in this transaction's held-lock set so
+`TransactionManager::release_all` (`txn::manager.MD`) accounts for it at
+commit or abort.
+
 **Index maintenance.** Before the row loop, `next` resolves
 `ctx.catalog.indexes_for_table(self.table_id)` once into a `Vec<IndexTarget>`
 (private: `index_id`, `column_index`, and a `root_page_id` seeded from

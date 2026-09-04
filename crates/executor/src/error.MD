@@ -15,13 +15,16 @@ Errors raised while executing a physical plan.
   expression). `Storage(#[from] storage::StorageError)` for an error
   surfaced by the storage layer while an operator read or wrote tuples.
   `Catalog(#[from] catalog::CatalogError)` for a catalog lookup failure,
-  e.g. a table id that no longer resolves.
+  e.g. a table id that no longer resolves. `Lock(#[from] txn::TxnError)`
+  for a failure acquiring a table or row lock (`context.MD`'s
+  `lock_manager`) - a deadlock victim or a lock request made after
+  `TransactionManager::release_all` already ran for this transaction.
 - `From<ExecutorError> for common::Error` - `Evaluation` becomes
   `DatatypeMismatch`, `CorruptTuple` becomes `DataCorrupted`,
   `NotSupported` becomes the identically-named `common::Error` variant,
-  and `Storage`/`Catalog` each delegate to their own crate's conversion -
-  so callers above `executor` (which speak `common::Result`) don't need
-  their own conversion.
+  and `Storage`/`Catalog`/`Lock` each delegate to their own crate's
+  conversion - so callers above `executor` (which speak `common::Result`)
+  don't need their own conversion.
 
 ## Usage Example
 

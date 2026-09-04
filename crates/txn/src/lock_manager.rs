@@ -106,6 +106,12 @@ impl LockManager {
         self.released.notify_all();
     }
 
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn held_lock_count(&self, txn_id: TxnId) -> usize {
+        let state = recover_lock(self.state.lock(), "LockManager.state");
+        state.held_by.get(&txn_id).map_or(0, HashSet::len)
+    }
+
     fn acquire(&self, txn_id: TxnId, resource: Resource, mode: LockMode) -> Result<(), TxnError> {
         let mut state = recover_lock(self.state.lock(), "LockManager.state");
         if state.finished.contains(&txn_id) {

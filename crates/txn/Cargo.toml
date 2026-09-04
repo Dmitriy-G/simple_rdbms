@@ -8,6 +8,12 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Exposes `LockManager::held_lock_count`, for a caller outside this crate's
+# own `#[cfg(test)]` binary (`engine`'s integration tests) to assert every
+# lock a transaction held was actually released.
+test-util = []
+
 [dependencies]
 common = { workspace = true }
 storage = { workspace = true }

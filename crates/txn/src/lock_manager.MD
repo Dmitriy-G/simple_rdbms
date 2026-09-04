@@ -4,20 +4,26 @@ Grants and releases locks under strict two-phase locking: every lock a
 transaction acquires stays held until that transaction ends, at which
 point every one of its locks releases atomically via `release_all` - no
 partial, mid-transaction unlock exists, since strict 2PL forbids one.
-`&self` throughout, not `&mut self`: a single `LockManager` is meant to be
-shared across every worker thread running a statement once M10.2's
-concurrent execution model lands, so it protects its own state with a
-`Mutex` and blocks waiters on a `Condvar` rather than requiring a caller
-to serialize access itself. Two independent resource spaces share one
+`&self` throughout, not `&mut self`: a single `LockManager` is shared
+across every worker thread running a statement against the same database
+(`docs/ROADMAP.md`'s M10.2), so it protects its own state with a `Mutex`
+and blocks waiters on a `Condvar` rather than requiring a caller to
+serialize access itself. Two independent resource spaces share one
 instance - row locks, keyed by `Rid`, and table locks, keyed by
 `TableId` - so a table-level lock and a row-level lock on a row inside
-that table are unrelated as far as this module is concerned; a later
-subtask makes the executor take both, in the right order.
+that table are unrelated as far as this module is concerned; the executor
+takes both, in that order (`executor::SeqScanExecutor`,
+`executor::IndexScanExecutor`, `executor::InsertExecutor`).
 
-Not yet wired into `TransactionManager` or `engine::Database`: this crate
-provides the type and its full contract ahead of the executor actually
-taking locks around row reads and writes, which a later M10.2 subtask
-does (`docs/ROADMAP.md`).
+`TransactionManager` owns one `LockManager` per database (`manager.MD`)
+and shares it, via `Arc`, with every `executor::ExecutorContext` built for
+a statement running against that database: `SeqScanExecutor` and
+`IndexScanExecutor` take a table-level `Shared` lock in `init` and a
+row-level `Shared` lock per tuple `next` returns, `InsertExecutor` takes a
+table-level `Exclusive` lock in `init` and a row-level `Exclusive` lock
+per row it writes, and `TransactionManager::commit`/`abort` both call
+`release_all` so every lock a transaction acquired releases the moment it
+ends.
 
 ## Key Components
 
@@ -53,6 +59,12 @@ does (`docs/ROADMAP.md`).
   wakes every thread blocked in `lock`/`lock_table`, which each recheck
   their own request against the new state rather than assuming they were
   the one released.
+- `LockManager::held_lock_count(&self, txn_id) -> usize` -
+  `#[cfg(any(test, feature = "test-util"))]`. The number of resources (row
+  and table locks combined) `txn_id` currently holds; `0` for a
+  transaction holding nothing or already released. Test-only
+  introspection, for asserting that `release_all` actually emptied a
+  transaction's lock set rather than inferring it indirectly.
 - `Resource` - private. `Row(Rid)` or `Table(TableId)`: the two kinds of
   thing a lock can be held on, unified so the wait-for graph walk in
   `would_deadlock` doesn't need to know which kind it's looking at.

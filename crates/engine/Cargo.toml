@@ -13,8 +13,11 @@ workspace = true
 # `tests/crash_injection.rs` to open a database against fault-injecting
 # `BlockDevice`s rather than real files. Same rationale as `storage`'s own
 # `test-util` feature: `#[cfg(test)]` alone doesn't apply when this crate's
-# integration tests link against a normal build of it.
-test-util = ["storage/test-util"]
+# integration tests link against a normal build of it. Also forwards
+# `txn`'s own `test-util`, which exposes `LockManager::held_lock_count`
+# for `tests/sessions.rs` to assert every lock a transaction held was
+# actually released.
+test-util = ["storage/test-util", "txn/test-util"]
 
 [dependencies]
 common = { workspace = true }

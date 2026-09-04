@@ -16,6 +16,9 @@ pub enum ExecutorError {
 
     #[error("catalog error: {0}")]
     Catalog(#[from] catalog::CatalogError),
+
+    #[error("lock error: {0}")]
+    Lock(#[from] txn::TxnError),
 }
 
 impl From<ExecutorError> for common::Error {
@@ -26,6 +29,7 @@ impl From<ExecutorError> for common::Error {
             ExecutorError::NotSupported(detail) => common::Error::NotSupported(detail),
             ExecutorError::Storage(err) => err.into(),
             ExecutorError::Catalog(err) => err.into(),
+            ExecutorError::Lock(err) => err.into(),
         }
     }
 }

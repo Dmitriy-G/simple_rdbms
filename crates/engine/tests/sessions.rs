@@ -32,19 +32,22 @@ fn two_sessions_hold_open_transactions_at_the_same_time_and_both_commit()
     let dir = tempfile::tempdir()?;
     let mut db1 = Database::open(DbConfig::new(dir.path().join("test.db")))?;
     db1.execute("CREATE TABLE t (a INTEGER)")?;
+    db1.execute("CREATE TABLE u (a INTEGER)")?;
     let mut db2 = db1.connect()?;
 
     db1.execute("BEGIN")?;
     db2.execute("BEGIN")?;
 
     db1.execute("INSERT INTO t VALUES (1)")?;
-    db2.execute("INSERT INTO t VALUES (2)")?;
+    db2.execute("INSERT INTO u VALUES (2)")?;
 
     db1.execute("COMMIT")?;
     db2.execute("COMMIT")?;
 
-    let rows = db1.execute("SELECT * FROM t")?;
-    assert_eq!(row_count(rows), 2, "both sessions' committed inserts must be visible");
+    let rows_t = db1.execute("SELECT * FROM t")?;
+    let rows_u = db1.execute("SELECT * FROM u")?;
+    assert_eq!(row_count(rows_t), 1, "db1's committed insert must be visible");
+    assert_eq!(row_count(rows_u), 1, "db2's committed insert must be visible");
     Ok(())
 }
 
@@ -114,6 +117,76 @@ fn dropping_a_session_mid_transaction_rolls_it_back() -> Result<(), Box<dyn Erro
 
     let rows = db1.execute("SELECT * FROM t")?;
     assert_eq!(row_count(rows), 0, "a session dropped mid-transaction must have its writes undone");
+    Ok(())
+}
+
+#[test]
+fn a_scan_and_a_write_to_the_same_table_do_not_interleave() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let mut db1 = Database::open(DbConfig::new(dir.path().join("test.db")))?;
+    db1.execute("CREATE TABLE t (a INTEGER)")?;
+    db1.execute("INSERT INTO t VALUES (1)")?;
+    let mut db2 = db1.connect()?;
+
+    db1.execute("BEGIN")?;
+    db1.execute("SELECT * FROM t")?;
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let result = db2.execute("INSERT INTO t VALUES (2)");
+        let _ = done_tx.send(result);
+    });
+
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "an insert into a table a concurrent, uncommitted scan holds a shared lock on must block \
+         until that scan's transaction ends"
+    );
+
+    db1.execute("COMMIT")?;
+    recv_within(&done_rx, CONCURRENT_TEST_TIMEOUT, "the blocked insert to finish")?;
+    handle.join().expect("worker thread must not panic");
+
+    let rows = db1.execute("SELECT * FROM t")?;
+    assert_eq!(row_count(rows), 2, "both the original row and the once-blocked insert must land");
+    Ok(())
+}
+
+#[test]
+fn locks_are_released_after_commit_and_after_abort() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let mut db = Database::open(DbConfig::new(dir.path().join("test.db")))?;
+    db.execute("CREATE TABLE t (a INTEGER)")?;
+
+    db.execute("BEGIN")?;
+    db.execute("INSERT INTO t VALUES (1)")?;
+    let committed_txn_id =
+        db.current_txn_id()?.expect("a transaction opened by BEGIN must be active");
+    assert!(
+        db.lock_count_for_txn(committed_txn_id)? > 0,
+        "a transaction that inserted a row must hold at least a table and a row lock"
+    );
+    db.execute("COMMIT")?;
+    assert_eq!(
+        db.lock_count_for_txn(committed_txn_id)?,
+        0,
+        "every lock a committed transaction held must be released"
+    );
+
+    db.execute("BEGIN")?;
+    db.execute("INSERT INTO t VALUES (2)")?;
+    let aborted_txn_id =
+        db.current_txn_id()?.expect("a transaction opened by BEGIN must be active");
+    assert!(
+        db.lock_count_for_txn(aborted_txn_id)? > 0,
+        "a transaction that inserted a row must hold at least a table and a row lock"
+    );
+    db.execute("ROLLBACK")?;
+    assert_eq!(
+        db.lock_count_for_txn(aborted_txn_id)?,
+        0,
+        "every lock an aborted transaction held must be released"
+    );
     Ok(())
 }
 

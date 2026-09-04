@@ -106,6 +106,16 @@ enum EngineMessage {
     Stats {
         reply: mpsc::SyncSender<EngineStats>,
     },
+    #[cfg(feature = "test-util")]
+    CurrentTxnId {
+        session_id: SessionId,
+        reply: mpsc::SyncSender<Result<Option<TxnId>>>,
+    },
+    #[cfg(feature = "test-util")]
+    LockCountForTxn {
+        txn_id: TxnId,
+        reply: mpsc::SyncSender<usize>,
+    },
 }
 
 fn engine_unavailable() -> Error {
@@ -251,6 +261,20 @@ impl SessionHandle {
         self.engine.send(EngineMessage::Stats { reply })?;
         reply_rx.recv().map_err(|_| engine_unavailable())
     }
+
+    #[cfg(feature = "test-util")]
+    pub(crate) fn current_txn_id(&self) -> Result<Option<TxnId>> {
+        let (reply, reply_rx) = mpsc::sync_channel(1);
+        self.engine.send(EngineMessage::CurrentTxnId { session_id: self.session_id, reply })?;
+        reply_rx.recv().map_err(|_| engine_unavailable())?
+    }
+
+    #[cfg(feature = "test-util")]
+    pub(crate) fn lock_count_for_txn(&self, txn_id: TxnId) -> Result<usize> {
+        let (reply, reply_rx) = mpsc::sync_channel(1);
+        self.engine.send(EngineMessage::LockCountForTxn { txn_id, reply })?;
+        reply_rx.recv().map_err(|_| engine_unavailable())
+    }
 }
 
 impl Drop for SessionHandle {
@@ -316,6 +340,18 @@ fn dispatch_message(
         #[cfg(feature = "test-util")]
         EngineMessage::Stats { reply } => {
             let _ = reply.send(state.shared.stats());
+        }
+        #[cfg(feature = "test-util")]
+        EngineMessage::CurrentTxnId { session_id, reply } => {
+            let result = match sessions.get(&session_id) {
+                Some(session) => Ok(recover_lock(session.lock(), "SessionState").txn_slot.txn_id()),
+                None => Err(unknown_session(session_id)),
+            };
+            let _ = reply.send(result);
+        }
+        #[cfg(feature = "test-util")]
+        EngineMessage::LockCountForTxn { txn_id, reply } => {
+            let _ = reply.send(state.shared.lock_count_for(txn_id));
         }
     }
     true
@@ -530,6 +566,12 @@ impl EngineShared {
     fn stats(&self) -> EngineStats {
         let checkpoint = recover_lock(self.checkpoint.lock(), "EngineShared.checkpoint");
         EngineStats { checkpoints_written: checkpoint.checkpoints_written }
+    }
+
+    #[cfg(feature = "test-util")]
+    fn lock_count_for(&self, txn_id: TxnId) -> usize {
+        let txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+        txn_manager.lock_manager().held_lock_count(txn_id)
     }
 
     fn checkpoint_and_flush(&self) -> Result<()> {
@@ -937,13 +979,13 @@ impl EngineShared {
     }
 
     fn run(&self, physical: PhysicalPlan, txn_id: TxnId) -> Result<Vec<Tuple>> {
-        let txn = {
+        let (txn, lock_manager) = {
             let txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
-            txn_manager.get(txn_id)?.clone()
+            (txn_manager.get(txn_id)?.clone(), txn_manager.lock_manager().clone())
         };
         let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
         let mut executor = build_executor(physical);
-        let mut ctx = ExecutorContext::new(&catalog, &self.buffer_pool, &txn);
+        let mut ctx = ExecutorContext::new(&catalog, &self.buffer_pool, &txn, &lock_manager);
         executor.init(&mut ctx)?;
 
         let mut rows = Vec::new();

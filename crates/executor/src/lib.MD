@@ -11,8 +11,8 @@ time without materializing intermediate results.
 
 ## Key Components
 
-- `ExecutorContext` - the shared state (catalog, buffer pool, transaction)
-  every operator needs while executing. See `context.MD`.
+- `ExecutorContext` - the shared state (catalog, buffer pool, transaction,
+  lock manager) every operator needs while executing. See `context.MD`.
 - `ExecutorError` - errors raised while executing a physical plan. See
   `error.MD`.
 - `Executor` - the pull-based trait every operator implements. See
@@ -30,7 +30,7 @@ time without materializing intermediate results.
 use executor::{Executor, ExecutorContext};
 
 let mut executor = engine::executor_factory::build_executor(physical_plan);
-let mut ctx = ExecutorContext::new(&catalog, &buffer_pool, txn);
+let mut ctx = ExecutorContext::new(&catalog, &buffer_pool, txn, &lock_manager);
 executor.init(&mut ctx)?;
 
 let mut rows = Vec::new();

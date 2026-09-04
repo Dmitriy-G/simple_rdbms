@@ -24,12 +24,16 @@ an integration-test binary.
   this module existed; other test files construct the same thing, so it
   moved here rather than staying duplicated.
 - `run_to_completion(pool, catalog, txn, executor) -> Vec<Tuple>` - builds
-  one `ExecutorContext`, calls `executor.init`, then drains `executor.next`
-  until it returns `None`, collecting every yielded `Tuple`. Panics (via
-  `.expect`) on any `Err` from `init`/`next` - only suitable for tests
-  asserting a executor runs to completion successfully; a test that needs
-  to observe an `Err` (e.g. an index-insert failure) drives the executor's
-  `init`/`next` calls by hand instead.
+  one `ExecutorContext` (against a fresh, ephemeral `txn::LockManager`
+  created just for this call - these tests exercise index/scan mechanics,
+  not locking, so nothing needs a lock manager shared across separate
+  `run_to_completion` calls the way `engine::EngineShared` shares one
+  real `LockManager` across a whole database), calls `executor.init`, then
+  drains `executor.next` until it returns `None`, collecting every yielded
+  `Tuple`. Panics (via `.expect`) on any `Err` from `init`/`next` - only
+  suitable for tests asserting a executor runs to completion successfully;
+  a test that needs to observe an `Err` (e.g. an index-insert failure)
+  drives the executor's `init`/`next` calls by hand instead.
 - `row(values) -> Vec<BoundExpr>` - wraps each `Value` in `BoundExpr::Literal`,
   building an `InsertExecutor`-ready row directly (bypassing `sql`/`planner`
   binding entirely, since these tests only need a specific `Value` in a

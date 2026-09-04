@@ -21,6 +21,13 @@ function `BTreeIndex::scan_leaf(buffer_pool, leaf_page_id, from_slot)`
 fresh each call, exactly mirroring how `SeqScanExecutor::next` drives
 `storage::heap::TableHeap::scan_page`.
 
+Locking mirrors `seq_scan.MD`: `init` takes `ctx.lock_manager.lock_table(ctx.txn.txn_id,
+table_id, LockMode::Shared)`, and each `next` that yields a row takes
+`ctx.lock_manager.lock(ctx.txn.txn_id, rid, LockMode::Shared)` on that
+row's `Rid` (already known from the index entry, unlike `SeqScanExecutor`
+which has to construct one from `page_id`/`slot`) before fetching it from
+the heap.
+
 ## Key Components
 
 - `IndexScanExecutor` - holds `index_id`, `table_id`, the `start`/`end`

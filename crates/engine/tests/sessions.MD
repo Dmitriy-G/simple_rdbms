@@ -33,7 +33,16 @@ everything else exercises exactly one connection.
   `db2`'s `BEGIN` sent while `db1`'s transaction is still open; both
   inserts are visible afterward. Proves the admission-control restriction
   M10.2 removes is actually gone: two explicit transactions really can be
-  open across two sessions at once.
+  open across two sessions at once. Each session inserts into its own
+  table (`t`/`u`) rather than both writing `t`: since subtask 2 wires up
+  real table-level locking, two open, uncommitted transactions both
+  taking an `Exclusive` lock on the *same* table would have the second
+  block behind the first - real 2PL behavior
+  (`a_scan_and_a_write_to_the_same_table_do_not_interleave`, below, is the
+  test that exercises that blocking on purpose) - which on this test's own
+  single calling thread (not two genuinely concurrent ones, unlike
+  `inserts_from_eight_sessions_concurrently_all_land`) would hang forever
+  waiting on a `COMMIT` the same thread hasn't reached yet.
 - `a_second_session_can_begin_immediately_without_55p03` - the narrower
   regression check for the same removal: a second session's `BEGIN`
   against a database with another session's transaction already open must
@@ -53,6 +62,26 @@ everything else exercises exactly one connection.
 - `dropping_a_session_mid_transaction_rolls_it_back` - `db2` begins,
   inserts, and is dropped without `COMMIT`/`ROLLBACK`; the row is not
   visible afterward through `db1` - `disconnect`'s abort path.
+- `a_scan_and_a_write_to_the_same_table_do_not_interleave` - `db1` begins
+  and runs a `SELECT` (taking and holding a `Shared` table lock,
+  `executor::seq_scan.MD`, for the rest of its still-open transaction);
+  meanwhile a spawned thread's `db2.execute("INSERT ...")` against the
+  same table must not complete within 200ms, proving `InsertExecutor`'s
+  `Exclusive` table lock (`executor::insert.MD`) genuinely blocks behind
+  it rather than the two statements interleaving. `db1.execute("COMMIT")`
+  releases the `Shared` lock via `TransactionManager::release_all`
+  (`txn::manager.MD`), after which the blocked insert completes within
+  `CONCURRENT_TEST_TIMEOUT` and both rows are visible.
+- `locks_are_released_after_commit_and_after_abort` - after `BEGIN` and an
+  `INSERT`, `Database::current_txn_id`/`lock_count_for_txn`
+  (`database.MD`, both `#[cfg(feature = "test-util")]`) show the
+  transaction holding at least one lock; after `COMMIT`, the same
+  transaction id's lock count is `0`. Repeats the same shape ending in
+  `ROLLBACK` instead, proving `TransactionManager::abort` releases locks
+  too, not only `commit` - a real `txn::LockManager::held_lock_count`
+  reading (`txn::lock_manager.MD`) rather than an inference from the
+  session no longer reporting an active transaction, which would pass
+  even if `release_all` were never called.
 - `open_file(path)`/`wal_base_path(dir) -> PathBuf` - private helpers for
   the one test below that opens `Database::open_with_devices` directly
   (`database.MD`) against real files it can also inspect independently

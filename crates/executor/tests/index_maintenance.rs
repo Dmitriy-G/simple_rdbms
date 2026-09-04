@@ -6,7 +6,7 @@ use executor::{Executor, ExecutorContext, InsertExecutor};
 use storage::btree::BTreeIndex;
 use storage::heap::TableHeap;
 use support::{encoded, row};
-use txn::{IsolationLevel, Transaction, TransactionManager};
+use txn::{IsolationLevel, LockManager, Transaction, TransactionManager};
 use types::{DataType, Value};
 
 const TXN: TxnId = TxnId(0);
@@ -86,7 +86,8 @@ fn a_failed_index_insert_returns_an_error_and_leaves_that_row_out_of_the_index()
     let rows = vec![row(vec![Value::Double(1.0)]), row(vec![Value::Double(f64::NAN)])];
     let mut insert = InsertExecutor::new(table_id, rows);
     let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0));
-    let mut ctx = ExecutorContext::new(&catalog, &pool, &txn);
+    let lock_manager = LockManager::new();
+    let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
     insert.init(&mut ctx).expect("init");
     let result = insert.next(&mut ctx);
     assert!(result.is_err(), "an unorderable indexed value must fail the statement");

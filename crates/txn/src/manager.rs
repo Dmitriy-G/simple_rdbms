@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use common::{Lsn, TxnId};
 use storage::buffer::BufferPool;
@@ -7,18 +8,24 @@ use storage::wal::LogRecordKind;
 
 use crate::error::TxnError;
 use crate::isolation::IsolationLevel;
+use crate::lock_manager::LockManager;
 use crate::transaction::Transaction;
 
 #[derive(Debug, Default)]
 pub struct TransactionManager {
     active: HashMap<TxnId, Transaction>,
     next_txn_id: u64,
+    lock_manager: Arc<LockManager>,
 }
 
 impl TransactionManager {
     pub fn new(highest_seen: Option<TxnId>) -> Self {
         let next_txn_id = highest_seen.map_or(0, |TxnId(id)| id + 1);
-        Self { active: HashMap::new(), next_txn_id }
+        Self { active: HashMap::new(), next_txn_id, lock_manager: Arc::new(LockManager::new()) }
+    }
+
+    pub fn lock_manager(&self) -> &Arc<LockManager> {
+        &self.lock_manager
     }
 
     #[tracing::instrument(skip_all, fields(txn_id = tracing::field::Empty, isolation = ?isolation_level))]
@@ -48,6 +55,7 @@ impl TransactionManager {
         pool.flush_log(commit_lsn)?;
         pool.append_log(txn_id, LogRecordKind::End)?;
         self.active.remove(&txn_id);
+        self.lock_manager.release_all(txn_id);
         metrics::counter!("transactions_committed_total").increment(1);
         Ok(())
     }
@@ -60,6 +68,7 @@ impl TransactionManager {
             recovery::undo_transaction(pool, txn_id, last_lsn)?;
         }
         self.active.remove(&txn_id);
+        self.lock_manager.release_all(txn_id);
         metrics::counter!("transactions_aborted_total").increment(1);
         Ok(())
     }

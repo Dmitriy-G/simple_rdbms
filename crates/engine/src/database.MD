@@ -96,6 +96,22 @@ as they always have, with no idea an engine thread exists underneath.
   sessions" (`crates/engine/tests/sessions.rs`) does not depend on log
   wording or on tracing's thread-local dispatcher and process-wide
   callsite-interest cache both cooperating under concurrent test threads.
+- `Database::current_txn_id(&self) -> Result<Option<common::TxnId>>` -
+  `#[cfg(feature = "test-util")]`. Forwards to
+  `SessionHandle::current_txn_id`, reading this session's own
+  `TxnSlot::txn_id()` off the engine thread - `None` if this session has
+  no open transaction. Lets a test capture the id of a transaction it is
+  about to `COMMIT`/`ROLLBACK`, so it can still ask about that specific
+  transaction's locks afterward via `lock_count_for_txn`, once
+  `SessionState::txn_slot` itself no longer has any record of it.
+- `Database::lock_count_for_txn(&self, txn_id) -> Result<usize>` -
+  `#[cfg(feature = "test-util")]`. Forwards to
+  `SessionHandle::lock_count_for_txn`, which reads
+  `txn::LockManager::held_lock_count(txn_id)` (`txn::lock_manager.MD`)
+  straight off the engine's shared lock manager - for asserting that
+  `TransactionManager::commit`/`abort` actually released every lock a
+  transaction held, rather than inferring it indirectly
+  (`crates/engine/tests/sessions.rs`).
 
 ## Usage Example
 

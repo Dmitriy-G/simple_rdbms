@@ -10,6 +10,16 @@ guard before returning, following `next_page_id` once a page is
 exhausted. Memory use is therefore independent of table size, and no page
 stays pinned across a `next` call.
 
+`init` takes `ctx.lock_manager.lock_table(ctx.txn.txn_id, table_id,
+LockMode::Shared)` before resolving the table's schema, and each `next`
+that returns a tuple takes `ctx.lock_manager.lock(ctx.txn.txn_id,
+Rid::new(page_id, slot), LockMode::Shared)` on that row before decoding
+it - see `txn::lock_manager.MD`. Under strict two-phase locking neither
+lock releases until the transaction commits or aborts
+(`txn::manager.MD`), so a full scan holds a growing set of row locks for
+its whole duration; that's the cost of read consistency until MVCC
+(`docs/ROADMAP.md`'s M10.3) replaces it.
+
 ## Key Components
 
 - `SeqScanExecutor` - holds `table_id`, the target table's `column_types`
