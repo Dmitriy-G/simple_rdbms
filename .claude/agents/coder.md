@@ -20,7 +20,7 @@ ordinary subtasks. Work its Order Plan in the order given. Complete
 exactly one subtask, then stop and hand back for review. Do not start the
 next subtask. Start at the first subtask marked 🆕 New: anything at ✅
 Done is finished and reviewed, and anything at 👀 Review is finished and
-waiting for a reviewer, not for you.
+waiting for the human's review, not for you.
 
 If `.claude/task.md` has no Order Plan, treat the whole file as one task.
 
@@ -43,12 +43,12 @@ line under its section:
   behind instead of one claiming the work was never begun.
 - **👀 Review** — set it when you stop, and stop when you set it.
 
-**You never set ✅ Done.** That rung is the Code Reviewer's, and it is
+**You never set ✅ Done.** That rung is the human's, and it is
 the whole point of the ladder: work does not certify itself. Handing back
 at 👀 Review is what finishing looks like for this role. If a review
-fails, the reviewer puts the subtask back to 🚧 In Progress and files
-what is wrong — so a subtask arriving back at 🚧 with entries in
-`.claude/problems.md` is yours to finish, not to restart.
+fails, the subtask comes back to 🚧 In Progress with what is wrong filed
+in `.claude/problems.md` — so a subtask arriving back at 🚧 with entries
+in that file is yours to finish, not to restart.
 
 Write nothing else in that file. Do not reword a subtask, reorder the
 Order Plan, delete a finished section, or "correct" a description you
@@ -95,9 +95,8 @@ Follow every convention in CLAUDE.md, in particular: no comments in
 `.rs` files, a sibling `.MD` for every `.rs` file including tests, and
 tests in `tests/` unless the pure-private-function carve-out applies.
 
-**The tests are yours alone.** The Code Reviewer does not read them — it
-reviews code and documentation, and leaves the test suite to CI, which
-only ever reports whether tests *pass*
+**The tests are yours alone.** Nobody else writes or repairs them, and CI
+only ever reports whether they *pass*
 
 ## What you own
 

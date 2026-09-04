@@ -9,8 +9,8 @@ flowchart TD
     classDef stop fill:#eeeeee,stroke:#777,color:#000
 
     SRC1["Coder — something real,<br/>outside the current subtask's scope"]:::role
-    SRC2["Code Reviewer — a defect in<br/>one subtask's diff"]:::role
-    SRC3["Milestone Reviewer — what diff-level<br/>review structurally could not see"]:::role
+    SRC2["Human — a defect found reviewing<br/>one finished subtask"]:::human
+    SRC3["Milestone Reviewer — what per-subtask<br/>review structurally could not see"]:::role
     SRC4["Architect — a judgement call, a design<br/>question, a finding from a project review,<br/>with its evidence in the entry"]:::role
 
     PROB[".claude/problems.md — the open queue:<br/>P-n title, Created by: role, Reason,<br/>Description, How to prevent in future.<br/>Number taken from the 'Next entry:' line"]:::channel
@@ -32,8 +32,8 @@ flowchart TD
     CONSUME["Delete the entry from problems.md<br/>in the same edit. It has moved, not gone:<br/>the subtask is where it lives now.<br/>No roadmap status changes — repair<br/>is not milestone progress"]
 
     CODER(["Coder works one subtask<br/>— see agent-flow-task-implementation.mmd"]):::role
-    GATE["Gate green. Set the subtask 👀 Review<br/>in task.md; the Code Reviewer sets ✅ Done.<br/>Nothing to close in problems.md —<br/>the entry is already gone"]:::gate
-    CR(["Code Reviewer checks the fix<br/>and its prevention"]):::stop
+    GATE["Gate green. Set the subtask 👀 Review<br/>in task.md; the human sets ✅ Done.<br/>Nothing to close in problems.md —<br/>the entry is already gone"]:::gate
+    CR(["Human checks the fix<br/>and its prevention, then commits"]):::human
     ARCHIVE["Whoever wrote the task archives it<br/>to docs/tasks/. That archive is the only<br/>lasting record of what was found"]:::stop
 
     SRC1 --> PROB
@@ -46,6 +46,6 @@ flowchart TD
     HUMANCALL -- "act on it, or look into it —<br/>either way it goes to the Architect" --> ARCHINV
     ARCHINV -- "decided: it needs code" --> ARCHTASK --> CODER
     ARCHINV -- "decided: no code needed" --> DELINV
-    WHO -- "Coder, Code Reviewer,<br/>Milestone Reviewer" --> ANYOPEN
+    WHO -- "Coder, Milestone Reviewer,<br/>Human" --> ANYOPEN
     ANYOPEN -- no --> MILESTONE
     ANYOPEN -- yes --> TASK --> CONSUME --> CODER --> GATE --> CR --> ARCHIVE

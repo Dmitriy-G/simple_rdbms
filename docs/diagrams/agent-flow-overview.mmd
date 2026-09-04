@@ -11,7 +11,6 @@ flowchart LR
     ARCH["Architect"]:::role
     TW["Task writer"]:::role
     CODER["Coder"]:::role
-    CR["Code Reviewer"]:::role
     MR["Milestone Reviewer"]:::role
     HELP["Helper"]:::role
 
@@ -24,7 +23,6 @@ flowchart LR
     HUMAN --> ARCH
     HUMAN --> TW
     HUMAN --> CODER
-    HUMAN --> CR
     HUMAN --> MR
     HUMAN --> HELP
 
@@ -43,10 +41,9 @@ flowchart LR
     TASK -- "the Coder's only inbox" --> CODER
     CODER -- "subtask Status: lines only" --> TASK
     CODER -- "incidental findings, appended only" --> PROB
-    CODER -- "source, tests, sibling .MD" --> CR
+    CODER -- "source, tests, sibling .MD;<br/>stops at 👀 Review" --> HUMAN
 
-    CR -- "defects, signed Created by" --> PROB
-    CR -- "subtask accepted" --> HUMAN
+    HUMAN -- "reviews the subtask, sets ✅ Done,<br/>commits; defects go back as entries" --> PROB
     MR -- "defects and open questions" --> PROB
     MR -- "sets ✅ Done" --> ROADMAP
 

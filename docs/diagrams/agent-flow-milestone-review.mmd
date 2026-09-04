@@ -7,7 +7,7 @@ flowchart TD
     classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
     classDef stop fill:#eeeeee,stroke:#777,color:#000
 
-    START(["Every subtask in .claude/task.md<br/>has passed code review"]):::human
+    START(["Every subtask in .claude/task.md<br/>stands at ✅ Done — the human<br/>reviewed and accepted each one"]):::human
     MR["Milestone Reviewer — whole-milestone scope"]:::role
 
     C1["1. The roadmap entry:<br/>does the code satisfy the Solution and<br/>every line of Done-when?<br/>Not 'did each subtask land'"]
@@ -15,7 +15,7 @@ flowchart TD
     C3["3. Documentation truth:<br/>every touched .MD still describes the code,<br/>every referenced ADR exists, decisions are<br/>recorded somewhere durable"]
     C4["4. Status: roadmap markers match reality,<br/>sub-milestone ids referenced from code<br/>and .MD files resolve to real headings"]
     C5["5. Forward dependencies: did this milestone<br/>leave work a later one now silently<br/>depends on?"]
-    C6["6. Deferred items: anything the Coder or<br/>Code Reviewer put off is written down,<br/>not in someone's head"]
+    C6["6. Deferred items: anything the Coder or<br/>the human's review put off is written down,<br/>not in someone's head"]
 
     VERDICT{"Verdict"}
     BUGS[".claude/problems.md — defects,<br/>Created by: Milestone Reviewer,<br/>prevention field mandatory"]:::channel

@@ -15,14 +15,15 @@ repository and CI does not check them — GitHub and most IDEs render
 
 ## Agent flows
 
-How the six LLM roles in `CLAUDE.md`'s "LLM roles and channels" section
+How the five LLM roles in `CLAUDE.md`'s "LLM roles and channels" section
 actually move work between each other. Each role's own rules live in
 `.claude/agents/<role>.md`; these diagrams are the view across roles that
 no single agent file has.
 
-- [`agent-flow-overview.mmd`](agent-flow-overview.mmd) — all six roles
-  and the two channel files, with who writes and who reads each. Read
-  this one first.
+- [`agent-flow-overview.mmd`](agent-flow-overview.mmd) — all five roles
+  and the two channel files, with who writes and who reads each, plus the
+  human, who reviews each finished subtask themselves. Read this one
+  first.
 - [`agent-flow-milestone-planning.mmd`](agent-flow-milestone-planning.mmd)
   — how the Task writer decides what the next task is: open problems
   first, then the next roadmap entry, and a question to the human rather
@@ -30,8 +31,6 @@ no single agent file has.
 - [`agent-flow-task-implementation.mmd`](agent-flow-task-implementation.mmd)
   — the Coder's loop: one subtask, the gate, mark it done, stop for
   review. Includes the three conditions that stop the Coder instead.
-- [`agent-flow-code-review.mmd`](agent-flow-code-review.mmd) — diff-level
-  review of one subtask, in check order.
 - [`agent-flow-problem-lifecycle.mmd`](agent-flow-problem-lifecycle.mmd)
   — a finding by any role, into `.claude/problems.md`, out of it again as
   a scheduled subtask, to a fix that ships with its prevention. Also

@@ -69,9 +69,10 @@ When asked to **"do next task"**, follow this procedure:
 2. Move the subtask's status as you work it, in `.claude/task.md` — and
    move only the status. Set 🚧 In Progress when you start it and
    👀 Review when you finish it, in both the Order Plan line and the
-   `Status:` line under the subtask's heading. **Never set ✅ Done**: that
-   is the Code Reviewer's, and a subtask marking itself done is the whole
-   reason the review gate exists. Never reword, reorder, delete or "clean
+   `Status:` line under the subtask's heading. 👀 Review is the last rung
+   the Coder sets: **never set ✅ Done**, which is the human's, since a
+   subtask marking itself done is the whole reason the review gate
+   exists. Never reword, reorder, delete or "clean
    up" the task text itself — the Task writer owns that prose, exactly as
    it owns the file. A status marker is the one thing the Coder may write
    there.
@@ -101,7 +102,7 @@ one into a task or resolves it. The full procedure is in
 
 ## LLM roles and channels
 
-This repository is worked through six LLM roles, one file per role in
+This repository is worked through five LLM roles, one file per role in
 `.claude/agents/`. Those files are authoritative for what each role may
 write; this section is the overview, and
 `docs/diagrams/README.md` indexes a flow diagram for each way work moves
@@ -121,8 +122,8 @@ Role: <role name>
 1. **Coder** — asked to work `.claude/task.md`, which is the only file it
    takes work from. Do the tasks it lists, in the order its Order Plan
    gives, moving each subtask's status to 🚧 In Progress when it starts
-   and 👀 Review when it stops — never to ✅ Done, which is the Code
-   Reviewer's. Never commit automatically. Don't install heavy tooling (e.g. Python/pip)
+   and 👀 Review when it stops — never to ✅ Done, which is the human's.
+   Never commit automatically. Don't install heavy tooling (e.g. Python/pip)
    for investigating — use `bash` instead. If a problem surfaces that
    isn't part of the current subtask, record it in `.claude/problems.md` rather
    than investigating or fixing it there. If a needed investigation is
@@ -153,38 +154,20 @@ Role: <role name>
    Plan, each subtask starting at 🆕 New. Archives the finished
    `.claude/task.md` to `docs/tasks/` and sets 🚧 In Progress in
    `docs/ROADMAP.md` when it writes a milestone's first task.
-4. **Code Reviewer** — asked simply to review, and works out the rest:
-   find the subtask standing at 👀 Review in `.claude/task.md`, and
-   review the **uncommitted** working tree, which is that subtask's work
-   by construction — the human commits after each accepted subtask, so
-   nothing else can be in there. Only the new code and documentation,
-   never anything already committed and never the untouched code around
-   it. If no subtask is at 👀 Review, or the tree is clean, there is
-   nothing to review — say so rather than picking something. Then read
-   the **code and its documentation** the way a
-   human reviewer reads a pull request, asking four things in order: is
-   it *finished* (every part of the subtask, not the easy parts), is it
-   *correct* (this file's invariants first), is it the *right solution*
-   (wrong layer, reinvented machinery, an abstraction that blocks the
-   next milestone), and is it *well made* (conventions, Rust practice,
-   naming, error handling, logging). All four apply to the `.MD` files as
-   much as the `.rs`: documentation that no longer describes its code is
-   a defect like any other. It does not review tests or check that the
-   gate was run — both are the Coder's, and both are automated. Passing
-   sets that
-   subtask ✅ Done — it is the only role that may. Failing sets it back
-   to 🚧 In Progress and records each finding in `.claude/problems.md`
-   using the problem format below, signed `Created by: Code Reviewer`,
-   with concrete instructions on how to fix it and how to prevent it
-   recurring.
-5. **Milestone Reviewer** — asked to review a finished milestone as a
+4. **Milestone Reviewer** — asked to review a finished milestone as a
    whole against its `docs/ROADMAP.md` entry, once every subtask has
-   passed code review: the milestone's Done-when, cross-cutting
+   been accepted: the milestone's Done-when, cross-cutting
    invariants, documentation truth, forward dependencies it created, and
    deferred items. Writes `.claude/problems.md`, and is the only role
    that sets ✅ Done in `docs/ROADMAP.md`.
-6. **Helper** — the default role: anything not covered by the five roles
+5. **Helper** — the default role: anything not covered by the four roles
    above, such as answering a question about the project. Read-only.
+
+Per-subtask code review is **not** a role: the human reads each finished
+subtask in the uncommitted working tree, sets it ✅ Done in
+`.claude/task.md`, and commits it. Anything that review turns up goes to
+`.claude/problems.md` like any other finding, signed `Created by: Human`,
+and is scheduled by the Task writer.
 
 ### Channels
 
@@ -209,8 +192,8 @@ than cosmetic.
 
 | File | Written by | Read by | Carries |
 | --- | --- | --- | --- |
-| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; Coder for 🚧/👀 status; Code Reviewer for ✅) | Coder, Code Reviewer, Milestone Reviewer | The current task's subtasks and their Order Plan |
-| `.claude/problems.md` | Everyone who finds something: Coder, Code Reviewer, Milestone Reviewer, Architect | Task writer first, Architect, human | A queue of everything found and not fixed on the spot: defects from review, incidental discoveries, and the Architect's findings with their evidence |
+| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; Coder for 🚧/👀 status; the human for ✅) | Coder, Milestone Reviewer, human | The current task's subtasks and their Order Plan |
+| `.claude/problems.md` | Everyone who finds something: Coder, Milestone Reviewer, Architect, human | Task writer first, Architect, human | A queue of everything found and not fixed on the spot: defects from review, incidental discoveries, and the Architect's findings with their evidence |
 
 Every finding goes to `.claude/problems.md`, whoever found it, signed
 with `Created by:`. That line is the whole difference between a defect a
@@ -248,7 +231,7 @@ it changed asks through a channel above.
 | `docs/tasks/README.md` | Architect | Not an archived spec: it explains what the archive is for, which is process prose and goes stale like any other. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
 | `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. |
-| `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, Code Reviewer sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it". |
+| `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, the human sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it". |
 | `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows the signature: the Task writer deletes what it schedules and never an Architect entry, the Architect deletes its own. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
@@ -282,10 +265,10 @@ A **subtask** in `.claude/task.md` carries one of four:
 | 🆕 New | written, not started | Task writer, when it writes the subtask |
 | 🚧 In Progress | being worked right now | Coder, when it starts |
 | 👀 Review | finished and awaiting review | Coder, when it stops |
-| ✅ Done | reviewed and accepted | Code Reviewer, and nobody else |
+| ✅ Done | reviewed and accepted | the human, and nobody else |
 
-A review that fails does not invent a fifth status: the Code Reviewer
-puts the subtask back to 🚧 In Progress and records what is wrong in
+A review that fails does not invent a fifth status: the subtask goes back
+to 🚧 In Progress and what is wrong is recorded in
 `.claude/problems.md`, so the same subtask is picked up again rather than
 the defect being scheduled as new work.
 
@@ -326,8 +309,8 @@ guide once entries start leaving it.
 
 Per entry:
 - Title: `P-<n>` + a short description.
-- `Created by:` the role that found it — Coder, Code Reviewer, Milestone
-  Reviewer, or Architect. This line decides who acts on the entry, so it
+- `Created by:` who found it — Coder, Milestone Reviewer, Architect, or
+  Human. This line decides who acts on the entry, so it
   is not optional. **`Created by: Architect` means the entry belongs to
   the Architect**: something noticed that wants a judgement call, a design
   decision, or an investigation before anyone writes code. The Task writer

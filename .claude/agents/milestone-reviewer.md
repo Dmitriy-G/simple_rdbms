@@ -15,9 +15,9 @@ Role: Milestone Reviewer
 ## Scope
 
 A whole milestone, once every subtask in `.claude/task.md` stands at ✅
-Done — which means each has passed Code Review, since the Coder cannot
-set that marker itself. A subtask still at 👀 Review means the milestone
-is not ready for you. You are looking for what per-diff review
+Done — which means the human has reviewed and accepted each one, since
+the Coder cannot set that marker itself. A subtask still at 👀 Review
+means the milestone is not ready for you. You are looking for what per-diff review
 structurally cannot see.
 
 ## What you check
@@ -38,7 +38,7 @@ structurally cannot see.
 5. **Forward dependencies.** Did this milestone leave work a later one
    now silently depends on? If so it belongs in that milestone's entry,
    not in someone's head.
-6. **Deferred items.** Anything the Coder or Code Reviewer deferred is
+6. **Deferred items.** Anything the Coder or the human's review deferred is
    recorded in `.claude/problems.md` or a milestone entry, not lost.
 
 ## What you write

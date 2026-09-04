@@ -27,10 +27,10 @@ flowchart TD
     PASS{"All green?"}
     FIX["Fix it — still inside this subtask"]
 
-    MARK["Set the subtask 👀 Review in .claude/task.md:<br/>its Order Plan line and its Status: line.<br/>Never ✅ Done — only the Code Reviewer<br/>sets that. Status markers only; the prose<br/>belongs to the Task writer.<br/>A P-n in the heading is provenance:<br/>that entry left problems.md when it was<br/>scheduled, so there is nothing to close"]
+    MARK["Set the subtask 👀 Review in .claude/task.md:<br/>its Order Plan line and its Status: line.<br/>Never ✅ Done — only the human<br/>sets that. Status markers only; the prose<br/>belongs to the Task writer.<br/>A P-n in the heading is provenance:<br/>that entry left problems.md when it was<br/>scheduled, so there is nothing to close"]
 
     STOPHERE["Stop. Do not start the next subtask,<br/>do not commit, leave the tree for review"]:::stop
-    CR(["Code Reviewer<br/>— see agent-flow-code-review.mmd"]):::stop
+    CR(["Human reviews the working tree,<br/>sets ✅ Done and commits"]):::human
 
     START --> CODER --> PICK --> SANE
     SANE -- no --> BAD

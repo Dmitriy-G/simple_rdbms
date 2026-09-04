@@ -24,7 +24,7 @@ flowchart TD
     subgraph VALID["Validation"]
         direction TB
         SCRIPT["bash scripts/check_docs.sh — part of the<br/>Coder's gate and of CI.<br/>Catches: a missing .MD or .rs sibling,<br/>a missing Key Components or Usage Example<br/>heading, a title not matching its stem,<br/>an undocumented public item,<br/>a crate without a README,<br/>a disallowed comment in a .rs file"]:::gate
-        CRREV["Code Reviewer, per diff:<br/>every new .rs has its .MD,<br/>no .rs gained a comment"]:::role
+        CRREV["Human, per finished subtask:<br/>every new .rs has its .MD,<br/>no .rs gained a comment"]:::human
         MSREV["Milestone Reviewer, per milestone:<br/>documentation truth — does the prose still<br/>describe the code, does every referenced<br/>ADR exist, are decisions recorded durably"]:::role
         HUMANEYE["What no script checks:<br/>whether the text is true.<br/>check_docs.sh verifies a public item is<br/>mentioned, never that the Usage Example<br/>still compiles against the source"]:::human
     end

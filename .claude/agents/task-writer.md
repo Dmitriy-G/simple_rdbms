@@ -18,9 +18,9 @@ When asked for the next task, work this queue in order. Do not skip a
 step because the later one looks more interesting.
 
 1. **Read `.claude/problems.md` first.** Every entry in it is open — the
-   file holds nothing else. Take the entries signed `Created by: Coder`,
-   `Created by: Code Reviewer` or `Created by: Milestone Reviewer`: those
-   are the next task. Write one subtask per problem, in the order you
+   file holds nothing else. Take every entry except the ones signed
+   `Created by: Architect` — Coder, Milestone Reviewer and Human entries
+   alike: those are the next task. Write one subtask per problem, in the order you
    judge best, and stop there. They outrank new milestone work, because
    each is a defect or a known-wrong thing already in the tree.
 
@@ -82,8 +82,8 @@ Format:
 
 🆕 New is the only status you set. The subtask then climbs the ladder
 without you: the Coder sets 🚧 In Progress when it starts and 👀 Review
-when it stops, and the Code Reviewer sets ✅ Done if the review passes or
-returns it to 🚧 if it does not. You read those markers — archiving needs
+when it stops, and the human sets ✅ Done if the review passes or returns
+it to 🚧 if it does not. You read those markers — archiving needs
 every subtask at ✅ Done — but you never write them.
 
 A subtask that comes from a problem keeps its number in the heading —
@@ -119,8 +119,8 @@ need rewriting if the subtask removes the state it reads.
 Before writing a new `.claude/task.md`, move the previous one to
 `docs/tasks/<milestone>-<slug>.md`. Only move it once **every subtask is
 ✅ Done** — reviewed, not merely finished. A subtask sitting at 👀 Review
-is not done, and archiving over it loses the spec a reviewer is about to
-need. The status markers are how you tell, which is why you may read them
+is not done, and archiving over it loses the spec the human is about to
+review it against. The status markers are how you tell, which is why you may read them
 all and write none.
 
 `.claude/task.md` is in `.gitignore`. The archive is therefore the only
