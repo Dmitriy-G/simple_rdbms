@@ -13,6 +13,13 @@
 #     crates/<crate>/README.md
 #   - no such .rs file has a `///` or `//!` doc comment, or a `//` comment
 #     that isn't `// SAFETY:` or `// TODO(`
+#   - every `M<number>`/`M<number>.<number>` under crates/ or docs/ matches
+#     a heading in docs/ROADMAP.md
+#   - no tracked file under crates/ cites `.claude/` (gitignored working
+#     state a fresh clone does not have); docs/ is exempt, since the agent
+#     flow diagrams cite it deliberately
+#   - every `todo!(` site under crates/**/*.rs is named in CLAUDE.md's
+#     "Known scaffolding" list, by its `crate::Type::method`
 #
 # The comment check tracks state line by line rather than judging each
 # comment line in isolation: a `// SAFETY:`/`// TODO(` block is often
@@ -113,6 +120,142 @@ while IFS= read -r rs; do
         esac
     done < "$rs"
 done < <(find crates -name '*.rs')
+
+# Milestone identifiers under crates/ or docs/ must resolve to a heading in
+# docs/ROADMAP.md. The roadmap renumbers milestones as priorities change,
+# so a stale reference is expected to appear from time to time; this check
+# only catches one resolving to nothing, not one that shifted onto a
+# still-live but wrong milestone.
+mapfile -t roadmap_milestones < <(grep -oE '^#{2,3} M[0-9]+(\.[0-9]+)?' docs/ROADMAP.md | awk '{print $2}')
+
+is_known_milestone() {
+    local m="$1" known
+    for known in "${roadmap_milestones[@]}"; do
+        [ "$m" = "$known" ] && return 0
+    done
+    return 1
+}
+
+while IFS= read -r f; do
+    while IFS= read -r m; do
+        [ -n "$m" ] || continue
+        is_known_milestone "$m" || fail "$f: milestone $m has no docs/ROADMAP.md heading"
+    done < <(grep -ahoE '\bM[0-9]+(\.[0-9]+)?\b' "$f" | sort -u)
+done < <(find crates docs -type f \( -name '*.rs' -o -name '*.MD' -o -name '*.md' -o -name '*.mmd' \))
+
+# .claude/ is gitignored working state; a tracked file under crates/ citing
+# it promises what a fresh clone cannot deliver. docs/ is exempt: the agent
+# flow diagrams cite it deliberately.
+while IFS= read -r hit; do
+    fail "$hit: cites gitignored .claude/ working state"
+done < <(grep -rn '\.claude/' crates/ || true)
+
+# Every todo!( site under crates/**/*.rs must be named in CLAUDE.md's
+# "Known scaffolding" list, matched on the crate::Type::method identifier
+# each bullet carries rather than by parsing prose.
+mapfile -t scaffolding_bullets < <(awk '
+/^## Known scaffolding/ { flag = 1; next }
+/^## / { if (flag) exit }
+flag {
+    if ($0 ~ /^- /) {
+        if (cur != "") print cur
+        cur = $0
+    } else if (cur != "") {
+        cur = cur " " $0
+    }
+}
+END { if (cur != "") print cur }
+' CLAUDE.md)
+
+bullet_spans() {
+    grep -oE '`[^`]+`' <<<"$1" | sed -e 's/^`//' -e 's/`$//'
+}
+
+bullet_covers_todo() {
+    local bullet="$1" crate="$2" type="$3" method="$4" span have_type=0
+    while IFS= read -r span; do
+        [ -n "$span" ] || continue
+        if [[ "$span" =~ ^${crate}::([A-Za-z0-9_]+::)*${type}::${method}$ ]]; then
+            return 0
+        fi
+        if [[ "$span" =~ ^${crate}::([A-Za-z0-9_]+::)*${type}$ ]]; then
+            have_type=1
+        fi
+    done < <(bullet_spans "$bullet")
+    if [ "$have_type" -eq 1 ]; then
+        while IFS= read -r span; do
+            [ "$span" = "$method" ] && return 0
+        done < <(bullet_spans "$bullet")
+    fi
+    return 1
+}
+
+todo_is_declared() {
+    local crate="$1" type="$2" method="$3" b
+    for b in "${scaffolding_bullets[@]}"; do
+        bullet_covers_todo "$b" "$crate" "$type" "$method" && return 0
+    done
+    return 1
+}
+
+# Walks a .rs file tracking brace depth to find, for each todo!( site, the
+# nearest enclosing impl's type and the nearest enclosing fn's name. Generic
+# parameter lists are stripped from each candidate line first so `impl<T>
+# Foo<T>` and `impl<T> Trait<T> for Foo<T>` tokenize down to plain
+# identifiers instead of the generic's own type variables.
+todo_context() {
+    awk '
+    {
+        line = $0
+        stripped_fn = line
+        while (stripped_fn ~ /<[^<>]*>/) { sub(/<[^<>]*>/, "", stripped_fn) }
+        n = split(stripped_fn, toks, /[^A-Za-z0-9_]+/)
+        for (i = 1; i <= n; i++) {
+            if (toks[i] == "fn" && i < n && toks[i + 1] != "") pending_fn = toks[i + 1]
+        }
+        if (line ~ /(^|[^A-Za-z0-9_])impl([^A-Za-z0-9_]|$)/) {
+            stripped_impl = line
+            while (stripped_impl ~ /<[^<>]*>/) { sub(/<[^<>]*>/, "", stripped_impl) }
+            m = split(stripped_impl, itoks, /[^A-Za-z0-9_]+/)
+            for (i = 1; i <= m; i++) {
+                if (itoks[i] == "impl") {
+                    typ = (i + 1 <= m) ? itoks[i + 1] : ""
+                    if (i + 2 <= m && itoks[i + 2] == "for" && i + 3 <= m) typ = itoks[i + 3]
+                    pending_impl = typ
+                }
+            }
+        }
+        len = length(line)
+        for (k = 1; k <= len; k++) {
+            c = substr(line, k, 1)
+            if (c == "{") {
+                depth++
+                impl_stack[depth] = (pending_impl != "") ? pending_impl : impl_stack[depth - 1]
+                fn_stack[depth]   = (pending_fn   != "") ? pending_fn   : fn_stack[depth - 1]
+                pending_impl = ""
+                pending_fn = ""
+            } else if (c == "}") {
+                delete impl_stack[depth]
+                delete fn_stack[depth]
+                if (depth > 0) depth--
+            }
+        }
+        if (index(line, "todo!(") > 0) printf "%s\t%s\n", impl_stack[depth], fn_stack[depth]
+    }
+    ' "$1"
+}
+
+while IFS= read -r rs; do
+    crate="$(echo "$rs" | cut -d/ -f2 | tr '-' '_')"
+    while IFS=$'\t' read -r type method; do
+        if [ -z "$type" ] || [ -z "$method" ]; then
+            fail "$rs: todo!( site outside a recognizable impl/fn"
+            continue
+        fi
+        todo_is_declared "$crate" "$type" "$method" ||
+            fail "$rs: todo!( in ${crate}::${type}::${method} is not in CLAUDE.md's Known scaffolding list"
+    done < <(todo_context "$rs")
+done < <(grep -rl 'todo!(' crates --include='*.rs' || true)
 
 if [ "$status" -eq 0 ]; then
     echo "check_docs: ok"
