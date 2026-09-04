@@ -444,8 +444,8 @@ impl<'pool> BTreeIndex<'pool> {
         let (mut current, _path) = self.descend_to_leaf(key)?;
         let mut results = Vec::new();
         let mut first_leaf = true;
+        let mut guard = self.buffer_pool.fetch_page_read(current)?;
         loop {
-            let guard = self.buffer_pool.fetch_page_read(current)?;
             let bytes = guard.page().data();
             let count = checked_slot_count(bytes, current)?;
             let mut idx = if first_leaf { lower_bound_leaf(bytes, key, current)? } else { 0 };
@@ -461,11 +461,13 @@ impl<'pool> BTreeIndex<'pool> {
             }
             let ran_off_the_end = idx == count;
             let next = tail_raw(bytes);
-            drop(guard);
 
             if ran_off_the_end {
-                if let Some(next) = next {
-                    current = next;
+                if let Some(next_page_id) = next {
+                    let next_guard = self.buffer_pool.fetch_page_read(next_page_id)?;
+                    drop(guard);
+                    guard = next_guard;
+                    current = next_page_id;
                     continue;
                 }
             }

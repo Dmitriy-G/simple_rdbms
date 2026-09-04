@@ -432,6 +432,76 @@ fn concurrent_readers_see_a_consistent_view_while_a_writer_forces_repeated_split
     Ok(())
 }
 
+const DUP_GET_BASELINE_KEYS: i32 = 200;
+const DUP_GET_INITIAL_DUPLICATES: u16 = 40;
+const DUP_GET_READER_THREADS: usize = 4;
+const DUP_GET_READER_ITERATIONS: usize = 400;
+const DUP_GET_WRITER_DUPLICATES: u16 = 3_000;
+
+#[test]
+fn get_on_a_duplicated_key_never_returns_a_rid_twice_while_its_own_run_keeps_splitting()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = Arc::new(open_pool(dir.path(), 64)?);
+    let mut index = BTreeIndex::create(&pool, TXN)?;
+
+    for i in 0..DUP_GET_BASELINE_KEYS {
+        index.insert(TXN, &key_of(i), Rid::new(PageId(1), 0))?;
+    }
+
+    let dup_key = key_of(DUP_GET_BASELINE_KEYS / 2);
+    for i in 0..DUP_GET_INITIAL_DUPLICATES {
+        index.insert(TXN, &dup_key, Rid::new(PageId(2), i))?;
+    }
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+    let dup_key = Arc::new(dup_key);
+    let root = Arc::new(AtomicU32::new(index.root_page_id().0));
+
+    let reader_handles: Vec<_> = (0..DUP_GET_READER_THREADS)
+        .map(|thread_index| {
+            let pool = Arc::clone(&pool);
+            let dup_key = Arc::clone(&dup_key);
+            let root = Arc::clone(&root);
+            thread::spawn(move || -> Result<(), String> {
+                for iteration in 0..DUP_GET_READER_ITERATIONS {
+                    let reader = BTreeIndex::open(&pool, PageId(root.load(Ordering::Acquire)));
+                    let mut found = reader.get(&dup_key).map_err(|e| e.to_string())?;
+                    let before = found.len();
+                    found.sort_by_key(|rid| (rid.page_id, rid.slot));
+                    found.dedup();
+                    if found.len() != before {
+                        return Err(format!(
+                            "reader {thread_index} iteration {iteration}: get on the duplicated \
+                             key returned a rid more than once ({before} entries collected, only \
+                             {} distinct) - a concurrent split of this key's own run must never \
+                             make the sibling-chain crossing re-collect an entry it already \
+                             pushed into results",
+                            found.len()
+                        ));
+                    }
+                }
+                Ok(())
+            })
+        })
+        .collect();
+
+    for i in DUP_GET_INITIAL_DUPLICATES..DUP_GET_INITIAL_DUPLICATES + DUP_GET_WRITER_DUPLICATES {
+        index.insert(TXN, &dup_key, Rid::new(PageId(2), i))?;
+        root.store(index.root_page_id().0, Ordering::Release);
+    }
+
+    for (thread_index, handle) in reader_handles.into_iter().enumerate() {
+        handle
+            .join()
+            .unwrap_or_else(|_| panic!("reader thread {thread_index} panicked"))
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
+    }
+
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
+    Ok(())
+}
+
 #[test]
 fn a_maximum_length_key_survives_a_split() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;

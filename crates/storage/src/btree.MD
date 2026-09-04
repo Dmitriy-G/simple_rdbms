@@ -100,8 +100,17 @@ several reader threads calling `get`/`range_scan` against a tree one
 writer thread is repeatedly splitting. `get`, `range_scan`, and
 `leaf_for_start` all call `descend_to_leaf` and inherit this safety for
 locating their starting leaf; crossing a leaf's sibling `tail` pointer
-once already at leaf level is a separate, uncoupled fetch and is not
-protected by this same crabbing.
+once already at leaf level is a separate concern from crabbing during
+descent. `get` latch-couples that crossing too: it fetches the next
+leaf's `PageReadGuard` before dropping the current leaf's, left-to-right
+- the same order `split_leaf` writes the two siblings in, so this
+introduces no new deadlock edge - so a concurrent split during the
+crossing can no longer make `get` re-read entries it already collected
+into `results`. `range_scan`/`scan_leaf`'s own crossing
+(`BTreeRangeIterator`, `executor::IndexScanExecutor`) is still a
+separate, uncoupled fetch: their caller yields a row back between one
+leaf-crossing call and the next, so no latch can be held across that
+gap, and latch-coupling cannot close it the way it closes `get`'s.
 
 ## Splitting
 
