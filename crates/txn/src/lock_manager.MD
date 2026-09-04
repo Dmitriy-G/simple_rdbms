@@ -25,6 +25,13 @@ per row it writes, and `TransactionManager::commit`/`abort` both call
 `release_all` so every lock a transaction acquired releases the moment it
 ends.
 
+SQL-level lock-conflict coverage is thin today: no statement can take
+`Exclusive` on a row that already exists until `UPDATE`/`DELETE` exist
+(M14), so the only `Exclusive` row-lock contention two transactions can
+produce from SQL is inserting distinct rows, which never conflict with
+each other. `tests/lock_manager.rs` exercises real conflicts, upgrades,
+and deadlocks directly against this module instead.
+
 ## Key Components
 
 - `LockMode` - the mode a lock is held in. `Shared` allows multiple
