@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -10,6 +11,13 @@ use storage::block_device::{BlockDevice, FileDevice};
 use storage::wal::{FileSegmentStore, SegmentStore};
 use test_support::open_file;
 
+const CONCURRENT_TEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn recv_within<T>(rx: &mpsc::Receiver<T>, timeout: Duration, what: &str) -> T {
+    rx.recv_timeout(timeout)
+        .unwrap_or_else(|_| panic!("timed out after {timeout:?} waiting for {what}"))
+}
+
 fn row_count(result: ResultSet) -> usize {
     match result {
         ResultSet::Rows { rows, .. } => rows.len(),
@@ -18,98 +26,78 @@ fn row_count(result: ResultSet) -> usize {
     }
 }
 
-fn short_lock_wait(dir: &Path) -> DbConfig {
-    DbConfig { lock_wait_timeout_ms: 100, ..DbConfig::new(dir.join("test.db")) }
-}
-
-fn long_lock_wait(dir: &Path) -> DbConfig {
-    DbConfig { lock_wait_timeout_ms: 5_000, ..DbConfig::new(dir.join("test.db")) }
-}
-
 #[test]
-fn a_second_session_cannot_open_a_concurrent_transaction() -> Result<(), Box<dyn Error>> {
+fn two_sessions_hold_open_transactions_at_the_same_time_and_both_commit()
+-> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
-    let mut db1 = Database::open(short_lock_wait(dir.path()))?;
-    let mut db2 = db1.connect()?;
-
-    db1.execute("BEGIN")?;
-
-    match db2.execute("BEGIN") {
-        Err(err @ CommonError::LockTimeout { .. }) => {
-            assert_eq!(err.sql_state(), SqlState::LOCK_NOT_AVAILABLE);
-        }
-        Err(other) => panic!("expected LockTimeout, got {other}"),
-        Ok(_) => panic!("a second session must not be able to open a concurrent transaction"),
-    }
-    Ok(())
-}
-
-#[test]
-fn a_parked_begin_is_granted_when_the_holder_commits() -> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let mut db1 = Database::open(long_lock_wait(dir.path()))?;
-    let db2 = db1.connect()?;
-
-    db1.execute("BEGIN")?;
-
-    let waiter = thread::spawn(move || {
-        let mut db2 = db2;
-        db2.execute("BEGIN")
-    });
-
-    thread::sleep(Duration::from_millis(100));
-    db1.execute("COMMIT")?;
-
-    let result = waiter.join().expect("waiter thread must not panic");
-    assert!(result.is_ok(), "expected the parked BEGIN to be granted, got {result:?}");
-    Ok(())
-}
-
-#[test]
-fn a_parked_begin_fails_with_55p03_after_its_deadline() -> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let mut db1 = Database::open(short_lock_wait(dir.path()))?;
-    let mut db2 = db1.connect()?;
-
-    db1.execute("BEGIN")?;
-
-    let start = std::time::Instant::now();
-    match db2.execute("BEGIN") {
-        Err(err @ CommonError::LockTimeout { .. }) => {
-            assert_eq!(err.sql_state(), SqlState::LOCK_NOT_AVAILABLE);
-        }
-        Err(other) => panic!("expected LockTimeout, got {other}"),
-        Ok(_) => panic!("the parked BEGIN must not succeed while the holder never resolves"),
-    }
-    assert!(
-        start.elapsed() < Duration::from_secs(5),
-        "the parked BEGIN must fail at its own deadline, not hang"
-    );
-    Ok(())
-}
-
-#[test]
-fn an_autocommit_statement_waits_for_an_open_transaction_to_finish() -> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let mut db1 = Database::open(long_lock_wait(dir.path()))?;
-    let db2 = db1.connect()?;
-
+    let mut db1 = Database::open(DbConfig::new(dir.path().join("test.db")))?;
     db1.execute("CREATE TABLE t (a INTEGER)")?;
+    let mut db2 = db1.connect()?;
+
     db1.execute("BEGIN")?;
+    db2.execute("BEGIN")?;
 
-    let waiter = thread::spawn(move || {
-        let mut db2 = db2;
-        db2.execute("INSERT INTO t VALUES (1)")
-    });
+    db1.execute("INSERT INTO t VALUES (1)")?;
+    db2.execute("INSERT INTO t VALUES (2)")?;
 
-    thread::sleep(Duration::from_millis(100));
     db1.execute("COMMIT")?;
-
-    let result = waiter.join().expect("waiter thread must not panic");
-    assert!(result.is_ok(), "expected the parked autocommit INSERT to be granted, got {result:?}");
+    db2.execute("COMMIT")?;
 
     let rows = db1.execute("SELECT * FROM t")?;
-    assert_eq!(row_count(rows), 1, "the granted autocommit INSERT must be visible");
+    assert_eq!(row_count(rows), 2, "both sessions' committed inserts must be visible");
+    Ok(())
+}
+
+#[test]
+fn a_second_session_can_begin_immediately_without_55p03() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let mut db1 = Database::open(DbConfig::new(dir.path().join("test.db")))?;
+    let mut db2 = db1.connect()?;
+
+    db1.execute("BEGIN")?;
+    let result = db2.execute("BEGIN");
+    match result {
+        Ok(_) => {}
+        Err(CommonError::LockTimeout { .. }) => panic!("a second BEGIN must not report 55P03"),
+        Err(other) => panic!("expected a second BEGIN to succeed, got {other}"),
+    }
+
+    db1.execute("COMMIT")?;
+    db2.execute("COMMIT")?;
+    Ok(())
+}
+
+#[test]
+fn inserts_from_eight_sessions_concurrently_all_land() -> Result<(), Box<dyn Error>> {
+    const SESSIONS: usize = 8;
+
+    let dir = tempfile::tempdir()?;
+    let mut db = Database::open(DbConfig::new(dir.path().join("test.db")))?;
+    db.execute("CREATE TABLE t (a INTEGER)")?;
+
+    let (done_tx, done_rx) = mpsc::channel();
+    let handles: Vec<_> = (0..SESSIONS)
+        .map(|i| {
+            let mut session = db.connect().expect("connect must succeed");
+            let done_tx = done_tx.clone();
+            thread::spawn(move || {
+                let result = session.execute(&format!("INSERT INTO t VALUES ({i})"));
+                let _ = done_tx.send(());
+                result
+            })
+        })
+        .collect();
+    drop(done_tx);
+
+    for _ in 0..SESSIONS {
+        recv_within(&done_rx, CONCURRENT_TEST_TIMEOUT, "a concurrent insert to finish");
+    }
+    for handle in handles {
+        handle.join().expect("worker thread must not panic")?;
+    }
+
+    let rows = db.execute("SELECT * FROM t")?;
+    assert_eq!(row_count(rows), SESSIONS, "every concurrent insert must land");
     Ok(())
 }
 
@@ -213,6 +201,48 @@ fn an_idle_in_transaction_session_is_aborted_after_the_timeout() -> Result<(), B
 
     db.execute("BEGIN")?;
     db.execute("COMMIT")?;
+    Ok(())
+}
+
+#[test]
+fn a_session_idle_in_transaction_does_not_affect_another_sessions_own_open_transaction()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let config = DbConfig {
+        idle_in_transaction_timeout_ms: 150,
+        ..DbConfig::new(dir.path().join("test.db"))
+    };
+    let mut db1 = Database::open(config)?;
+    db1.execute("CREATE TABLE t (a INTEGER)")?;
+    let mut db2 = db1.connect()?;
+
+    db1.execute("BEGIN")?;
+    db2.execute("BEGIN")?;
+
+    for _ in 0..6 {
+        thread::sleep(Duration::from_millis(60));
+        db2.execute("SELECT * FROM t")?;
+    }
+
+    match db1.execute("SELECT * FROM t") {
+        Err(err @ CommonError::IdleInTransactionTimeout) => {
+            assert_eq!(err.sql_state(), SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT);
+        }
+        Err(other) => panic!("expected IdleInTransactionTimeout, got {other}"),
+        Ok(_) => {
+            panic!("expected the first session's own idle transaction to have timed out")
+        }
+    }
+
+    db2.execute("INSERT INTO t VALUES (1)")?;
+    db2.execute("COMMIT")?;
+
+    let rows = db1.execute("SELECT * FROM t")?;
+    assert_eq!(
+        row_count(rows),
+        1,
+        "db2's transaction must have stayed alive and committed while db1 timed out"
+    );
     Ok(())
 }
 

@@ -4,6 +4,7 @@ mod database;
 mod executor_factory;
 mod result_set;
 mod runtime;
+mod worker_pool;
 
 pub use database::Database;
 pub use result_set::ResultSet;

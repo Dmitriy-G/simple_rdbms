@@ -113,14 +113,14 @@ populating an index created on a non-empty table. What's missing is
 mostly inherited from the layers `engine` assembles, not added here: no
 `DROP`/`UPDATE`/`DELETE`/`JOIN` (no crate above `sql` supports them yet),
 no composite/multi-column indexes, and no cost-based optimization
-choosing *among* multiple viable access paths (M11 - `IndexScanRule` picks
-an index whenever one applies, but has no cost model for picking among
-several). One gap belongs to this crate directly: M14.1's engine thread
-(`runtime.MD`) lets multiple sessions connect and interleave independent
-statements correctly, but does not yet enforce "one transaction at a
-time" - the FIFO park queue, idle-in-transaction timeout, and
-disconnect-during-park handling `docs/ROADMAP.md`'s M14.1 entry calls for
-are the next piece of this same milestone, not yet landed.
+choosing *among* multiple viable access paths (M23.2 - `IndexScanRule`
+picks an index whenever one applies, but has no cost model for picking
+among several). M13.1's engine thread (`runtime.MD`) lets multiple
+sessions connect; M10.2 lets their statements execute concurrently on a
+worker pool rather than one at a time: the one-transaction-at-a-time
+restriction and its FIFO park queue are gone, along with `55P03` from a
+second session's parked `BEGIN`, and the idle-in-transaction timeout
+remains, now tracked per session rather than engine-wide.
 
 ## Dependencies
 

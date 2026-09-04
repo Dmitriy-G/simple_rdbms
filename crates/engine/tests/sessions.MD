@@ -1,57 +1,58 @@
 # sessions
 
-Integration coverage for M14.1's admission control (`docs/ROADMAP.md`'s
-M14 entry, `crates/engine/src/runtime.MD`): the rule
-that at most one session may hold an explicit transaction at a time, that
-a second session's `BEGIN` (or autocommit statement) waits and then fails
-rather than running concurrently, that a disconnect or an idle timeout
-releases the slot rather than abandoning it, and that the engine-wide
-bookkeeping (checkpointing, a dead engine thread) behaves the same
-whether one session or several are driving it. Every test here drives
-more than one session against one database through `Database::connect`
-(`crates/engine/src/database.MD`), which nothing under `crates/engine/tests/`
-needed before this file - `logging.rs` and everything else exercises
-exactly one connection.
+Integration coverage for M10.2's concurrent execution model
+(`docs/ROADMAP.md`'s M10.2 entry, `crates/engine/src/runtime.MD`,
+`crates/engine/src/worker_pool.MD`): several sessions may each hold their
+own open transaction at the same time, statements from different sessions
+actually run concurrently on the worker pool rather than one at a time,
+the idle-in-transaction timeout is tracked per session rather than
+engine-wide, and a disconnect or an idle timeout releases that session's
+transaction rather than abandoning it. Every test here drives more than
+one session against one database through `Database::connect`
+(`crates/engine/src/database.MD`), which nothing under
+`crates/engine/tests/` needed before this file - `logging.rs` and
+everything else exercises exactly one connection.
 
 ## Key Components
 
+- `CONCURRENT_TEST_TIMEOUT` - the bound every genuinely concurrent test in
+  this file waits for a worker thread to report back through
+  `recv_within`, so a regression that makes the worker pool hang fails
+  fast with a clear message instead of hanging the test run.
+- `recv_within(rx, timeout, what) -> T` - private helper, the same shape
+  as `crates/storage/tests/buffer_pool_flush_races.rs`'s helper of the
+  same name: blocks on `rx.recv_timeout(timeout)` and panics naming
+  `what` if it elapses instead of returning, so a concurrent test that
+  goes wrong fails with a message instead of a bare timeout.
 - `row_count(ResultSet) -> usize` - private helper. Unwraps a `SELECT`'s
   row count, panicking with the actual variant's name for any other
   `ResultSet` shape, so an assertion failure names what it got instead of
   panicking inside a bare `match` with no message.
-- `short_lock_wait(dir) -> DbConfig`/`long_lock_wait(dir) -> DbConfig` -
-  private helpers building a `DbConfig` at `dir/test.db` with
-  `lock_wait_timeout_ms` set to 100ms or 5,000ms respectively - short for
-  tests that want a parked request to actually time out without a slow
-  test run, long for tests that want a parked request to sit safely past
-  the time the holder takes to free the slot on its own.
-- `a_second_session_cannot_open_a_concurrent_transaction` - `db1` holds an
-  explicit transaction (`short_lock_wait`); `db2.execute("BEGIN")` from
-  the same call returns `Error::LockTimeout` (`55P03`) rather than
-  succeeding, once the deadline passes with nobody granting it - the
-  central guarantee `runtime.MD`'s admission-control section describes.
-- `a_parked_begin_is_granted_when_the_holder_commits` - `db1` holds a
-  transaction (`long_lock_wait`, so the deadline can't fire first); a
-  second thread's `db2.execute("BEGIN")` blocks; `db1.execute("COMMIT")`
-  after a short sleep frees the slot, and the waiting thread's `BEGIN`
-  succeeds - `try_admit_waiters` running from `handle_commit`, not only
-  from `tick`.
-- `a_parked_begin_fails_with_55p03_after_its_deadline` - same shape as the
-  first test but asserts the elapsed time stays well under the deadline
-  it would take to hang, guarding against a regression that turns a
-  timeout into an indefinite block rather than only checking the returned
-  error.
-- `an_autocommit_statement_waits_for_an_open_transaction_to_finish` - the
-  autocommit half of admission control: `db2.execute("INSERT ...")` with
-  no `BEGIN` of its own still parks behind `db1`'s open transaction and is
-  granted once `db1` commits, and the inserted row is visible afterward -
-  proving `peek_needs_txn_slot` treats a bare autocommit statement as
-  needing the slot exactly like `BEGIN` does.
+- `two_sessions_hold_open_transactions_at_the_same_time_and_both_commit` -
+  `db1` and `db2` both `BEGIN`, both `INSERT`, and both `COMMIT`, with
+  `db2`'s `BEGIN` sent while `db1`'s transaction is still open; both
+  inserts are visible afterward. Proves the admission-control restriction
+  M10.2 removes is actually gone: two explicit transactions really can be
+  open across two sessions at once.
+- `a_second_session_can_begin_immediately_without_55p03` - the narrower
+  regression check for the same removal: a second session's `BEGIN`
+  against a database with another session's transaction already open must
+  neither park nor fail with `common::Error::LockTimeout` (`55P03`) - it
+  must simply succeed.
+- `inserts_from_eight_sessions_concurrently_all_land` - connects eight
+  sessions, spawns one OS thread per session, and has every thread send
+  its own `INSERT` at the same time, synchronizing completion through an
+  `mpsc` channel each thread signals on before this test joins every
+  handle and asserts on the propagated result; a final `SELECT` from the
+  original session counts eight rows. This is the test that actually
+  exercises `worker_pool::WorkerPool`: with `runtime.rs`'s single
+  dispatch thread now only submitting jobs rather than running them, this
+  is what proves statements from different sessions really execute at
+  the same time rather than merely being *admitted* concurrently while
+  still serialized on one thread.
 - `dropping_a_session_mid_transaction_rolls_it_back` - `db2` begins,
   inserts, and is dropped without `COMMIT`/`ROLLBACK`; the row is not
-  visible afterward through `db1` - `disconnect`'s abort path, the fix for
-  the failure mode where a disconnect used to leave the transaction
-  active forever.
+  visible afterward through `db1` - `disconnect`'s abort path.
 - `open_file(path)`/`wal_base_path(dir) -> PathBuf` - private helpers for
   the one test below that opens `Database::open_with_devices` directly
   (`database.MD`) against real files it can also inspect independently
@@ -76,6 +77,18 @@ exactly one connection.
   `Error::IdleInTransactionTimeout` (`25P03`) exactly once, and a fresh
   `BEGIN`/`COMMIT` afterward succeeds normally - `expire_idle_transaction`
   plus `TxnSlot::TimedOut`'s one-shot report, both from `runtime.MD`.
+- `a_session_idle_in_transaction_does_not_affect_another_sessions_own_open_transaction` -
+  the test M10.2 needed that M10.1 could not have written: `db1` and
+  `db2` both `BEGIN`, then `db2` sends a `SELECT` every 60ms for six
+  rounds (360ms total) while `db1` sends nothing, against a 150ms
+  timeout. `db1`'s next statement reports `IdleInTransactionTimeout` -
+  it really did sit idle past the threshold - while `db2`, whose own
+  `idle_since` kept resetting every round, still commits its own insert
+  successfully afterward and that row is visible. This is what proves
+  `expire_idle_transaction` tracks idleness *per session* rather than
+  engine-wide: the single-`current_txn`-holder version this replaced
+  could not have told these two apart, since only one session could ever
+  hold a transaction at all.
 - `a_dead_engine_thread_fails_every_session_with_a_fatal_error` -
   `Database::kill_engine_for_test` (`#[cfg(any(test, feature =
   "test-util"))]`, `database.MD`) stops the engine thread without a real
@@ -88,27 +101,20 @@ exactly one connection.
   against it, and reads `Database::stats()?.checkpoints_written`
   (`database.MD`, `#[cfg(feature = "test-util")]`) - a real
   counter on the engine rather than a count of "checkpoint complete" log
-  events. This file used to capture that log line through the same
-  thread-local capturing subscriber `crates/test-support/src/logging.MD`
-  now provides (then a local `tests/support/mod.rs`), but a thread-local
-  `tracing::subscriber::set_default` only guarantees isolation from other
-  *threads*; tracing's callsite-interest cache is process-wide, so a
-  concurrently-running test on another thread with no subscriber of its
-  own could race the interest rebuild and leave this callsite looking
-  globally disabled, silently dropping the event this test needed to see.
-  That made the test pass alone but fail intermittently under the full
-  suite; the counter sidesteps tracing entirely and needs no such
-  isolation.
+  events, which would race tracing's process-wide callsite-interest cache
+  under this file's now-genuinely-concurrent tests.
 - `several_sessions_checkpoint_once_per_threshold_not_once_each` - runs
   the same forty `INSERT`s twice with the same `checkpoint_byte_threshold`:
   once through one session, once split alternately across two sessions
   connected to the same `Database`. Asserts the single-session run
   produces at least one checkpoint (the growth was large enough to prove
   something), and that the split run produces the *same* count, not
-  double - regression coverage for the pre-M14.1 bug where each
-  `Database` tracked `bytes_at_last_checkpoint` itself and N connections
-  against one log checkpointed N times as often; `EngineState` now being
-  the one place that field lives is what keeps this test passing.
+  double - regression coverage for the bug where each `Database` used to
+  track `bytes_at_last_checkpoint` itself and N connections against one
+  log checkpointed N times as often; `EngineShared` being the one place
+  that field lives now (behind its own `Mutex<CheckpointState>`,
+  `runtime.MD`) is what keeps this test passing even with several
+  sessions' statements actually running at once.
 
 ## Usage Example
 
@@ -121,14 +127,17 @@ let mut db1 = Database::open(DbConfig::new(dir.path().join("test.db")))?;
 let mut db2 = db1.connect()?;
 
 db1.execute("BEGIN")?;
-let err = db2.execute("BEGIN").unwrap_err();
-assert_eq!(err.sql_state(), common::SqlState::LOCK_NOT_AVAILABLE);
+db2.execute("BEGIN")?;
+db1.execute("COMMIT")?;
+db2.execute("COMMIT")?;
 ```
 
 `cargo test -p engine --test sessions` runs this file alone. Every test
 opens its own `tempfile::tempdir()`, so they can run concurrently with
 each other and with every other integration test in this crate without
 colliding on a database file; tests that assert a timeout keep the
-configured deadline in the low hundreds of milliseconds so the whole file
-still finishes quickly even though several tests deliberately wait one
-out.
+configured deadline in the low hundreds of milliseconds, and every test
+that spawns worker threads of its own bounds them with
+`CONCURRENT_TEST_TIMEOUT`/`recv_within`, so the whole file still finishes
+quickly and fails loudly rather than hanging if a regression reintroduces
+a stall on the engine's dispatch thread.

@@ -1,10 +1,10 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, RwLock, TryLockError, mpsc};
 use std::time::{Duration, Instant};
 
 use catalog::{Catalog, Column, Schema};
+use common::sync::recover_lock;
 use common::{DbConfig, Error, Result, Severity, TxnId};
 use executor::ExecutorContext;
 use planner::{
@@ -26,10 +26,12 @@ use types::{MemcomparableEncode, Tuple, Value};
 
 use crate::executor_factory::build_executor;
 use crate::result_set::ResultSet;
+use crate::worker_pool::WorkerPool;
 
 const REPLACER_K: usize = 2;
 const REQUEST_CHANNEL_CAPACITY: usize = 64;
 const TICK_INTERVAL: Duration = Duration::from_millis(50);
+const WORKER_POOL_SIZE: usize = 8;
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -54,7 +56,6 @@ impl TxnSlot {
 }
 
 struct SessionState {
-    session_id: SessionId,
     txn_slot: TxnSlot,
     txn_span: Option<tracing::Span>,
     conn_span: tracing::Span,
@@ -63,9 +64,8 @@ struct SessionState {
 }
 
 impl SessionState {
-    fn new(session_id: SessionId, conn_span: tracing::Span) -> Self {
+    fn new(conn_span: tracing::Span) -> Self {
         Self {
-            session_id,
             txn_slot: TxnSlot::None,
             txn_span: None,
             conn_span,
@@ -73,13 +73,6 @@ impl SessionState {
             idle_since: None,
         }
     }
-}
-
-struct ParkedRequest {
-    session_id: SessionId,
-    sql: String,
-    reply: mpsc::SyncSender<Result<ResultSet>>,
-    deadline: Instant,
 }
 
 enum EngineMessage {
@@ -122,14 +115,6 @@ fn engine_unavailable() -> Error {
 fn unknown_session(session_id: SessionId) -> Error {
     Error::UnknownSession {
         detail: format!("session {} may have already disconnected", session_id.0),
-    }
-}
-
-fn lock_timeout() -> Error {
-    Error::LockTimeout {
-        detail: "the session already holding an explicit transaction did not commit or roll \
-                  back before the deadline"
-            .to_string(),
     }
 }
 
@@ -178,13 +163,16 @@ impl EngineHandle {
         dwb: DoubleWriteBuffer,
         log_manager: LogManager,
     ) -> Result<Arc<Self>> {
-        let state = EngineState::open(config, disk_manager, dwb, log_manager)?;
+        let shared = Arc::new(EngineShared::open(config, disk_manager, dwb, log_manager)?);
         let (sender, receiver) = mpsc::sync_channel(REQUEST_CHANNEL_CAPACITY);
         let dispatch = tracing::dispatcher::get_default(|dispatch| dispatch.clone());
+        let worker_pool = WorkerPool::new(WORKER_POOL_SIZE, dispatch.clone()).map_err(Error::Io)?;
         let thread = std::thread::Builder::new()
             .name("engine".to_string())
             .spawn(move || {
-                tracing::dispatcher::with_default(&dispatch, || run_engine(state, receiver));
+                tracing::dispatcher::with_default(&dispatch, || {
+                    run_engine(EngineState { shared, worker_pool }, receiver);
+                });
             })
             .map_err(Error::Io)?;
         Ok(Arc::new(Self { sender: Some(sender), thread: Some(thread) }))
@@ -267,180 +255,144 @@ impl SessionHandle {
 
 impl Drop for SessionHandle {
     fn drop(&mut self) {
-        // TODO(M14.2): this blocking send stalls a runtime worker once
-        // connections are tokio tasks; revisit then (see runtime.MD).
         let _ = self.engine.send(EngineMessage::Disconnect { session_id: self.session_id });
     }
 }
 
-fn run_engine(mut state: EngineState, receiver: mpsc::Receiver<EngineMessage>) {
-    let mut sessions: HashMap<SessionId, SessionState> = HashMap::new();
-    let mut waiters: VecDeque<ParkedRequest> = VecDeque::new();
+struct EngineState {
+    shared: Arc<EngineShared>,
+    worker_pool: WorkerPool,
+}
+
+fn run_engine(state: EngineState, receiver: mpsc::Receiver<EngineMessage>) {
+    let mut sessions: HashMap<SessionId, Arc<Mutex<SessionState>>> = HashMap::new();
 
     loop {
         match receiver.recv_timeout(TICK_INTERVAL) {
             Ok(message) => {
-                if !dispatch_message(&mut state, &mut sessions, &mut waiters, message) {
+                if !dispatch_message(&state, &mut sessions, message) {
                     break;
                 }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => tick(&mut state, &mut sessions, &mut waiters),
+            Err(mpsc::RecvTimeoutError::Timeout) => tick(&state, &sessions),
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 }
 
 fn dispatch_message(
-    state: &mut EngineState,
-    sessions: &mut HashMap<SessionId, SessionState>,
-    waiters: &mut VecDeque<ParkedRequest>,
+    state: &EngineState,
+    sessions: &mut HashMap<SessionId, Arc<Mutex<SessionState>>>,
     message: EngineMessage,
 ) -> bool {
     match message {
         EngineMessage::Connect { reply } => {
             let session_id = SessionId(NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed));
             let conn_span = new_connection_span(session_id);
-            sessions.insert(session_id, SessionState::new(session_id, conn_span));
+            sessions.insert(session_id, Arc::new(Mutex::new(SessionState::new(conn_span))));
             let _ = reply.send(session_id);
         }
         EngineMessage::Execute { session_id, sql, reply } => {
-            admit_execute(state, sessions, waiters, session_id, sql, reply);
+            dispatch_execute(state, sessions, session_id, sql, reply);
         }
         EngineMessage::TableNames { reply } => {
-            let _ = reply.send(state.table_names());
+            let _ = reply.send(state.shared.table_names());
         }
         EngineMessage::TableSchema { name, reply } => {
-            let _ = reply.send(state.table_schema(&name));
+            let _ = reply.send(state.shared.table_schema(&name));
         }
         EngineMessage::Checkpoint { reply } => {
-            let _ = reply.send(state.checkpoint_and_flush());
+            let _ = reply.send(state.shared.checkpoint_and_flush());
         }
         EngineMessage::BestEffortFlush { reply } => {
-            state.best_effort_flush();
+            state.shared.best_effort_flush();
             let _ = reply.send(());
         }
         EngineMessage::Disconnect { session_id } => {
-            disconnect(state, sessions, waiters, session_id);
+            disconnect(state, sessions, session_id);
         }
         #[cfg(feature = "test-util")]
         EngineMessage::Shutdown => return false,
         #[cfg(feature = "test-util")]
         EngineMessage::Stats { reply } => {
-            let _ = reply.send(state.stats());
+            let _ = reply.send(state.shared.stats());
         }
     }
     true
 }
 
-fn tick(
-    state: &mut EngineState,
-    sessions: &mut HashMap<SessionId, SessionState>,
-    waiters: &mut VecDeque<ParkedRequest>,
-) {
-    expire_waiters(waiters);
+fn tick(state: &EngineState, sessions: &HashMap<SessionId, Arc<Mutex<SessionState>>>) {
     expire_idle_transaction(state, sessions);
-    try_admit_waiters(state, sessions, waiters);
 }
 
-fn peek_needs_txn_slot(sql: &str, session: &SessionState) -> bool {
-    if session.txn_slot.txn_id().is_some() {
-        return false;
-    }
-    let Ok(tokens) = Lexer::new(sql).tokenize() else { return false };
-    let Ok(statement) = Parser::new(tokens).parse() else { return false };
-    !matches!(statement, Statement::Commit | Statement::Rollback | Statement::Explain { .. })
-}
-
-fn must_park(
-    current_txn: Option<(SessionId, TxnId)>,
-    session_id: SessionId,
-    session: &SessionState,
-    sql: &str,
-) -> bool {
-    match current_txn {
-        Some((holder, _)) if holder != session_id => peek_needs_txn_slot(sql, session),
-        _ => false,
-    }
-}
-
-fn admit_execute(
-    state: &mut EngineState,
-    sessions: &mut HashMap<SessionId, SessionState>,
-    waiters: &mut VecDeque<ParkedRequest>,
+fn dispatch_execute(
+    state: &EngineState,
+    sessions: &HashMap<SessionId, Arc<Mutex<SessionState>>>,
     session_id: SessionId,
     sql: String,
     reply: mpsc::SyncSender<Result<ResultSet>>,
 ) {
-    let Some(session) = sessions.get_mut(&session_id) else {
+    let Some(session) = sessions.get(&session_id) else {
         let _ = reply.send(Err(unknown_session(session_id)));
         return;
     };
-
-    if must_park(state.current_txn, session_id, session, &sql) {
-        waiters.push_back(ParkedRequest {
-            session_id,
-            sql,
-            reply,
-            deadline: Instant::now() + state.lock_wait_timeout,
-        });
-        return;
-    }
-
-    let result = state.execute(session, &sql);
-    let _ = reply.send(result);
-    try_admit_waiters(state, sessions, waiters);
-}
-
-fn try_admit_waiters(
-    state: &mut EngineState,
-    sessions: &mut HashMap<SessionId, SessionState>,
-    waiters: &mut VecDeque<ParkedRequest>,
-) {
-    while state.current_txn.is_none() {
-        let Some(front_deadline) = waiters.front().map(|waiter| waiter.deadline) else { break };
-        if front_deadline <= Instant::now() {
-            if let Some(expired) = waiters.pop_front() {
-                let _ = expired.reply.send(Err(lock_timeout()));
-            }
-            continue;
-        }
-
-        let Some(granted) = waiters.pop_front() else { break };
-        let Some(session) = sessions.get_mut(&granted.session_id) else { continue };
-        let result = state.execute(session, &granted.sql);
-        let _ = granted.reply.send(result);
-    }
-}
-
-fn expire_waiters(waiters: &mut VecDeque<ParkedRequest>) {
-    let now = Instant::now();
-    while matches!(waiters.front(), Some(waiter) if waiter.deadline <= now) {
-        if let Some(expired) = waiters.pop_front() {
-            let _ = expired.reply.send(Err(lock_timeout()));
-        }
-    }
+    let session = Arc::clone(session);
+    let shared = Arc::clone(&state.shared);
+    state.worker_pool.submit(Box::new(move || {
+        let mut session = recover_lock(session.lock(), "SessionState");
+        let result = shared.execute(&mut session, &sql);
+        let _ = reply.send(result);
+    }));
 }
 
 fn expire_idle_transaction(
-    state: &mut EngineState,
-    sessions: &mut HashMap<SessionId, SessionState>,
+    state: &EngineState,
+    sessions: &HashMap<SessionId, Arc<Mutex<SessionState>>>,
 ) {
-    let Some((session_id, txn_id)) = state.current_txn else { return };
-    let Some(session) = sessions.get_mut(&session_id) else { return };
+    for (&session_id, session) in sessions {
+        let overdue = {
+            let session = match session.try_lock() {
+                Ok(guard) => guard,
+                Err(TryLockError::WouldBlock) => continue,
+                Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            };
+            session.txn_slot.txn_id().is_some()
+                && session.idle_since.is_some_and(|idle_since| {
+                    idle_since.elapsed() >= state.shared.idle_in_transaction_timeout
+                })
+        };
+        if !overdue {
+            continue;
+        }
+
+        let session = Arc::clone(session);
+        let shared = Arc::clone(&state.shared);
+        state.worker_pool.submit(Box::new(move || {
+            expire_idle_session(&shared, &session, session_id);
+        }));
+    }
+}
+
+fn expire_idle_session(
+    shared: &EngineShared,
+    session: &Mutex<SessionState>,
+    session_id: SessionId,
+) {
+    let mut session = recover_lock(session.lock(), "SessionState");
+    let Some(txn_id) = session.txn_slot.txn_id() else { return };
     let Some(idle_since) = session.idle_since else { return };
-    if idle_since.elapsed() < state.idle_in_transaction_timeout {
+    if idle_since.elapsed() < shared.idle_in_transaction_timeout {
         return;
     }
 
-    if let Err(err) = state.txn_manager.abort(txn_id, &state.buffer_pool) {
-        let err = Error::from(err);
+    if let Err(err) = shared.abort_txn(txn_id) {
         tracing::warn!(
             sql_state = %err.sql_state(),
             error = %err.redacted(),
             "idle-in-transaction abort failed"
         );
     }
-    if let Err(err) = state.reload_catalog() {
+    if let Err(err) = shared.reload_catalog() {
         tracing::warn!(
             sql_state = %err.sql_state(),
             error = %err.redacted(),
@@ -448,7 +400,6 @@ fn expire_idle_transaction(
         );
     }
 
-    state.current_txn = None;
     session.txn_slot = TxnSlot::TimedOut;
     session.txn_span = None;
     session.idle_since = None;
@@ -460,53 +411,54 @@ fn expire_idle_transaction(
 }
 
 fn disconnect(
-    state: &mut EngineState,
-    sessions: &mut HashMap<SessionId, SessionState>,
-    waiters: &mut VecDeque<ParkedRequest>,
+    state: &EngineState,
+    sessions: &mut HashMap<SessionId, Arc<Mutex<SessionState>>>,
     session_id: SessionId,
 ) {
-    waiters.retain(|waiter| waiter.session_id != session_id);
-
-    if let Some(session) = sessions.get_mut(&session_id) {
-        if let Some(txn_id) = session.txn_slot.txn_id() {
-            if let Err(err) = state.txn_manager.abort(txn_id, &state.buffer_pool) {
-                let err = Error::from(err);
-                tracing::warn!(
-                    sql_state = %err.sql_state(),
-                    error = %err.redacted(),
-                    "abort on disconnect failed"
-                );
-            }
-            if let Err(err) = state.reload_catalog() {
-                tracing::warn!(
-                    sql_state = %err.sql_state(),
-                    error = %err.redacted(),
-                    "catalog reload on disconnect failed"
-                );
-            }
-            state.current_txn = None;
-            tracing::warn!(
-                session_id = session_id.0,
-                txn_id = txn_id.0,
-                "session disconnected with an open transaction; rolled back"
-            );
-        }
-    }
-
-    sessions.remove(&session_id);
-    try_admit_waiters(state, sessions, waiters);
+    let Some(session) = sessions.remove(&session_id) else { return };
+    let shared = Arc::clone(&state.shared);
+    state.worker_pool.submit(Box::new(move || {
+        disconnect_session(&shared, &session, session_id);
+    }));
 }
 
-struct EngineState {
-    catalog: Catalog,
-    buffer_pool: Arc<BufferPool>,
-    txn_manager: TransactionManager,
-    checkpoint_byte_threshold: u64,
+fn disconnect_session(shared: &EngineShared, session: &Mutex<SessionState>, session_id: SessionId) {
+    let session = recover_lock(session.lock(), "SessionState");
+    let Some(txn_id) = session.txn_slot.txn_id() else { return };
+
+    if let Err(err) = shared.abort_txn(txn_id) {
+        tracing::warn!(
+            sql_state = %err.sql_state(),
+            error = %err.redacted(),
+            "abort on disconnect failed"
+        );
+    }
+    if let Err(err) = shared.reload_catalog() {
+        tracing::warn!(
+            sql_state = %err.sql_state(),
+            error = %err.redacted(),
+            "catalog reload on disconnect failed"
+        );
+    }
+    tracing::warn!(
+        session_id = session_id.0,
+        txn_id = txn_id.0,
+        "session disconnected with an open transaction; rolled back"
+    );
+}
+
+struct CheckpointState {
     bytes_at_last_checkpoint: u64,
     checkpoints_written: u64,
+}
+
+struct EngineShared {
+    catalog: RwLock<Catalog>,
+    buffer_pool: Arc<BufferPool>,
+    txn_manager: Mutex<TransactionManager>,
+    checkpoint: Mutex<CheckpointState>,
+    checkpoint_byte_threshold: u64,
     slow_query_warn_threshold_ms: u64,
-    current_txn: Option<(SessionId, TxnId)>,
-    lock_wait_timeout: Duration,
     idle_in_transaction_timeout: Duration,
 }
 
@@ -516,7 +468,7 @@ pub struct EngineStats {
     pub checkpoints_written: u64,
 }
 
-impl EngineState {
+impl EngineShared {
     fn open(
         config: &DbConfig,
         disk_manager: DiskManager,
@@ -553,38 +505,43 @@ impl EngineState {
         );
 
         Ok(Self {
-            catalog,
+            catalog: RwLock::new(catalog),
             buffer_pool,
-            txn_manager,
+            txn_manager: Mutex::new(txn_manager),
+            checkpoint: Mutex::new(CheckpointState {
+                bytes_at_last_checkpoint,
+                checkpoints_written: 0,
+            }),
             checkpoint_byte_threshold: config.checkpoint_byte_threshold,
-            bytes_at_last_checkpoint,
-            checkpoints_written: 0,
             slow_query_warn_threshold_ms: config.slow_query_warn_threshold_ms,
-            current_txn: None,
-            lock_wait_timeout: Duration::from_millis(config.lock_wait_timeout_ms),
             idle_in_transaction_timeout: Duration::from_millis(
                 config.idle_in_transaction_timeout_ms,
             ),
         })
     }
 
-    fn checkpoint_and_flush(&mut self) -> Result<()> {
-        write_checkpoint(&self.buffer_pool, &mut self.txn_manager)?;
-        self.record_checkpoint_written();
-        self.buffer_pool.flush_log_all()?;
-        self.buffer_pool.flush_all()?;
-        self.buffer_pool.sync()?;
-        Ok(())
-    }
-
-    fn record_checkpoint_written(&mut self) {
-        self.checkpoints_written += 1;
+    fn record_checkpoint_written(&self) {
+        let mut checkpoint = recover_lock(self.checkpoint.lock(), "EngineShared.checkpoint");
+        checkpoint.checkpoints_written += 1;
         metrics::counter!("checkpoints_written_total").increment(1);
     }
 
     #[cfg(feature = "test-util")]
     fn stats(&self) -> EngineStats {
-        EngineStats { checkpoints_written: self.checkpoints_written }
+        let checkpoint = recover_lock(self.checkpoint.lock(), "EngineShared.checkpoint");
+        EngineStats { checkpoints_written: checkpoint.checkpoints_written }
+    }
+
+    fn checkpoint_and_flush(&self) -> Result<()> {
+        {
+            let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+            write_checkpoint(&self.buffer_pool, &mut txn_manager)?;
+        }
+        self.record_checkpoint_written();
+        self.buffer_pool.flush_log_all()?;
+        self.buffer_pool.flush_all()?;
+        self.buffer_pool.sync()?;
+        Ok(())
     }
 
     fn best_effort_flush(&self) {
@@ -595,18 +552,27 @@ impl EngineState {
         let _ = self.buffer_pool.flush_all();
     }
 
-    fn maybe_checkpoint(&mut self) {
+    fn maybe_checkpoint(&self) {
         if self.buffer_pool.is_flush_poisoned() {
             return;
         }
-        let grown = self.buffer_pool.log_bytes_appended() - self.bytes_at_last_checkpoint;
+        let bytes_at_last_checkpoint =
+            recover_lock(self.checkpoint.lock(), "EngineShared.checkpoint")
+                .bytes_at_last_checkpoint;
+        let grown = self.buffer_pool.log_bytes_appended() - bytes_at_last_checkpoint;
         if grown < self.checkpoint_byte_threshold {
             return;
         }
-        let result = write_checkpoint(&self.buffer_pool, &mut self.txn_manager);
+        let result = {
+            let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+            write_checkpoint(&self.buffer_pool, &mut txn_manager)
+        };
         match result {
             Ok(_) => {
-                self.bytes_at_last_checkpoint = self.buffer_pool.log_bytes_appended();
+                let mut checkpoint =
+                    recover_lock(self.checkpoint.lock(), "EngineShared.checkpoint");
+                checkpoint.bytes_at_last_checkpoint = self.buffer_pool.log_bytes_appended();
+                drop(checkpoint);
                 self.record_checkpoint_written();
             }
             Err(err) => {
@@ -622,14 +588,16 @@ impl EngineState {
     }
 
     fn table_names(&self) -> Vec<String> {
-        self.catalog.table_names().into_iter().map(String::from).collect()
+        let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
+        catalog.table_names().into_iter().map(String::from).collect()
     }
 
     fn table_schema(&self, name: &str) -> Result<Schema> {
-        Ok(self.catalog.get_table(name)?.schema.clone())
+        let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
+        Ok(catalog.get_table(name)?.schema.clone())
     }
 
-    fn execute(&mut self, session: &mut SessionState, sql: &str) -> Result<ResultSet> {
+    fn execute(&self, session: &mut SessionState, sql: &str) -> Result<ResultSet> {
         let stmt_id = session.next_stmt_id;
         session.next_stmt_id += 1;
 
@@ -638,7 +606,7 @@ impl EngineState {
         let txn_span = session.txn_span.clone();
         let _txn_guard = txn_span.as_ref().map(tracing::Span::enter);
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let result = if self.buffer_pool.is_flush_poisoned() {
             Err(Error::FlushPoisoned)
         } else {
@@ -678,11 +646,8 @@ impl EngineState {
             }
         }
 
-        session.idle_since = if session.txn_slot.txn_id().is_some() {
-            Some(std::time::Instant::now())
-        } else {
-            None
-        };
+        session.idle_since =
+            if session.txn_slot.txn_id().is_some() { Some(Instant::now()) } else { None };
 
         result
     }
@@ -692,7 +657,7 @@ impl EngineState {
         fields(stmt_id = stmt_id, statement_kind = tracing::field::Empty)
     )]
     fn execute_impl(
-        &mut self,
+        &self,
         session: &mut SessionState,
         sql: &str,
         stmt_id: u64,
@@ -709,7 +674,7 @@ impl EngineState {
         let kind = statement_kind(&statement);
         tracing::Span::current().record("statement_kind", kind);
 
-        let query_start = std::time::Instant::now();
+        let query_start = Instant::now();
         let result = match statement {
             Statement::Begin => self.handle_begin(session),
             Statement::Commit => self.handle_commit(session),
@@ -723,22 +688,25 @@ impl EngineState {
     }
 
     fn execute_non_control_statement(
-        &mut self,
+        &self,
         session: &mut SessionState,
         statement: Statement,
     ) -> Result<ResultSet> {
         let (txn_id, autocommit) = self.txn_for_statement(session)?;
-        let bound = Binder::new(&self.catalog).bind(statement).map_err(Error::from);
+        let bound = {
+            let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
+            Binder::new(&catalog).bind(statement).map_err(Error::from)
+        };
         let result = bound.and_then(|bound| self.execute_bound(bound, txn_id));
 
         if autocommit {
             match &result {
                 Ok(_) => {
-                    self.txn_manager.commit(txn_id, &self.buffer_pool)?;
+                    self.commit_txn(txn_id)?;
                     self.maybe_checkpoint();
                 }
                 Err(_) => {
-                    let _ = self.txn_manager.abort(txn_id, &self.buffer_pool);
+                    let _ = self.abort_txn(txn_id);
                     let _ = self.reload_catalog();
                 }
             }
@@ -748,62 +716,62 @@ impl EngineState {
         result
     }
 
-    fn handle_begin(&mut self, session: &mut SessionState) -> Result<ResultSet> {
+    fn handle_begin(&self, session: &mut SessionState) -> Result<ResultSet> {
         if session.txn_slot.txn_id().is_some() {
             return Err(Error::NestedTransaction);
         }
         let isolation_level = IsolationLevel::ReadCommitted;
-        let txn_id = self.txn_manager.begin(&self.buffer_pool, isolation_level)?;
+        let txn_id = {
+            let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+            txn_manager.begin(&self.buffer_pool, isolation_level)?
+        };
         session.txn_slot = TxnSlot::Active(txn_id);
         session.txn_span = Some(
             tracing::info_span!("transaction", txn_id = txn_id.0, isolation = ?isolation_level),
         );
-        self.current_txn = Some((session.session_id, txn_id));
         Ok(ResultSet::rows_affected(0))
     }
 
-    fn handle_commit(&mut self, session: &mut SessionState) -> Result<ResultSet> {
+    fn handle_commit(&self, session: &mut SessionState) -> Result<ResultSet> {
         match session.txn_slot {
             TxnSlot::None | TxnSlot::TimedOut => {
                 Err(Error::NoActiveTransaction { statement: "COMMIT".to_string() })
             }
             TxnSlot::Aborted(txn_id) => {
-                self.txn_manager.abort(txn_id, &self.buffer_pool)?;
+                self.abort_txn(txn_id)?;
                 self.reload_catalog()?;
                 session.txn_slot = TxnSlot::None;
                 session.txn_span = None;
-                self.current_txn = None;
                 self.maybe_checkpoint();
                 Ok(ResultSet::RolledBack)
             }
             TxnSlot::Active(txn_id) => {
-                self.txn_manager.commit(txn_id, &self.buffer_pool)?;
+                self.commit_txn(txn_id)?;
                 session.txn_slot = TxnSlot::None;
                 session.txn_span = None;
-                self.current_txn = None;
                 self.maybe_checkpoint();
                 Ok(ResultSet::rows_affected(0))
             }
         }
     }
 
-    fn handle_rollback(&mut self, session: &mut SessionState) -> Result<ResultSet> {
+    fn handle_rollback(&self, session: &mut SessionState) -> Result<ResultSet> {
         let txn_id = session
             .txn_slot
             .txn_id()
             .ok_or_else(|| Error::NoActiveTransaction { statement: "ROLLBACK".to_string() })?;
-        self.txn_manager.abort(txn_id, &self.buffer_pool)?;
+        self.abort_txn(txn_id)?;
         self.reload_catalog()?;
 
         session.txn_slot = TxnSlot::None;
         session.txn_span = None;
-        self.current_txn = None;
         self.maybe_checkpoint();
         Ok(ResultSet::rows_affected(0))
     }
 
-    fn handle_explain(&mut self, statement: Statement) -> Result<ResultSet> {
-        let bound = Binder::new(&self.catalog).bind(statement).map_err(Error::from)?;
+    fn handle_explain(&self, statement: Statement) -> Result<ResultSet> {
+        let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
+        let bound = Binder::new(&catalog).bind(statement).map_err(Error::from)?;
         let BoundStatement::Explain { verbose, inner } = bound else {
             unreachable!(
                 "handle_explain is only called for Statement::Explain, whose binder output is \
@@ -812,43 +780,61 @@ impl EngineState {
         };
 
         let logical = planner::plan(*inner)?;
-        let optimized =
-            Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &self.catalog);
+        let optimized = Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &catalog);
         let physical = to_physical(optimized.clone());
 
         let mut lines = Vec::new();
         if verbose {
             lines.push("Logical plan:".to_string());
-            lines.extend(explain_logical(&optimized, &self.catalog, verbose));
+            lines.extend(explain_logical(&optimized, &catalog, verbose));
             lines.push("Physical plan:".to_string());
         }
-        lines.extend(explain_physical(&physical, &self.catalog, verbose));
+        lines.extend(explain_physical(&physical, &catalog, verbose));
 
         let rows = lines.into_iter().map(|line| Tuple::new(vec![Value::Varchar(line)])).collect();
         Ok(ResultSet::rows(vec!["QUERY PLAN".to_string()], rows))
     }
 
-    fn reload_catalog(&mut self) -> Result<()> {
-        let reload_txn =
-            self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
-        self.catalog = Catalog::open(&self.buffer_pool, reload_txn)?;
-        self.txn_manager.commit(reload_txn, &self.buffer_pool)?;
+    fn reload_catalog(&self) -> Result<()> {
+        let reload_txn = {
+            let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+            txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?
+        };
+        let fresh = Catalog::open(&self.buffer_pool, reload_txn)?;
+        {
+            let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+            txn_manager.commit(reload_txn, &self.buffer_pool)?;
+        }
+        *recover_lock(self.catalog.write(), "EngineShared.catalog") = fresh;
         Ok(())
     }
 
-    fn txn_for_statement(&mut self, session: &mut SessionState) -> Result<(TxnId, bool)> {
+    fn commit_txn(&self, txn_id: TxnId) -> Result<()> {
+        let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+        txn_manager.commit(txn_id, &self.buffer_pool)?;
+        Ok(())
+    }
+
+    fn abort_txn(&self, txn_id: TxnId) -> Result<()> {
+        let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+        txn_manager.abort(txn_id, &self.buffer_pool)?;
+        Ok(())
+    }
+
+    fn txn_for_statement(&self, session: &mut SessionState) -> Result<(TxnId, bool)> {
         match session.txn_slot {
             TxnSlot::Active(txn_id) => Ok((txn_id, false)),
             TxnSlot::Aborted(_) => Err(Error::TransactionAborted),
             TxnSlot::None | TxnSlot::TimedOut => {
-                let txn_id =
-                    self.txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
+                let mut txn_manager =
+                    recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+                let txn_id = txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
                 Ok((txn_id, true))
             }
         }
     }
 
-    fn execute_bound(&mut self, bound: BoundStatement, txn_id: TxnId) -> Result<ResultSet> {
+    fn execute_bound(&self, bound: BoundStatement, txn_id: TxnId) -> Result<ResultSet> {
         match bound {
             BoundStatement::CreateTable(create) => {
                 let schema = Schema::new(
@@ -858,7 +844,8 @@ impl EngineState {
                         .map(|column| Column::new(column.name, column.data_type, column.nullable))
                         .collect(),
                 );
-                self.catalog.create_table(&self.buffer_pool, txn_id, &create.table_name, schema)?;
+                let mut catalog = recover_lock(self.catalog.write(), "EngineShared.catalog");
+                catalog.create_table(&self.buffer_pool, txn_id, &create.table_name, schema)?;
                 Ok(ResultSet::rows_affected(0))
             }
             BoundStatement::Insert(insert) => {
@@ -878,16 +865,18 @@ impl EngineState {
             BoundStatement::Select(select) => {
                 let column_names = select.column_names.clone();
                 let logical = planner::plan(BoundStatement::Select(select))?;
-                let optimized =
-                    Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &self.catalog);
+                let optimized = {
+                    let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
+                    Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &catalog)
+                };
                 let physical = to_physical(optimized);
                 tracing::debug!(plan = ?physical, "executing plan");
                 let rows = self.run(physical, txn_id)?;
                 Ok(ResultSet::rows(column_names, rows))
             }
             BoundStatement::CreateIndex(create) => {
-                let index_id = self
-                    .catalog
+                let mut catalog = recover_lock(self.catalog.write(), "EngineShared.catalog");
+                let index_id = catalog
                     .create_index(
                         &self.buffer_pool,
                         txn_id,
@@ -896,7 +885,13 @@ impl EngineState {
                         create.column_index,
                     )?
                     .index_id;
-                self.populate_index(txn_id, create.table_id, create.column_index, index_id)?;
+                self.populate_index(
+                    &catalog,
+                    txn_id,
+                    create.table_id,
+                    create.column_index,
+                    index_id,
+                )?;
                 Ok(ResultSet::rows_affected(0))
             }
             BoundStatement::Explain { .. } => unreachable!(
@@ -909,17 +904,18 @@ impl EngineState {
 
     fn populate_index(
         &self,
+        catalog: &Catalog,
         txn_id: TxnId,
         table_id: common::TableId,
         column_index: usize,
         index_id: common::IndexId,
     ) -> Result<()> {
-        let table = self.catalog.get_table_by_id(table_id)?;
+        let table = catalog.get_table_by_id(table_id)?;
         let first_page_id = table.first_page_id;
         let column_types: Vec<_> =
             table.schema.columns().iter().map(|column| column.data_type).collect();
 
-        let mut root_page_id = self.catalog.index_root_page(index_id)?;
+        let mut root_page_id = catalog.index_root_page(index_id)?;
         let heap = TableHeap::open(&self.buffer_pool, first_page_id);
         for entry in heap.iter() {
             let (rid, bytes) = entry?;
@@ -933,12 +929,7 @@ impl EngineState {
             btree_index.insert(txn_id, &key, rid)?;
             let root_after = btree_index.root_page_id();
             if root_after != root_page_id {
-                self.catalog.update_index_root_page(
-                    &self.buffer_pool,
-                    txn_id,
-                    index_id,
-                    root_after,
-                )?;
+                catalog.update_index_root_page(&self.buffer_pool, txn_id, index_id, root_after)?;
                 root_page_id = root_after;
             }
         }
@@ -946,9 +937,13 @@ impl EngineState {
     }
 
     fn run(&self, physical: PhysicalPlan, txn_id: TxnId) -> Result<Vec<Tuple>> {
-        let txn = self.txn_manager.get(txn_id)?;
+        let txn = {
+            let txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+            txn_manager.get(txn_id)?.clone()
+        };
+        let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
         let mut executor = build_executor(physical);
-        let mut ctx = ExecutorContext::new(&self.catalog, &self.buffer_pool, txn);
+        let mut ctx = ExecutorContext::new(&catalog, &self.buffer_pool, &txn);
         executor.init(&mut ctx)?;
 
         let mut rows = Vec::new();
