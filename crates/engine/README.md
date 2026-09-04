@@ -16,7 +16,7 @@ Dependencies) even though it does pull in `tracing` to log each error
 exactly once at the boundary it owns (`Database::open`/`Database::execute`
 - see CLAUDE.md's "log at the boundary" rule).
 
-As of M14.1 (`docs/ROADMAP.md`), `Database` is a thin wrapper around one
+As of M13.1 (`docs/ROADMAP.md`), `Database` is a thin wrapper around one
 session of a dedicated engine thread (`runtime.rs`) reached by message
 passing, rather than doing the work itself on whatever thread calls it -
 see `runtime.MD` for the full design and why it's a thread, not a lock,
@@ -76,7 +76,7 @@ was (`Database::handle_explain`, `database.MD`).
 
 - `database` - `Database`, a thin wrapper around one session of the
   engine thread; opens, closes, and executes SQL against a single
-  database with a public surface unchanged since before the M14.1 split.
+  database with a public surface unchanged since before the M13.1 split.
   See [database.MD](src/database.MD).
 - `runtime` - `EngineHandle`/`SessionHandle` and the engine thread they
   reach by message passing; owns the catalog, buffer pool, and

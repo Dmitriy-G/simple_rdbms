@@ -1,7 +1,7 @@
 # dispatch_never_blocks
 
-Regression coverage for P-14 (`.claude/problems.md`, found reviewing M10.2
-subtask 1): the dispatch thread in `crates/engine/src/runtime.rs` must
+Regression coverage for P-14 (found reviewing M10.2 subtask 1): the
+dispatch thread in `crates/engine/src/runtime.rs` must
 never block on a lock a worker thread might be holding for a statement's
 whole duration, since that turns one slow session's `SELECT` into a
 stall for every other connected session. Unlike `tests/sessions.rs`,

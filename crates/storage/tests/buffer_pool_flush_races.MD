@@ -1,7 +1,7 @@
 # buffer_pool_flush_races
 
 Exercises `buffer::BufferPool::flush_pages` and the state it races
-against, closing R-6 of `../../../.claude/task.MD`: the `evicting` set
+against, closing R-6: the `evicting` set
 (`docs/adr/0010-buffer-pool-waits-for-a-frame.md`) and the
 `page_lsn`-guarded dirty clear (`buffer.MD`) had no direct tests, only
 the incidental coverage `buffer_pool.rs` and `buffer_pool_concurrency.rs`
@@ -11,7 +11,7 @@ race, every test here drives one specific interleaving deliberately,
 using either a one-shot failing device (`FailOnceDevice`) or a device
 that pauses mid-write on command (`PausingDevice`) to hold `flush_pages`
 open exactly where the property under test needs it held open. Ordered
-cheapest first, matching `../../../.claude/task.MD`'s R-6 list.
+cheapest first, matching R-6's own list.
 
 ## Key Components
 
@@ -52,9 +52,9 @@ cheapest first, matching `../../../.claude/task.MD`'s R-6 list.
   `pool.assert_frame_accounting()` checks `acquire_free_frame`'s
   `abort_eviction` path left no frame leaked. The failure lands after the
   double-write buffer's batch was synced but before it was cleared
-  (`buffer.MD`'s "Poisoning" paragraph on `flush_pages` -
-  `../../../.claude/problems.md`'s double-write-buffer-slot-reuse entry is what motivated
-  it), so the pool must now refuse every further flush - fast, with
+  (`buffer.MD`'s "Poisoning" paragraph on `flush_pages` - the
+  double-write-buffer-slot-reuse bug is what motivated it), so the pool
+  must now refuse every further flush - fast, with
   `StorageError::FlushPoisoned`, never `BufferPoolExhausted` and never
   silently succeeding, since silently succeeding is exactly what would
   let a later flush overwrite the double-write backup

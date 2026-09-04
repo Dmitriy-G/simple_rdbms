@@ -240,5 +240,5 @@ easier to falsely pass. All four tests are timing-dependent by nature
 window maximizes the odds of hitting each race, but cannot guarantee it
 on every single run the way a fully deterministic test would); before
 trusting a change to this file or to `buffer::BufferPool`, run this
-binary in a loop (at least 50 times, per `../../../.claude/task.MD`'s M10.2 entry) rather
-than accepting one green run as proof.
+binary in a loop (at least 50 times, per M10.2's own testing guidance)
+rather than accepting one green run as proof.

@@ -2,7 +2,7 @@
 
 A single open connection to a database. This used to own the catalog,
 buffer pool, and transaction manager directly and run every statement
-itself; as of M14.1 (`docs/ROADMAP.md`) it is a thin, ergonomic wrapper
+itself; as of M13.1 (`docs/ROADMAP.md`) it is a thin, ergonomic wrapper
 around `runtime::EngineHandle`/`runtime::SessionHandle` (`runtime.MD`),
 which do the real work on one dedicated engine thread reached by message
 passing. `Database`'s own public surface - every method's signature and
@@ -57,7 +57,7 @@ as they always have, with no idea an engine thread exists underneath.
   `Arc<runtime::EngineHandle>` and therefore the same catalog, buffer pool,
   and transaction manager. This is how `crates/engine/tests/sessions.rs`
   drives more than one connection against one database without exposing
-  `runtime::EngineHandle`/`SessionHandle` directly, and the shape M14.2's
+  `runtime::EngineHandle`/`SessionHandle` directly, and the shape M13.2's
   network listener needs to turn an accepted socket into a session.
 - `Database::table_names(&self) -> Vec<String>`/`table_schema(&self, name)
   -> Result<Schema>` - forward to the same-named `SessionHandle` methods,

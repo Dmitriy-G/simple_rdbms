@@ -110,11 +110,11 @@ isolation, independent of that higher-layer wiring, which
   per iteration and asserts it returns exactly that key's original `Rid`,
   and every 20th iteration also runs a full `range_scan` and asserts every
   baseline key is present in it with its correct `Rid` - the property
-  `.claude/task.MD`'s subtask 2 actually asks for ("every read returns
-  either the pre-insert or post-insert value and never an error or a
-  missing key"), not a stronger duplicate-free guarantee that
-  `../../../.claude/problems.md`'s P-6 found `range_scan` does not have across a
-  concurrent leaf-boundary crossing. Ends by joining every reader (any
+  M10.2 subtask 2 actually asks for ("every read returns either the
+  pre-insert or post-insert value and never an error or a missing key"),
+  not a stronger duplicate-free guarantee that P-6 found `range_scan`
+  does not have across a concurrent leaf-boundary crossing. Ends by
+  joining every reader (any
   `Err` fails the test with the exact key and mismatch) and running
   `check_invariants` on the writer's own final tree. Timing-dependent like
   `crates/storage/tests/buffer_pool_concurrency.rs`'s races: it exercises

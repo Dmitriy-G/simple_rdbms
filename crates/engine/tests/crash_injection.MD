@@ -18,8 +18,8 @@ this comparison to mean anything, which is why the WAL side is a
 halves speak the same numbered segment family production actually writes
 (`docs/adr/0011-segmented-write-ahead-log.md`).
 
-This is the M7 deliverable per `../../../.claude/task.MD`: "this harness will find more
-bugs than every other test in the repo combined."
+This is the M7 deliverable: "this harness will find more bugs than every
+other test in the repo combined."
 
 ### Durability models
 
@@ -144,7 +144,7 @@ driving SQL through an `engine::Database`:
   only ever reopens cleanly afterward, so a freshly opened
   `TransactionManager` never gets a chance to collide with an id a
   *previous* generation's crash left dangling - which is exactly the M9
-  bug (see `../../../.claude/task.MD`) this harness extension targets: a transaction whose
+  bug this harness extension targets: a transaction whose
   `Commit` reached disk but whose `End` didn't is a "phantom winner" that
   recovery correctly never undoes, but if a later generation's
   `TransactionManager` isn't seeded past its id, a brand new transaction

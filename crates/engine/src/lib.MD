@@ -13,7 +13,7 @@ about `planner`); `engine` is the only place that does.
 
 - `Database` - a thin, ergonomic wrapper around one session of the engine
   thread described below; opens, closes, and executes SQL against a
-  single database with a public surface unchanged since before M14.1
+  single database with a public surface unchanged since before M13.1
   split the engine out onto its own thread. See `database.MD`.
 - `runtime` - private module. `EngineHandle`/`SessionHandle` and the
   message-passing protocol between them: the engine-wide state (catalog,

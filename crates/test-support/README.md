@@ -3,8 +3,8 @@
 Shared test-only fixtures for the workspace's `tests/` integration suites:
 fault-injecting devices, buffer-pool setup, tracing capture, and the
 crash-injection sweep algorithm. It exists to end the copy-paste
-duplication a testing-convention review (`../../.claude/task.MD`'s T-2) found across
-`storage`, `catalog`, `executor`, `txn`, and `engine`'s own `tests/`
+duplication a testing-convention review (T-2) found across `storage`,
+`catalog`, `executor`, `txn`, and `engine`'s own `tests/`
 directories — roughly a dozen near-identical `open_pool` functions, seven
 copies of `open_file`, and two independent copies of the crash-injection
 sweep that is this repository's primary durability correctness gate.

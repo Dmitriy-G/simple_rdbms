@@ -51,9 +51,9 @@ it without a clean shutdown (simulating a crash), then reopens a fresh
   1's write survives and generation 2's is undone.
 - `an_uncommitted_header_update_is_undone_like_any_other_page_mutation` -
   a transaction allocates a heap page and points the database header
-  (`catalog_first_page`) at it, but crashes before committing. Per
-  `../../../.claude/task.MD`'s "route page 0 through the WAL," this must be undone exactly
-  like any other page mutation - a raw, unlogged write (the bug this
+  (`catalog_first_page`) at it, but crashes before committing. Per "route
+  page 0 through the WAL," this must be undone exactly like any other
+  page mutation - a raw, unlogged write (the bug this
   guards against) could never be rolled back this way, since only a
   properly WAL-tracked `Update` record lets `undo_transaction` find and
   revert it.

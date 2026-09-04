@@ -639,9 +639,9 @@ same thread.
   `recover_double_write` reads "bad slot checksum" and - correctly, by
   its own rule - treats it as "the real write never started, nothing to
   restore," even though the real page from the *first* failure is
-  actually torn and now has no way back. This was a real, reproduced bug
-  (`../../../.claude/problems.md`), not a hypothetical: a `ChecksumMismatch` on reopen with
-  no `dwb_pages_restored_total` warning ever logged. The fix is
+  actually torn and now has no way back. This was a real, reproduced bug,
+  not a hypothetical: a `ChecksumMismatch` on reopen with no
+  `dwb_pages_restored_total` warning ever logged. The fix is
   `flush_poisoned`: once this function fails in that window, it sets the
   flag (still under `flush_sequence`, so the set and the batch it
   describes become visible together) and every later call - on this pool,

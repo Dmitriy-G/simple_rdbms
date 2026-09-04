@@ -6,8 +6,8 @@ two independent copies: `crates/storage/tests/btree_crash_injection.rs`'s
 and `crates/engine/tests/crash_injection.rs`'s (drives SQL through an
 `engine::Database` and checks recovered table rows). CLAUDE.md calls this
 pair "the repository's primary correctness gate for durability" - the
-risk T-2 (`../../../.claude/task.MD`) named directly: two copies of the same sweep mean a
-fix to one can silently miss the other. The two originals differ in
+risk T-2 named directly: two copies of the same sweep mean a fix to one
+can silently miss the other. The two originals differ in
 handle type, workload-item type, and state type at every step, so the
 generalization is a trait (`CrashWorkload`) the two call sites each
 implement locally against their own domain types, rather than a version
