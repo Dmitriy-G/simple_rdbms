@@ -32,6 +32,19 @@ row.
   (its creator has not committed yet) never qualifies, regardless of
   `read_ts`. Returns `None` when no entry qualifies, including on an
   empty chain.
+- `VersionChain::mark_committed(&mut self, txn_id, commit_ts)` - sets
+  `begin_ts = Some(commit_ts)` on every entry whose `creator_txn_id` is
+  `txn_id`, making that transaction's versions visible to readers with a
+  snapshot at or after `commit_ts`. Called by
+  `version_store::VersionStore::commit_versions` once a transaction's
+  commit record is durable.
+- `VersionChain::remove_creator(&mut self, txn_id)` - drops every entry
+  whose `creator_txn_id` is `txn_id`, undoing an aborted transaction's
+  writes to this row. Called by
+  `version_store::VersionStore::abort_versions`.
+- `VersionChain::is_empty(&self) -> bool` - true when the chain holds no
+  versions, so its caller (`VersionStore`) knows to drop the chain
+  entirely rather than keep an empty one keyed by a `Rid`.
 
 ## Usage Example
 

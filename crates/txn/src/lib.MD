@@ -20,6 +20,8 @@ transactions and the physical records they touch.
   `manager.MD`.
 - `VersionChain`, `VersionEntry` - the MVCC version chain for a single
   logical row. See `mvcc.MD`.
+- `VersionStore` - MVCC version chains keyed by `Rid`, shared across every
+  session. See `version_store.MD`.
 - `Transaction`, `TransactionState` - a single unit of work and its
   position in the 2PL protocol. See `transaction.MD`.
 

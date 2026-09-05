@@ -31,4 +31,20 @@ impl VersionChain {
             _ => false,
         })
     }
+
+    pub fn mark_committed(&mut self, txn_id: TxnId, commit_ts: u64) {
+        for entry in &mut self.versions {
+            if entry.creator_txn_id == txn_id {
+                entry.begin_ts = Some(commit_ts);
+            }
+        }
+    }
+
+    pub fn remove_creator(&mut self, txn_id: TxnId) {
+        self.versions.retain(|entry| entry.creator_txn_id != txn_id);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.versions.is_empty()
+    }
 }

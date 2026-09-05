@@ -7,6 +7,7 @@ mod lock_manager;
 mod manager;
 mod mvcc;
 mod transaction;
+mod version_store;
 
 pub use checkpoint::write_checkpoint;
 pub use error::TxnError;
@@ -15,3 +16,4 @@ pub use lock_manager::{LockManager, LockMode};
 pub use manager::TransactionManager;
 pub use mvcc::{VersionChain, VersionEntry};
 pub use transaction::{Transaction, TransactionState};
+pub use version_store::VersionStore;
