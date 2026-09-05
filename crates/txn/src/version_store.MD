@@ -3,12 +3,13 @@
 The MVCC version chain for every logical row in the database, keyed by
 `Rid` and shared across every session, sitting alongside `mvcc.rs`'s
 per-row `VersionChain`/`VersionEntry` types the way `LockManager`
-(`lock_manager.rs`) sits alongside the resources it locks. It is meant to
-be owned by `TransactionManager` for the lifetime of the process, handed
-out as `Arc<VersionStore>` clones to executors, which will record inserts
-and consult visibility through it instead of locking rows under snapshot
-isolation — see the closing note below for what is and is not wired up
-yet.
+(`lock_manager.rs`) sits alongside the resources it locks. `TransactionManager`
+(`manager.MD`) owns one `VersionStore` for the lifetime of the process and
+exposes it via `TransactionManager::version_store`, mirroring
+`lock_manager`, so executors can be handed `Arc<VersionStore>` clones to
+record inserts and consult visibility through instead of locking rows
+under snapshot isolation — see the closing note below for what still
+isn't wired up.
 
 ## Key Components
 
@@ -76,7 +77,7 @@ store.commit_versions(TxnId(1), 10);
 assert!(store.is_visible(rid, 10));
 ```
 
-Not yet constructed by `TransactionManager`: a later M10.3 subtask adds a
-`VersionStore` field there and a `version_store()` accessor mirroring
-`lock_manager()`, so `ExecutorContext` can hold a reference to both
-without the executor layer knowing how either is implemented.
+Not yet consulted by `executor` or `storage::heap`: a later M10.3 subtask
+adds a `version_store: &'a VersionStore` field to
+`executor::ExecutorContext` so scans and inserts actually call through to
+this store instead of every reader still taking a shared row lock.

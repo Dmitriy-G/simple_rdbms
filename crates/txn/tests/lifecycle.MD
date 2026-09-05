@@ -28,6 +28,33 @@ construct (see `smoke.rs`).
   runs `recovery::recover`, and checks a `TransactionManager` seeded from
   its `highest_seen` result hands out an id past the one already used in
   the log.
+- `a_transaction_begun_after_a_commit_has_a_strictly_greater_read_ts` -
+  begins a transaction, reads its `read_ts`, commits it, begins a second
+  transaction, and checks the second one's `read_ts` is strictly greater -
+  proving `TransactionManager`'s shared timestamp counter actually
+  advances across a commit rather than each `begin` reusing the same
+  value.
+- `a_committed_writers_version_is_visible_only_to_readers_begun_at_or_after_its_commit` -
+  a transaction begun before a writer even starts stays unable to see a
+  `Rid` the writer records through
+  `TransactionManager::version_store().record_insert` both before and
+  after the writer commits, while a transaction begun after the commit
+  can - proving `commit` calls `version_store().commit_versions` with a
+  `commit_ts` that lands after every reader that started earlier, and
+  before every reader that starts later.
+- `an_aborted_writers_version_never_resurfaces_for_a_later_committed_writer` -
+  a transaction records a version at a `Rid` and aborts, then a second
+  transaction records and commits its own version at the *same* `Rid`; a
+  reader begun before the second commit does not see anything there, and
+  one begun after sees only the second writer's version - proving
+  `abort` actually discards the first writer's version rather than
+  leaving it to interfere with (or get confused for) a later one. This
+  does not assert that the `Rid` is invisible in the gap between the
+  abort and that later `record_insert`, with no chain present in the
+  store at all: `VersionStore::is_visible`'s "no chain for this `Rid`"
+  case is indistinguishable from "this `Rid`'s only version was just
+  aborted", so that gap reads as visible. See
+  `crates/txn/src/version_store.MD`'s note on `abort_versions`.
 
 ## Usage Example
 

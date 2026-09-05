@@ -20,10 +20,16 @@ A single unit of work: the state the `TransactionManager` and
   reach back to, which is what `TransactionManager::earliest_active_begin_lsn`
   reads to keep the write-ahead log from truncating a segment an active
   transaction's undo might still need
-  (`docs/adr/0011-segmented-write-ahead-log.md`).
-- `Transaction::new(txn_id, isolation_level, begin_lsn) -> Self` - begins a
-  new transaction with the given id, isolation level, and `Begin` LSN, in
-  the `Growing` state.
+  (`docs/adr/0011-segmented-write-ahead-log.md`). `read_ts` is this
+  transaction's MVCC snapshot timestamp: the value of
+  `TransactionManager`'s shared timestamp counter at the moment it began,
+  so it sees exactly the versions committed before it started and nothing
+  committed after - a snapshot-isolation scan
+  (`txn::VersionStore::is_visible`) is driven by this field, not by
+  `begin_lsn`, which is a WAL position rather than an MVCC timestamp.
+- `Transaction::new(txn_id, isolation_level, begin_lsn, read_ts) -> Self` -
+  begins a new transaction with the given id, isolation level, `Begin`
+  LSN, and snapshot timestamp, in the `Growing` state.
 
 ## Usage Example
 
@@ -31,7 +37,7 @@ A single unit of work: the state the `TransactionManager` and
 use common::{Lsn, TxnId};
 use txn::{IsolationLevel, Transaction};
 
-let txn = Transaction::new(TxnId(1), IsolationLevel::ReadCommitted, Lsn(16));
+let txn = Transaction::new(TxnId(1), IsolationLevel::ReadCommitted, Lsn(16), 3);
 assert_eq!(txn.state, txn::TransactionState::Growing);
 ```
 

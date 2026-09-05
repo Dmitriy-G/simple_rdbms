@@ -10,22 +10,41 @@ use crate::error::TxnError;
 use crate::isolation::IsolationLevel;
 use crate::lock_manager::LockManager;
 use crate::transaction::Transaction;
+use crate::version_store::VersionStore;
 
 #[derive(Debug, Default)]
 pub struct TransactionManager {
     active: HashMap<TxnId, Transaction>,
     next_txn_id: u64,
     lock_manager: Arc<LockManager>,
+    version_store: Arc<VersionStore>,
+    next_ts: u64,
 }
 
 impl TransactionManager {
     pub fn new(highest_seen: Option<TxnId>) -> Self {
         let next_txn_id = highest_seen.map_or(0, |TxnId(id)| id + 1);
-        Self { active: HashMap::new(), next_txn_id, lock_manager: Arc::new(LockManager::new()) }
+        Self {
+            active: HashMap::new(),
+            next_txn_id,
+            lock_manager: Arc::new(LockManager::new()),
+            version_store: Arc::new(VersionStore::new()),
+            next_ts: 0,
+        }
     }
 
     pub fn lock_manager(&self) -> &Arc<LockManager> {
         &self.lock_manager
+    }
+
+    pub fn version_store(&self) -> &Arc<VersionStore> {
+        &self.version_store
+    }
+
+    fn next_timestamp(&mut self) -> u64 {
+        let ts = self.next_ts;
+        self.next_ts += 1;
+        ts
     }
 
     #[tracing::instrument(skip_all, fields(txn_id = tracing::field::Empty, isolation = ?isolation_level))]
@@ -43,8 +62,9 @@ impl TransactionManager {
             self.active.keys().collect::<Vec<_>>()
         );
         self.next_txn_id += 1;
+        let read_ts = self.next_timestamp();
         let begin_lsn = pool.append_log(txn_id, LogRecordKind::Begin)?;
-        self.active.insert(txn_id, Transaction::new(txn_id, isolation_level, begin_lsn));
+        self.active.insert(txn_id, Transaction::new(txn_id, isolation_level, begin_lsn, read_ts));
         Ok(txn_id)
     }
 
@@ -53,6 +73,8 @@ impl TransactionManager {
         self.active.get(&txn_id).ok_or(TxnError::UnknownTransaction(txn_id.0))?;
         let commit_lsn = pool.append_log(txn_id, LogRecordKind::Commit)?;
         pool.flush_log(commit_lsn)?;
+        let commit_ts = self.next_timestamp();
+        self.version_store.commit_versions(txn_id, commit_ts);
         pool.append_log(txn_id, LogRecordKind::End)?;
         self.active.remove(&txn_id);
         self.lock_manager.release_all(txn_id);
@@ -68,6 +90,7 @@ impl TransactionManager {
             recovery::undo_transaction(pool, txn_id, last_lsn)?;
         }
         self.active.remove(&txn_id);
+        self.version_store.abort_versions(txn_id);
         self.lock_manager.release_all(txn_id);
         metrics::counter!("transactions_aborted_total").increment(1);
         Ok(())

@@ -27,7 +27,7 @@ fn insert_maintains_a_single_index() {
         row(vec![Value::Integer(3)]),
     ];
     let mut insert = InsertExecutor::new(table_id, rows);
-    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0));
+    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0), 0);
     support::run_to_completion(&pool, &catalog, &txn, &mut insert);
 
     let root_page_id = catalog.index_root_page(index_id).expect("root page");
@@ -56,7 +56,7 @@ fn insert_maintains_every_index_on_a_multi_indexed_table() {
 
     let rows = vec![row(vec![Value::Integer(10), Value::Integer(100)])];
     let mut insert = InsertExecutor::new(table_id, rows);
-    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0));
+    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0), 0);
     support::run_to_completion(&pool, &catalog, &txn, &mut insert);
 
     let root_a = catalog.index_root_page(idx_a).expect("root a");
@@ -85,7 +85,7 @@ fn a_failed_index_insert_returns_an_error_and_leaves_that_row_out_of_the_index()
 
     let rows = vec![row(vec![Value::Double(1.0)]), row(vec![Value::Double(f64::NAN)])];
     let mut insert = InsertExecutor::new(table_id, rows);
-    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0));
+    let txn = Transaction::new(TXN, IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();
     let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
     insert.init(&mut ctx).expect("init");
@@ -125,7 +125,7 @@ fn a_rolled_back_root_split_leaves_the_index_structurally_valid_and_empty() {
     let insert_txn = txn_manager.begin(&pool, IsolationLevel::ReadCommitted).expect("begin insert");
     let rows: Vec<_> = (0..3_000i32).map(|i| row(vec![Value::Integer(i)])).collect();
     let mut insert = InsertExecutor::new(table_id, rows);
-    let txn = Transaction::new(insert_txn, IsolationLevel::ReadCommitted, Lsn(0));
+    let txn = Transaction::new(insert_txn, IsolationLevel::ReadCommitted, Lsn(0), 0);
     support::run_to_completion(&pool, &catalog, &txn, &mut insert);
 
     let split_root = catalog.index_root_page(index_id).expect("root after insert");

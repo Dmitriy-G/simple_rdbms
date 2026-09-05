@@ -46,7 +46,7 @@ fn scan_spanning_pages_preserves_insertion_order() {
     let mut catalog = Catalog::new();
     let (table_id, expected) = seed_table(&pool, &mut catalog, 800);
 
-    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0));
+    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();
     let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
     let mut scan = SeqScanExecutor::new(table_id);
@@ -65,7 +65,7 @@ fn pulling_one_tuple_never_fetches_pages_beyond_the_first() {
     let mut catalog = Catalog::new();
     let (table_id, _expected) = seed_table(&pool, &mut catalog, 800);
 
-    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0));
+    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();
     let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
     let mut scan = SeqScanExecutor::new(table_id);
@@ -87,7 +87,7 @@ fn interleaved_scans_over_the_same_table_each_yield_the_full_result() {
     let mut catalog = Catalog::new();
     let (table_id, expected) = seed_table(&pool, &mut catalog, 800);
 
-    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0));
+    let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();
     let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
 

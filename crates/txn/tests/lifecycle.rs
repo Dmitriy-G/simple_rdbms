@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use common::{Lsn, TxnId};
+use common::{Lsn, PageId, Rid, TxnId};
 use storage::buffer::BufferPool;
 use storage::recovery;
 use storage::wal::LogRecordKind;
@@ -108,5 +108,87 @@ fn recovery_seeds_the_next_id_past_every_id_the_log_has_ever_used() -> Result<()
     let mut manager = TransactionManager::new(highest_seen);
     let txn = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
     assert!(txn.0 > 7, "the next id handed out ({txn:?}) must exceed the log's highest id (7)");
+    Ok(())
+}
+
+#[test]
+fn a_transaction_begun_after_a_commit_has_a_strictly_greater_read_ts() -> Result<(), Box<dyn Error>>
+{
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path())?;
+    let mut manager = TransactionManager::new(None);
+
+    let earlier = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let read_ts_before = manager.get(earlier)?.read_ts;
+    manager.commit(earlier, &pool)?;
+
+    let later = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let read_ts_after = manager.get(later)?.read_ts;
+
+    assert!(
+        read_ts_after > read_ts_before,
+        "a transaction begun after another commits ({read_ts_after}) must have a strictly \
+         greater read_ts than the one begun before it ({read_ts_before})"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_committed_writers_version_is_visible_only_to_readers_begun_at_or_after_its_commit()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path())?;
+    let mut manager = TransactionManager::new(None);
+    let rid = Rid::new(PageId(0), 0);
+
+    let reader_before = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let read_ts_before = manager.get(reader_before)?.read_ts;
+
+    let writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    manager.version_store().record_insert(writer, rid, b"row".to_vec());
+    assert!(!manager.version_store().is_visible(rid, read_ts_before));
+
+    manager.commit(writer, &pool)?;
+    assert!(
+        !manager.version_store().is_visible(rid, read_ts_before),
+        "a transaction that began before the writer committed must not see its row"
+    );
+
+    let reader_after = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let read_ts_after = manager.get(reader_after)?.read_ts;
+    assert!(
+        manager.version_store().is_visible(rid, read_ts_after),
+        "a transaction begun after the writer committed must see its row"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_aborted_writers_version_never_resurfaces_for_a_later_committed_writer()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path())?;
+    let mut manager = TransactionManager::new(None);
+    let rid = Rid::new(PageId(0), 0);
+
+    let aborted_writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    manager.version_store().record_insert(aborted_writer, rid, b"row".to_vec());
+    manager.abort(aborted_writer, &pool)?;
+
+    let later_writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    manager.version_store().record_insert(later_writer, rid, b"real row".to_vec());
+
+    let reader_before_commit = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let read_ts_before_commit = manager.get(reader_before_commit)?.read_ts;
+    assert!(!manager.version_store().is_visible(rid, read_ts_before_commit));
+
+    manager.commit(later_writer, &pool)?;
+    let reader_after_commit = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let read_ts_after_commit = manager.get(reader_after_commit)?.read_ts;
+    assert!(
+        manager.version_store().is_visible(rid, read_ts_after_commit),
+        "the later writer's own committed version must be visible - the aborted writer's \
+         version must not still be occupying (or otherwise poisoning) the chain"
+    );
     Ok(())
 }

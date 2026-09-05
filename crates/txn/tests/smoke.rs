@@ -3,7 +3,7 @@ use txn::{IsolationLevel, LockManager, Transaction, TransactionManager, Transact
 
 #[test]
 fn transaction_constructs_growing() {
-    let txn = Transaction::new(TxnId(1), IsolationLevel::SnapshotIsolation, Lsn(8));
+    let txn = Transaction::new(TxnId(1), IsolationLevel::SnapshotIsolation, Lsn(8), 0);
     assert_eq!(txn.state, TransactionState::Growing);
 }
 
