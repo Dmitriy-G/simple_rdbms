@@ -123,10 +123,24 @@ when the function returns `(current, path)`, so the leaf's own
 `range_scan` (via `leaf_for_start`), and `leaf_for_start` itself all
 re-acquire a fresh `fetch_page_read` on that same page id afterward. That
 reacquisition is *not* crabbed against `descend_to_leaf`'s own descent, so
-a concurrent split of exactly that leaf, landing in the gap between the
-two fetches, is a live, separate concurrency hole - not the one this
-section or the write-crabbing section below closes. It is tracked as
-P-19 rather than fixed here.
+the landed leaf may already have been split by a concurrent `insert`
+before the caller's own fetch - the writer only ever moves entries into a
+*new*, further-right sibling reachable through `tail` (see "Leaf split"
+above), never off the leaf chain entirely. `get` absorbs this rather than
+closing the gap by holding a guard across it: it re-runs
+`lower_bound_leaf` on **every** leaf it visits, including ones reached by
+crossing `tail`, instead of trusting slot `0` as the continuation point
+only because a prior leaf's scan happened to run off its end. Re-deriving
+the starting slot from `key` itself on each leaf is correct regardless of
+why the loop is looking at that particular leaf - freshly landed there
+from `descend_to_leaf`, or arrived by crossing a sibling pointer - so a
+split that moves the target run rightward between the descent and the
+read is simply another leaf boundary the walk crosses, the same way a
+split arriving *during* the walk already was. `range_scan`/`scan_leaf`
+never had this problem in the first place: `scan_leaf` already re-locates
+its position by comparing against the last entry's own sort key on every
+call (see its "Key Components" entry above), so it never trusted a slot
+across a leaf boundary to begin with.
 
 ### Write-crabbing during insert's split cascade
 
@@ -196,11 +210,15 @@ one thread is exactly what `docs/adr/0008-write-guard-reentrancy.md`'s
 debug-mode panic exists to catch.
 
 Write-crabbing closes the ancestor-misrouting failure completely, but it
-is not a substitute for `descend_to_leaf`'s own read crabbing above, and
-it does not touch the separate leaf-refetch gap (P-19) that section
-describes: a reader that has already correctly identified which leaf id
-to read can still have that exact leaf split out from under it between
-`descend_to_leaf` returning and `get`'s own `fetch_page_read` of it.
+is not a substitute for `descend_to_leaf`'s own read crabbing above: it
+guarantees a reader can never be routed through a stale separator into a
+truncated node, but it does nothing about - and is not the mechanism that
+protects against - the separate leaf-refetch gap that section describes,
+where a reader that already correctly identified which leaf id to read
+can still have that exact leaf split out from under it between
+`descend_to_leaf` returning and `get`'s own `fetch_page_read` of it. That
+gap is closed on the read side instead, by `get` re-deriving its starting
+slot on every leaf rather than trusting one only the first time.
 
 ## Splitting
 
@@ -440,7 +458,11 @@ the same as every other page nothing in this codebase frees yet.
   `catalog::catalog.MD`'s "root_page_id changes on every split" note).
   `get(&self, key) -> Vec<Rid>` descends to the matching leaf and collects
   every entry with that exact key, following the leaf sibling chain if a
-  run of duplicates spans a split. `range_scan(&self, start, end) ->
+  run of duplicates spans a split - re-running `lower_bound_leaf` on every
+  leaf it visits, including ones reached by crossing `tail`, rather than
+  assuming a crossing always lands on a match at slot `0` (see
+  "Latch crabbing during descent (the read path)" above for why that
+  assumption used to be unsafe). `range_scan(&self, start, end) ->
   BTreeRangeIterator` returns an iterator over entries with keys in
   `[start, end)` (`None` on either end means unbounded); construction
   never touches a page, so a bad `start` key surfaces as the iterator's

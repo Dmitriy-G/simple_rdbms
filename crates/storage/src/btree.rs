@@ -477,13 +477,11 @@ impl<'pool> BTreeIndex<'pool> {
     pub fn get(&self, key: &[u8]) -> Result<Vec<Rid>, StorageError> {
         let (mut current, _path) = self.descend_to_leaf(key)?;
         let mut results = Vec::new();
-        let mut first_leaf = true;
         let mut guard = self.buffer_pool.fetch_page_read(current)?;
         loop {
             let bytes = guard.page().data();
             let count = checked_slot_count(bytes, current)?;
-            let mut idx = if first_leaf { lower_bound_leaf(bytes, key, current)? } else { 0 };
-            first_leaf = false;
+            let mut idx = lower_bound_leaf(bytes, key, current)?;
 
             while idx < count {
                 let payload = entry_payload(bytes, idx, current)?;
