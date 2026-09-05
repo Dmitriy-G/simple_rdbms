@@ -27,6 +27,9 @@ pub const MAX_KEY_SIZE: usize = crate::page::PAGE_SIZE
     - RID_TRAILER_SIZE
     - CHILD_TRAILER_SIZE;
 
+const MAX_INTERNAL_PUSH_UP_SIZE: usize =
+    KEY_LEN_PREFIX + MAX_KEY_SIZE + RID_TRAILER_SIZE + CHILD_TRAILER_SIZE;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NodeType {
     Leaf,
@@ -211,6 +214,24 @@ fn child_for_key(bytes: &[u8], key: &[u8], page_id: PageId) -> Result<PageId, St
     }
 }
 
+fn node_will_fit(bytes: &[u8], payload_len: usize) -> bool {
+    let new_slots_end = HEADER_SIZE + (slot_count(bytes) as usize + 1) * SLOT_SIZE;
+    new_slots_end + payload_len <= data_start(bytes)
+}
+
+fn read_entries(
+    bytes: &[u8],
+    page_id: PageId,
+) -> Result<(Option<PageId>, Vec<Vec<u8>>), StorageError> {
+    let tail = tail_raw(bytes);
+    let count = checked_slot_count(bytes, page_id)?;
+    let mut entries = Vec::with_capacity(count as usize);
+    for slot in 0..count {
+        entries.push(entry_payload(bytes, slot, page_id)?.to_vec());
+    }
+    Ok((tail, entries))
+}
+
 fn byte_balanced_split_point(entries: &[Vec<u8>]) -> usize {
     let total: usize = entries.iter().map(|p| SLOT_SIZE + p.len()).sum();
     let target = total / 2;
@@ -264,8 +285,7 @@ impl<'a, 'pool> Node<'a, 'pool> {
     }
 
     fn will_fit(&self, payload_len: usize) -> bool {
-        let new_slots_end = HEADER_SIZE + (self.slot_count() as usize + 1) * SLOT_SIZE;
-        new_slots_end + payload_len <= data_start(self.data())
+        node_will_fit(self.data(), payload_len)
     }
 
     fn init(&mut self, kind: NodeType, tail: Option<PageId>) -> Result<(), StorageError> {
@@ -425,19 +445,33 @@ impl<'pool> BTreeIndex<'pool> {
         }
     }
 
-    fn read_node_snapshot(
+    fn descend_for_insert(
         &self,
-        page_id: PageId,
-    ) -> Result<(Option<PageId>, Vec<Vec<u8>>), StorageError> {
-        let guard = self.buffer_pool.fetch_page_read(page_id)?;
-        let bytes = guard.page().data();
-        let tail = tail_raw(bytes);
-        let count = checked_slot_count(bytes, page_id)?;
-        let mut entries = Vec::with_capacity(count as usize);
-        for slot in 0..count {
-            entries.push(entry_payload(bytes, slot, page_id)?.to_vec());
+        sort_key: &[u8],
+        leaf_payload_len: usize,
+    ) -> Result<(Vec<PageWriteGuard<'pool>>, PageWriteGuard<'pool>), StorageError> {
+        let mut ancestors: Vec<PageWriteGuard<'pool>> = Vec::new();
+        let mut current = self.root_page_id;
+        loop {
+            let guard = self.buffer_pool.fetch_page(current)?;
+            let bytes = guard.page().data();
+            match node_type(bytes) {
+                NodeType::Leaf => {
+                    if node_will_fit(bytes, leaf_payload_len) {
+                        ancestors.clear();
+                    }
+                    return Ok((ancestors, guard));
+                }
+                NodeType::Internal => {
+                    let child = child_for_key(bytes, sort_key, current)?;
+                    if node_will_fit(bytes, MAX_INTERNAL_PUSH_UP_SIZE) {
+                        ancestors.clear();
+                    }
+                    ancestors.push(guard);
+                    current = child;
+                }
+            }
         }
-        Ok((tail, entries))
     }
 
     pub fn get(&self, key: &[u8]) -> Result<Vec<Rid>, StorageError> {
@@ -534,20 +568,22 @@ impl<'pool> BTreeIndex<'pool> {
         }
 
         let leaf_payload = build_leaf_payload(key, rid);
-        let (leaf_page_id, mut path) = self.descend_to_leaf(leaf_sort_key(&leaf_payload))?;
+        let sort_key = leaf_sort_key(&leaf_payload).to_vec();
+        let (mut ancestors, mut leaf_guard) =
+            self.descend_for_insert(&sort_key, leaf_payload.len())?;
 
         {
-            let mut guard = self.buffer_pool.fetch_page(leaf_page_id)?;
-            let mut node = Node::new(&mut guard, txn_id);
+            let mut node = Node::new(&mut leaf_guard, txn_id);
             if node.will_fit(leaf_payload.len()) {
-                let idx = node.find_insert_index(leaf_sort_key(&leaf_payload))?;
+                let idx = node.find_insert_index(&sort_key)?;
                 node.insert_at(idx, &leaf_payload)?;
                 return Ok(());
             }
         }
 
-        let (old_tail, mut payloads) = self.read_node_snapshot(leaf_page_id)?;
-        let insert_at = upper_bound_in_leaf(&payloads, leaf_sort_key(&leaf_payload));
+        let leaf_page_id = leaf_guard.page_id();
+        let (old_tail, mut payloads) = read_entries(leaf_guard.page().data(), leaf_page_id)?;
+        let insert_at = upper_bound_in_leaf(&payloads, &sort_key);
         payloads.insert(insert_at, leaf_payload);
         let mid = leaf_split_point(&payloads);
         let right_payloads = payloads.split_off(mid);
@@ -556,24 +592,21 @@ impl<'pool> BTreeIndex<'pool> {
         let (right_page_id, mut right_guard) = self.buffer_pool.new_page(txn_id)?;
         Node::new(&mut right_guard, txn_id).rebuild(NodeType::Leaf, old_tail, &right_payloads)?;
         drop(right_guard);
-        {
-            let mut left_guard = self.buffer_pool.fetch_page(leaf_page_id)?;
-            Node::new(&mut left_guard, txn_id).rebuild(
-                NodeType::Leaf,
-                Some(right_page_id),
-                &left_payloads,
-            )?;
-        }
+        Node::new(&mut leaf_guard, txn_id).rebuild(
+            NodeType::Leaf,
+            Some(right_page_id),
+            &left_payloads,
+        )?;
 
         let mut left_page_id = leaf_page_id;
         let mut pushed_key = leaf_sort_key(&right_payloads[0]).to_vec();
         let mut pushed_right = right_page_id;
+        let mut top_guard = leaf_guard;
 
-        while let Some(parent_page_id) = path.pop() {
+        while let Some(mut parent_guard) = ancestors.pop() {
             let internal_payload = build_internal_payload(&pushed_key, pushed_right);
             {
-                let mut guard = self.buffer_pool.fetch_page(parent_page_id)?;
-                let mut node = Node::new(&mut guard, txn_id);
+                let mut node = Node::new(&mut parent_guard, txn_id);
                 if node.will_fit(internal_payload.len()) {
                     let idx = node.find_insert_index(&pushed_key)?;
                     node.insert_at(idx, &internal_payload)?;
@@ -581,7 +614,8 @@ impl<'pool> BTreeIndex<'pool> {
                 }
             }
 
-            let (old_tail, mut entries) = self.read_node_snapshot(parent_page_id)?;
+            let parent_page_id = parent_guard.page_id();
+            let (old_tail, mut entries) = read_entries(parent_guard.page().data(), parent_page_id)?;
             let old_tail = old_tail.ok_or_else(|| StorageError::CorruptPage {
                 page_id: parent_page_id.0,
                 reason: "internal node has no tail (leftmost child) pointer".to_string(),
@@ -604,18 +638,16 @@ impl<'pool> BTreeIndex<'pool> {
                 &right_entries,
             )?;
             drop(new_right_guard);
-            {
-                let mut left_guard = self.buffer_pool.fetch_page(parent_page_id)?;
-                Node::new(&mut left_guard, txn_id).rebuild(
-                    NodeType::Internal,
-                    Some(old_tail),
-                    &left_entries,
-                )?;
-            }
+            Node::new(&mut parent_guard, txn_id).rebuild(
+                NodeType::Internal,
+                Some(old_tail),
+                &left_entries,
+            )?;
 
             left_page_id = parent_page_id;
             pushed_key = new_pushed_key;
             pushed_right = new_right_page_id;
+            top_guard = parent_guard;
         }
 
         let (new_root_page_id, mut root_guard) = self.buffer_pool.new_page(txn_id)?;
@@ -626,6 +658,7 @@ impl<'pool> BTreeIndex<'pool> {
             std::slice::from_ref(&root_entry),
         )?;
         self.root_page_id = new_root_page_id;
+        drop(top_guard);
         Ok(())
     }
 

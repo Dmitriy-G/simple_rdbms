@@ -77,7 +77,7 @@ Descent (`child_for_key`) follows directly from this: search for the
 right-most entry whose key is `<= K`; if one exists, follow its child;
 otherwise `K` is below every separator here, so follow `tail`.
 
-### Latch crabbing during descent
+### Latch crabbing during descent (the read path)
 
 `BTreeIndex::descend_to_leaf` holds a parent node's `PageReadGuard` until
 the child's own `PageReadGuard` has been acquired, releasing the parent
@@ -115,6 +115,92 @@ Instead, `scan_leaf` resumes by comparing against the last entry's own
 sort key rather than trusting a remembered slot - see `scan_leaf`'s
 "Key Components" entry below for why that closes the same class of bug
 without needing a latch held across the gap at all.
+
+`descend_to_leaf`'s own crabbing stops at the moment the loop reaches a
+leaf: the loop's `guard` for that leaf is a local that goes out of scope
+when the function returns `(current, path)`, so the leaf's own
+`PageReadGuard` is not carried out of `descend_to_leaf` - `get`,
+`range_scan` (via `leaf_for_start`), and `leaf_for_start` itself all
+re-acquire a fresh `fetch_page_read` on that same page id afterward. That
+reacquisition is *not* crabbed against `descend_to_leaf`'s own descent, so
+a concurrent split of exactly that leaf, landing in the gap between the
+two fetches, is a live, separate concurrency hole - not the one this
+section or the write-crabbing section below closes. It is tracked as
+P-19 rather than fixed here.
+
+### Write-crabbing during insert's split cascade
+
+`BTreeIndex::insert` descends with **write** guards of its own, through
+`descend_for_insert`, rather than reusing `descend_to_leaf`'s read-only
+crabbing - a write, unlike a read, can turn into a split that must
+already be safe against a concurrent reader anywhere along the path. A
+node's separators go through exactly one intermediate, incomplete state
+during a split: `Node::rebuild` truncates it to its own `left_entries`
+before the pushed separator naming its new sibling has been inserted into
+that node's own parent. A reader that routes through the parent using its
+*old*, not-yet-updated separators, straight into the now-truncated child,
+finds `child_for_key` matching no entry `<= K` and falling through to
+`tail` - the leftmost child - landing in an unrelated subtree with no way
+back. This is the failure `tests/btree.rs`'s
+`get_on_a_duplicated_key_never_returns_a_rid_twice_while_its_own_run_keeps_splitting`
+was extended to probe for (P-18) after a run of splits several ancestor
+levels deep, and it is exactly what read crabbing at any single level
+cannot prevent, because the parent's guard was already released one level
+up before the child even split.
+
+`descend_for_insert` closes it by never releasing an ancestor's write
+guard until it is *provably* unnecessary. At each internal node on the
+way down it checks `Node::will_fit` against the largest separator a
+child's split could ever push up - `MAX_INTERNAL_PUSH_UP_SIZE =
+KEY_LEN_PREFIX + MAX_KEY_SIZE + RID_TRAILER_SIZE + CHILD_TRAILER_SIZE`,
+matching `build_internal_payload`'s length when handed a leaf's full
+`leaf_sort_key` (key bytes plus its `Rid` trailer, capped at
+`MAX_KEY_SIZE`) as its "key" argument, and stable under repeated internal
+splits since a pushed entry's own `entry_key` never grows once created.
+If that worst case already fits, this node is guaranteed to accept
+*any* actual push without splitting, so every ancestor **above** it is
+provably safe from ever needing to change and its guard is dropped
+(`ancestors.clear()`); this node's own guard is kept, since it may still
+receive an `insert_at`. If the worst case does not fit, nothing above is
+provably safe yet, so this node's guard joins the retained set instead.
+The leaf itself is checked against the exact payload length being
+inserted, not a worst case, since nothing is pushed further down. The
+function returns every retained ancestor guard, root-most first, plus the
+leaf's own guard. Because a page's bytes cannot change while this thread
+holds its write guard, and `will_fit` only gets more permissive as the
+required payload shrinks, a node found safe here is *still* guaranteed
+safe whenever the cascade actually reaches it - so `insert`'s cascade
+(the `while let Some(mut parent_guard) = ancestors.pop()` loop) always
+either finds a genuine fit and stops there, never touching a
+still-retained ancestor further up, or splits and hands the next pushed
+entry to the next retained guard - never a page whose guard was not
+already held from the start of this `insert` call. No reader can acquire
+a read guard on any node this cascade might still rewrite, because that
+node's write guard has been held since before the cascade even began
+splitting anything.
+
+The one guard `insert` deliberately holds *past* its own node's rebuild
+is whichever guard represents the current top of the chain
+(`top_guard`): if the cascade reaches the point where no ancestor
+remains and a new root must be created, that guard - the *old* root's -
+stays held through the whole new-root construction and is only dropped
+after `self.root_page_id` is repointed at the new page, so a concurrent
+attempt to read through the old root id cannot observe it mid-truncation,
+only either fully pre-split or fully demoted to the new root's left
+child. `read_entries` (a free function, replacing an earlier
+`read_node_snapshot` method) reads a node's `tail` and entries straight
+out of a guard's own bytes rather than issuing a second `fetch_page`/
+`fetch_page_read` on a page whose guard this thread already holds -
+`RwLock` is not reentrant, and a second write guard for the same page on
+one thread is exactly what `docs/adr/0008-write-guard-reentrancy.md`'s
+debug-mode panic exists to catch.
+
+Write-crabbing closes the ancestor-misrouting failure completely, but it
+is not a substitute for `descend_to_leaf`'s own read crabbing above, and
+it does not touch the separate leaf-refetch gap (P-19) that section
+describes: a reader that has already correctly identified which leaf id
+to read can still have that exact leaf split out from under it between
+`descend_to_leaf` returning and `get`'s own `fetch_page_read` of it.
 
 ## Splitting
 
@@ -360,7 +446,10 @@ the same as every other page nothing in this codebase frees yet.
   never touches a page, so a bad `start` key surfaces as the iterator's
   first `Err` rather than a panic or an early return from `range_scan`
   itself. `insert(&mut self, txn_id, key, rid)` is M9.2: see "Splitting"
-  above. `delete(&mut self, key)` is not implemented yet - `todo!()`, its
+  above, and "Write-crabbing during insert's split cascade" for how it
+  descends (via the private `descend_for_insert`) and holds guards across
+  a multi-level split cascade. `delete(&mut self, key)` is not
+  implemented yet - `todo!()`, its
   message still describing a textbook merge-and-rebalance delete that
   "Deleting" above and ADR 0012 have since superseded with a no-merge
   design; the signature itself will also gain an `rid: Rid` parameter
@@ -467,6 +556,20 @@ the same as every other page nothing in this codebase frees yet.
   surgical non-split path), and `rebuild` (the split/root-creation path,
   see "Splitting" above - and "The `rebuild` capacity guard" for its
   `NodeOverflow` precondition).
+- `descend_for_insert` - private. `insert`'s write-crabbing descent; see
+  "Write-crabbing during insert's split cascade" above for the guard
+  retention rule it implements. `MAX_INTERNAL_PUSH_UP_SIZE` is the worst
+  case it checks an internal node against - the largest payload
+  `build_internal_payload` can ever produce, `KEY_LEN_PREFIX +
+  MAX_KEY_SIZE + RID_TRAILER_SIZE + CHILD_TRAILER_SIZE`. `node_will_fit`
+  is `Node::will_fit`'s own check lifted to a free function taking raw
+  bytes, so `descend_for_insert` can evaluate it against a page it has
+  not yet wrapped in a `Node` (and `Node::will_fit` itself now just calls
+  it). `read_entries` reads a node's `tail` and every entry straight out
+  of an already-held guard's bytes - the direct replacement for an
+  earlier `read_node_snapshot` method, which issued its own
+  `fetch_page_read` and would have self-deadlocked once `insert` started
+  holding a write guard on the same page across the split.
 - `NodeType` - private. `Leaf` or `Internal`, read from/written to the
   1-byte node-type header field.
 - `node_type`, `slot_count`, `data_used`, `data_start`, `tail_raw`,
