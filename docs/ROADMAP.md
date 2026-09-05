@@ -200,7 +200,7 @@ and latch crabbing in `storage::btree`, whose descent releases each
 parent's guard before fetching the child — safe only while nothing runs
 two writers against the tree at once.
 
-### M10.3 — MVCC snapshot isolation 🚧 In Progress
+### M10.3 — MVCC snapshot isolation ✅ Done
 **Problem:** two-phase locking (M10.2) gives correct concurrent execution,
 but a reader still blocks behind a writer holding a lock on the same rows,
 which a snapshot-isolated database does not require.

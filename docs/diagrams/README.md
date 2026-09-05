@@ -35,9 +35,11 @@ no single agent file has.
 - [`agent-flow-problem-lifecycle.mmd`](agent-flow-problem-lifecycle.mmd)
   — a finding by any role, into `.claude/problems.md`, out of it again as
   a scheduled subtask, to a fix that ships with its prevention. Also
-  shows the other exit: an Architect-signed entry, which the Task writer
-  never touches and the Architect either settles or writes the task for
-  itself.
+  shows the other two exits: an Architect-signed entry, which the Task
+  writer never touches and the Architect either settles or writes the
+  task for itself, and the triage — the Architect estimating every entry,
+  the human approving, and the backlogged ones moving to
+  `docs/backlog.md`.
 - [`agent-flow-milestone-review.mmd`](agent-flow-milestone-review.mmd) —
   whole-milestone review, the only path to ✅ Done on a parent, and the
   bugs and gaps it files when a milestone does not pass.

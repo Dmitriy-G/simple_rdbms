@@ -32,6 +32,17 @@ step because the later one looks more interesting.
    the human names one at you — say it is the Architect's and hand it
    over rather than writing it. Mention any you skipped in your reply so
    the human knows what is waiting on a decision.
+
+   An entry may carry a `Triage:` line — importance, effort in story
+   points, decision — left by an Architect triage the human approved.
+   Everything still in the file is `Will do`; use the line to order the
+   subtasks, most important first and cheap ones early, and copy nothing
+   of it into the task. Never write or edit one: it is the Architect's
+   and the human's.
+
+   `docs/backlog.md` is not part of this queue and never becomes a task.
+   It lists problems triaged as `Backlog`, and only the Architect takes
+   one back out.
 2. **If nothing schedulable is left, advance the roadmap by one
    sub-milestone.** An empty `.claude/problems.md` is the signal that the
    sub-milestone carrying 🚧 In Progress has nothing outstanding against

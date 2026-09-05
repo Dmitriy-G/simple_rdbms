@@ -48,10 +48,71 @@ decision.
 `.claude/problems.md` is gitignored: it is working state, not the record.
 A conclusion that must survive the working tree — a decision, a
 constraint a later milestone depends on — is not finished until it is an
-ADR under `docs/adr/`, a roadmap entry, or a paragraph in `CLAUDE.md`.
+ADR under `docs/adr/`, a roadmap entry, an entry in `docs/backlog.md`, or
+a paragraph in `CLAUDE.md`.
 Deciding what graduates is part of the investigation, and it has to
 happen *before* you delete the entry, because the entry is the only other
 copy.
+
+Read `docs/backlog.md` before opening an entry of your own, too — a
+finding already there has been triaged once, and re-filing it re-runs a
+decision that was made.
+
+## Triaging problems
+
+The human asks for a triage, usually when a task, a sub-milestone or a
+milestone is finished. Never start one unasked: it ends with entries
+leaving the queue. It has two passes and the human sits between them, so
+**pass one stops and waits.**
+
+### Pass one — estimate everything
+
+Annotate **every** entry in `.claude/problems.md`, your own included,
+with one line directly under its `Created by:` line:
+
+```
+Triage: importance High | effort 3 SP | decision Will do
+```
+
+Change nothing else in the file. No entry is moved, deleted, reworded or
+renumbered in this pass; an entry that already carries a `Triage:` line
+from an earlier round is re-read and its line updated in place if the
+estimate has changed. Then report the whole set as a table in your reply
+— entry, importance, effort, decision — and stop. The human reviews it,
+edits any line by hand, and approves.
+
+The three scales are defined in `docs/backlog.md` and defined only there;
+read them and use them rather than inventing your own words for them.
+Estimate effort as work for the Coder — code, tests and `.MD`s together —
+and remember that anything touching storage, the WAL, recovery or the
+buffer pool costs at least an 8 because the crash-injection sweeps have
+to run.
+
+The decision follows from importance and effort **together**: `High` is
+done at any cost, effort `1`–`2` is done at any importance, `Low` at
+effort `5`+ is `Backlog`, and `Medium` at effort `5`+ is the judgement
+call — say which way and why in a short clause on the same line, because
+that is the row the human is most likely to overturn. Never argue a
+decision from one criterion alone. An effort of `13` usually means the
+entry is a roadmap milestone rather than a problem: say so instead of
+backlogging it.
+
+### Pass two — move the backlog
+
+Only after the human approves. Every entry marked `decision Backlog`
+becomes a `docs/backlog.md` entry — a heading, one or two sentences
+saying what is wrong and why it is not being done, and its importance and
+effort on their own line — and is deleted from `.claude/problems.md` in
+the same edit. Everything marked `Will do` stays exactly where it is,
+`Triage:` line included, so the Task writer can order subtasks by it.
+
+This is the single case where you may delete an entry you did not sign,
+and it is the human's approval that authorizes it, not your own judgement.
+If the human changed a decision, that decision is the one you act on: say
+in your reply that you disagree if you do, and move the entries as the
+file stands. If a backlogged problem rests on reasoning a later change
+must not violate, write the ADR first and link it from the entry — the
+backlog entry is a summary, not the investigation.
 
 You own the project's cross-cutting prose and its process: ADRs, the
 roadmap's text, the root `README.md`, `CLAUDE.md`, the diagrams, and the
@@ -64,10 +125,13 @@ the full list.
 
 Allowed, without asking:
 
-- `.claude/problems.md` — new entries, and deleting an entry of your own
-  that you have settled or scheduled. Never anyone else's, and never a
-  "resolved" annotation: the file is the list of problems that are still
-  real.
+- `.claude/problems.md` — new entries; `Triage:` lines during a triage;
+  deleting an entry of your own that you have settled or scheduled, and
+  anyone's that an approved triage marked `Backlog`. Never any other
+  deletion, and never a "resolved" annotation: the file is the list of
+  problems that are still real.
+- `docs/backlog.md` — entries moved there by an approved triage, and
+  removing one you are reviving or whose problem is gone.
 - `docs/adr/**` — new ADRs and corrections to existing ones.
 - `docs/ROADMAP.md` — entry prose only, never a status marker.
 - `README.md` and `CLAUDE.md`.

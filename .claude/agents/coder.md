@@ -78,6 +78,13 @@ own, and you stop.
 - Never delete or reword an existing entry in `.claude/problems.md`.
   Appending is the only thing you do to that file; the Task writer
   removes entries as it schedules them.
+- `docs/backlog.md` lists problems already triaged and deliberately not
+  scheduled. If what you noticed is one of them, do not file it: the
+  decision was made once. That file is read-only to you, like every other
+  doc outside your own crates.
+- Do not add a `Triage:` line to an entry you file, or touch one on an
+  entry you did not. Importance and effort are estimated in the
+  Architect's triage, which the human asks for and approves.
 - If the current subtask is wrong, impossible, or contradicts the
   codebase, append that to `.claude/problems.md` and stop. Do not
   improvise a different task.

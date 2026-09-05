@@ -25,6 +25,12 @@ flowchart TD
     ARCHTASK["Architect writes .claude/task.md itself,<br/>bound by task-writer.md, and deletes<br/>the entry in the same edit"]
     DELINV["Settled instead: the conclusion graduates<br/>to an ADR, a roadmap entry or CLAUDE.md,<br/>and only then is the entry deleted"]:::stop
 
+    REVIEW(["Human asks for a triage —<br/>a task, a sub-milestone or a<br/>milestone has just finished"]):::human
+    ARCHREV["Architect annotates every entry,<br/>whoever signed it:<br/>Triage: importance | effort SP | decision.<br/>Nothing moved, nothing deleted.<br/>Reports the table and stops"]:::role
+    APPROVE{"Human reviews the estimates,<br/>edits any by hand, approves"}:::human
+    ACCEPT["Backlog: moved to docs/backlog.md<br/>— heading, one or two sentences,<br/>importance and effort — and deleted from<br/>problems.md in the same edit. The one<br/>deletion that crosses the signature.<br/>Nobody schedules from that file"]:::stop
+    WILLDO["Will do: stays in the queue with its<br/>Triage line, which the Task writer<br/>orders the subtasks by"]:::channel
+
     ANYOPEN{"Anything schedulable left?"}
     MILESTONE(["Next milestone instead<br/>— see agent-flow-milestone-planning.mmd"]):::stop
 
@@ -41,11 +47,16 @@ flowchart TD
     SRC3 --> PROB
     SRC4 --> PROB
 
+    PROB --> REVIEW --> ARCHREV --> APPROVE
+    APPROVE -- "decision Backlog" --> ACCEPT
+    APPROVE -- "decision Will do" --> WILLDO --> PROB
+
     NEXT --> TW --> WHO
     WHO -- "Architect — the Task writer<br/>neither schedules nor deletes it,<br/>even if the human names it" --> SKIP --> HUMANCALL
     HUMANCALL -- "act on it, or look into it —<br/>either way it goes to the Architect" --> ARCHINV
     ARCHINV -- "decided: it needs code" --> ARCHTASK --> CODER
     ARCHINV -- "decided: no code needed" --> DELINV
+    ARCHINV -- "decided: minor and expensive —<br/>put it up for the next triage" --> ARCHREV
     WHO -- "Coder, Milestone Reviewer,<br/>Human" --> ANYOPEN
     ANYOPEN -- no --> MILESTONE
     ANYOPEN -- yes --> TASK --> CONSUME --> CODER --> GATE --> CR --> RECORD

@@ -32,6 +32,7 @@ flowchart TD
     DOC["Architect does it: an ADR recording the<br/>decision, roadmap prose, CLAUDE.md,<br/>a role definition, a diagram"]:::role
     CODE["Architect writes .claude/task.md itself<br/>for its own entries, bound by<br/>task-writer.md — empty file only,<br/>🚧, keep it short"]:::role
     NOTHING["Recommendation is 'leave it'.<br/>Say so in the reply and delete the entry:<br/>next time the question is already answered"]:::stop
+    ACCEPTED["Real, but minor and expensive:<br/>leave it in problems.md for the next<br/>triage — see agent-flow-problem-lifecycle.mmd.<br/>Backlogging needs the human's approval,<br/>so it is never done inside an investigation"]:::stop
     HUMAN["Human decides and commits"]:::human
 
     T1 --> ARCH
@@ -48,3 +49,4 @@ flowchart TD
     KIND -- "prose or a decision" --> DOC --> HUMAN
     KIND -- "a change to code or tests" --> CODE --> HUMAN
     KIND -- "no action" --> NOTHING
+    KIND -- "worth doing, but not<br/>worth what it costs" --> ACCEPTED

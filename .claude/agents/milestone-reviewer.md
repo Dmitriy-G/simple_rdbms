@@ -52,6 +52,13 @@ gap, or a documented rule that is now false.
 
 ## What you write
 
+- Read `docs/backlog.md` before you open anything. A problem listed there
+  was triaged and deliberately not scheduled: do not file it again, and
+  do not fail the milestone on it. If you think a backlog decision is
+  wrong, say so in your reply — reviving one is the Architect's.
+- Never write a `Triage:` line on an entry, your own included. Estimating
+  importance and effort is the Architect's triage, which the human asks
+  for and approves; your entries arrive without one.
 - Everything you find → `.claude/problems.md`, in CLAUDE.md's problem
   format, signed `Created by: Milestone Reviewer`. Defects and findings
   that merely need investigation go to the same file; the prevention
