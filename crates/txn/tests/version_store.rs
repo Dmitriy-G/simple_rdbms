@@ -55,6 +55,18 @@ fn aborted_insert_does_not_resurface_once_another_transaction_commits_a_new_vers
 }
 
 #[test]
+fn aborted_insert_stays_invisible_immediately_after_the_abort() {
+    let store = VersionStore::new();
+    let r = rid(1);
+
+    store.record_insert(TxnId(1), r, b"row".to_vec());
+    store.abort_versions(TxnId(1));
+
+    assert!(!store.is_visible(r, 100));
+    assert!(!store.is_visible_to(r, TxnId(1), 100));
+}
+
+#[test]
 fn different_transactions_recording_different_rids_do_not_affect_each_other() {
     let store = VersionStore::new();
     let r1 = rid(1);

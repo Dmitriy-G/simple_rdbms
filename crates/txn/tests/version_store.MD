@@ -21,19 +21,18 @@ regardless of what commits later.
 - `committed_insert_is_visible_at_and_after_its_commit_ts` - after
   `commit_versions(txn, 5)`, the row is invisible at `read_ts` 4 and
   visible at 5 and 6.
+- `aborted_insert_stays_invisible_immediately_after_the_abort` - after
+  `record_insert` and `abort_versions` on the same `Rid`, with nothing
+  else recorded there, both `is_visible` and `is_visible_to` (even with
+  the aborting transaction's own id) return `false` - proving the emptied
+  chain `abort_versions` leaves behind in the map is not confused with "no
+  chain for this `Rid`," which would read as visible to everyone.
 - `aborted_insert_does_not_resurface_once_another_transaction_commits_a_new_version` -
   after `abort_versions` discards the first transaction's entry, a second
   transaction recording and committing its own version of the same `Rid`
   makes it visible only from that second commit's timestamp, not before -
   proving the aborted version was actually removed from the chain rather
-  than left behind to confuse a later reader. Deliberately not covered:
-  whether the `Rid` is visible in the gap between the abort and that
-  second `record_insert`, once the abort has dropped the chain to empty
-  and removed it from the map - `VersionStore::is_visible`'s documented
-  "no chain for this `Rid`" case is indistinguishable from "this exact
-  `Rid` had its only version aborted," so that gap reads as visible
-  rather than invisible. See `../src/version_store.MD`'s note on
-  `abort_versions` for the open question.
+  than left behind to confuse a later reader.
 - `different_transactions_recording_different_rids_do_not_affect_each_other` -
   committing one `Rid`'s writer and, separately, another `Rid`'s writer at
   a different commit timestamp leaves each row's visibility independent

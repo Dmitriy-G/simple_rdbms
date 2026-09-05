@@ -32,20 +32,20 @@ isn't wired up.
   commit record is durable and before locks are released, so a version
   never becomes visible ahead of its own durability.
 - `VersionStore::abort_versions(&self, txn_id)` - calls
-  `VersionChain::remove_creator(txn_id)` on every chain, dropping the
-  chain entirely once it is left empty so an aborted-then-abandoned `Rid`
-  does not linger in the map forever. Called by `TransactionManager::abort`.
-  Open question, not yet resolved: dropping a `Rid`'s only chain this way
-  makes it indistinguishable, to `is_visible`, from a `Rid` this store has
-  never heard of - both read as "visible to everyone" - so a `Rid` whose
-  sole version was just aborted is briefly visible again until something
-  else records a new version there. This is harmless as long as
-  `is_visible` is only ever asked about a `Rid` a scan found a live tuple
-  for (the aborting transaction's own undo removes that tuple from the
-  heap before this window matters), but it is a real gap in the type on
-  its own terms; see `tests/version_store.MD`'s note on
-  `aborted_insert_does_not_resurface_once_another_transaction_commits_a_new_version`
-  for what a test of just this store cannot yet prove.
+  `VersionChain::remove_creator(txn_id)` on every chain, but keeps every
+  chain in the map, empty or not - it never removes an entry. Called by
+  `TransactionManager::abort`. This matters because "no entry in the map"
+  is `is_visible`/`is_visible_to`'s signal that a `Rid` predates this
+  process's MVCC bookkeeping and is visible to everyone; if an aborted-
+  and-emptied chain were dropped instead, a `Rid` whose only recorded
+  version was just aborted would become indistinguishable from a `Rid`
+  never touched at all, and would read as visible again until something
+  else recorded a new version there. Keeping the (now empty) chain means
+  `VersionChain::visible_version`/`visible_version_for` correctly return
+  `None` for it, so both lookup methods return `false`. The store has no
+  version GC yet, so an aborted-only `Rid` keeps an empty chain in the map
+  forever - accepted for now; revisit if profiling shows the map growing
+  unboundedly with aborted transactions.
 - `VersionStore::is_visible(&self, rid, read_ts) -> bool` - `true` when
   `rid` has no chain, otherwise delegates to
   `VersionChain::visible_version(read_ts).is_some()`. Answers "would any

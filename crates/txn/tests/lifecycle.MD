@@ -48,13 +48,12 @@ construct (see `smoke.rs`).
   reader begun before the second commit does not see anything there, and
   one begun after sees only the second writer's version - proving
   `abort` actually discards the first writer's version rather than
-  leaving it to interfere with (or get confused for) a later one. This
-  does not assert that the `Rid` is invisible in the gap between the
-  abort and that later `record_insert`, with no chain present in the
-  store at all: `VersionStore::is_visible`'s "no chain for this `Rid`"
-  case is indistinguishable from "this `Rid`'s only version was just
-  aborted", so that gap reads as visible. See
-  `crates/txn/src/version_store.MD`'s note on `abort_versions`.
+  leaving it to interfere with (or get confused for) a later one. The gap
+  between the abort and that later `record_insert` is also invisible: the
+  emptied chain `abort_versions` leaves behind in the map is not the same
+  as "no chain for this `Rid`", so `VersionStore::is_visible` does not
+  read it as visible to everyone. See `crates/txn/src/version_store.MD`'s
+  note on `abort_versions`.
 
 ## Usage Example
 

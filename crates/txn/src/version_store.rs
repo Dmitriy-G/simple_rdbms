@@ -35,10 +35,9 @@ impl VersionStore {
 
     pub fn abort_versions(&self, txn_id: TxnId) {
         let mut chains = recover_lock(self.chains.lock(), "VersionStore.chains");
-        chains.retain(|_, chain| {
+        for chain in chains.values_mut() {
             chain.remove_creator(txn_id);
-            !chain.is_empty()
-        });
+        }
     }
 
     pub fn is_visible(&self, rid: Rid, read_ts: u64) -> bool {

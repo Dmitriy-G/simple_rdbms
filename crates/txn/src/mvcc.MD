@@ -53,8 +53,11 @@ row.
   writes to this row. Called by
   `version_store::VersionStore::abort_versions`.
 - `VersionChain::is_empty(&self) -> bool` - true when the chain holds no
-  versions, so its caller (`VersionStore`) knows to drop the chain
-  entirely rather than keep an empty one keyed by a `Rid`.
+  versions. Not currently called by `VersionStore`, which keeps a chain in
+  its map whether or not `remove_creator` has left it empty - see
+  `version_store.MD`'s `abort_versions` entry for why an empty chain must
+  stay in the map rather than be dropped. Kept as a general-purpose query
+  on the chain's state.
 - `is_globally_visible(entry, read_ts) -> bool` - private. The shared
   "would any reader with this snapshot see this version" predicate:
   `begin_ts` at or before `read_ts` and (`end_ts` absent or after
