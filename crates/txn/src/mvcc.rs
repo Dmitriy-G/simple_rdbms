@@ -23,7 +23,12 @@ impl VersionChain {
     }
 
     pub fn visible_version(&self, read_ts: u64) -> Option<&VersionEntry> {
-        let _ = read_ts;
-        todo!("scan versions for the newest one visible as of read_ts")
+        self.versions.iter().find(|entry| match entry.begin_ts {
+            Some(begin_ts) if begin_ts <= read_ts => match entry.end_ts {
+                Some(end_ts) => end_ts > read_ts,
+                None => true,
+            },
+            _ => false,
+        })
     }
 }

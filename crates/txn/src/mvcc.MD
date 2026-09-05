@@ -26,7 +26,12 @@ row.
 - `VersionChain::visible_version(&self, read_ts) -> Option<&VersionEntry>` -
   finds the version visible to a reader with snapshot timestamp `read_ts`:
   the newest version whose `begin_ts` is at or before `read_ts` and whose
-  `end_ts` is either absent or after it. Unimplemented (`todo!`).
+  `end_ts` is either absent or after it. Since `push` inserts at index 0,
+  `versions` is newest-first, so this returns the first entry (in
+  iteration order) that qualifies. A version whose `begin_ts` is `None`
+  (its creator has not committed yet) never qualifies, regardless of
+  `read_ts`. Returns `None` when no entry qualifies, including on an
+  empty chain.
 
 ## Usage Example
 

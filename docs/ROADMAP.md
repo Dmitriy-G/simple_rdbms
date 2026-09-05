@@ -185,7 +185,7 @@ atomics rather than any single-threaded assumption, exercised by
 `buffer_pool_concurrency.rs` and `dwb_batch_exclusion.rs` driving the
 buffer pool from eight threads at once.
 
-### M10.2 — Concurrent execution under two-phase locking 🚧 In Progress
+### M10.2 — Concurrent execution under two-phase locking ✅ Done
 **Problem:** `engine::runtime` buys isolation by refusing concurrency. One
 dedicated engine thread executes every statement from every connection
 serially, and only one explicit transaction may be open at a time: a
@@ -200,7 +200,7 @@ and latch crabbing in `storage::btree`, whose descent releases each
 parent's guard before fetching the child — safe only while nothing runs
 two writers against the tree at once.
 
-### M10.3 — MVCC snapshot isolation 🆕 New
+### M10.3 — MVCC snapshot isolation 🚧 In Progress
 **Problem:** two-phase locking (M10.2) gives correct concurrent execution,
 but a reader still blocks behind a writer holding a lock on the same rows,
 which a snapshot-isolated database does not require.
