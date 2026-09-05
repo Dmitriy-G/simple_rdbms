@@ -512,6 +512,87 @@ fn get_on_a_duplicated_key_never_returns_a_rid_twice_while_its_own_run_keeps_spl
     Ok(())
 }
 
+const NEIGHBOR_GET_PAIR_COUNT: i32 = 40;
+const NEIGHBOR_GET_SEGMENT: i32 = 42;
+const NEIGHBOR_GET_SEGMENT_BASELINE_KEYS: i32 = 40;
+const NEIGHBOR_GET_INITIAL_DUPLICATES: u16 = 20;
+const NEIGHBOR_GET_READER_THREADS: usize = 8;
+const NEIGHBOR_GET_READER_ITERATIONS: usize = 3_000;
+const NEIGHBOR_GET_WRITER_ROUNDS: i32 = 300;
+
+#[test]
+fn get_on_a_key_stays_complete_while_a_neighboring_key_forces_repeated_splits()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = Arc::new(open_pool(dir.path(), 128)?);
+    let mut index = BTreeIndex::create(&pool, TXN)?;
+
+    let mut dup_keys = Vec::with_capacity(NEIGHBOR_GET_PAIR_COUNT as usize);
+    let mut hot_neighbors = Vec::with_capacity(NEIGHBOR_GET_PAIR_COUNT as usize);
+    for pair in 0..NEIGHBOR_GET_PAIR_COUNT {
+        let segment_start = pair * NEIGHBOR_GET_SEGMENT;
+        for k in 0..NEIGHBOR_GET_SEGMENT_BASELINE_KEYS {
+            index.insert(TXN, &key_of(segment_start + k), Rid::new(PageId(1), k as u16))?;
+        }
+        let dup_key = key_of(segment_start + NEIGHBOR_GET_SEGMENT_BASELINE_KEYS);
+        for i in 0..NEIGHBOR_GET_INITIAL_DUPLICATES {
+            index.insert(TXN, &dup_key, Rid::new(PageId(2), i))?;
+        }
+        dup_keys.push(dup_key);
+        hot_neighbors.push(key_of(segment_start + NEIGHBOR_GET_SEGMENT_BASELINE_KEYS + 1));
+    }
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
+
+    let dup_keys = Arc::new(dup_keys);
+    let root = Arc::new(AtomicU32::new(index.root_page_id().0));
+
+    let reader_handles: Vec<_> = (0..NEIGHBOR_GET_READER_THREADS)
+        .map(|thread_index| {
+            let pool = Arc::clone(&pool);
+            let dup_keys = Arc::clone(&dup_keys);
+            let root = Arc::clone(&root);
+            thread::spawn(move || -> Result<(), String> {
+                for iteration in 0..NEIGHBOR_GET_READER_ITERATIONS {
+                    let pair = (thread_index * 37 + iteration) % dup_keys.len();
+                    let reader = BTreeIndex::open(&pool, PageId(root.load(Ordering::Acquire)));
+                    let found = reader.get(&dup_keys[pair]).map_err(|e| e.to_string())?;
+                    if found.len() < NEIGHBOR_GET_INITIAL_DUPLICATES as usize {
+                        return Err(format!(
+                            "reader {thread_index} iteration {iteration}: get on pair {pair}'s \
+                             duplicated key ({:?}) returned {} entries, expected at least the \
+                             {NEIGHBOR_GET_INITIAL_DUPLICATES} inserted before the writer \
+                             started - a split of the leaf, forced by inserts of a neighboring \
+                             key rather than this key's own, must never cause the leaf walk to \
+                             land past this key's entries and return early",
+                            dup_keys[pair],
+                            found.len()
+                        ));
+                    }
+                }
+                Ok(())
+            })
+        })
+        .collect();
+
+    for round in 0..NEIGHBOR_GET_WRITER_ROUNDS {
+        for (pair, hot_neighbor) in hot_neighbors.iter().enumerate() {
+            let slot = (round * NEIGHBOR_GET_PAIR_COUNT + pair as i32) as u16;
+            index.insert(TXN, hot_neighbor, Rid::new(PageId(3), slot))?;
+        }
+        root.store(index.root_page_id().0, Ordering::Release);
+    }
+
+    for (thread_index, handle) in reader_handles.into_iter().enumerate() {
+        handle
+            .join()
+            .unwrap_or_else(|_| panic!("reader thread {thread_index} panicked"))
+            .map_err(|e| -> Box<dyn Error> { e.into() })?;
+    }
+
+    index.check_invariants(None).map_err(|e| -> Box<dyn Error> { e.into() })?;
+    Ok(())
+}
+
 #[test]
 fn a_maximum_length_key_survives_a_split() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;

@@ -146,6 +146,48 @@ isolation, independent of that higher-layer wiring, which
   rather than fixed here (P-18). Ends with `check_invariants` on the
   writer's own final tree. Same timing-dependent caveat as the test
   above.
+- `NEIGHBOR_GET_PAIR_COUNT` / `NEIGHBOR_GET_SEGMENT` /
+  `NEIGHBOR_GET_SEGMENT_BASELINE_KEYS` / `NEIGHBOR_GET_INITIAL_DUPLICATES` /
+  `NEIGHBOR_GET_READER_THREADS` / `NEIGHBOR_GET_READER_ITERATIONS` /
+  `NEIGHBOR_GET_WRITER_ROUNDS` - sizing constants for the test below: the
+  keyspace is divided into 40 non-overlapping 42-key segments, each holding
+  40 baseline distinct keys plus one duplicated key (`dup_key`, 20 copies
+  inserted single-threaded) immediately followed by one adjacent hot key
+  (`hot_neighbor`, one more than `dup_key`'s underlying integer, so both
+  start out on the same leaf). 8 reader threads run 3,000 iterations each,
+  cycling round-robin through all 40 segments; the writer makes 300 rounds,
+  inserting one more copy of every segment's `hot_neighbor` per round.
+- `get_on_a_key_stays_complete_while_a_neighboring_key_forces_repeated_splits` -
+  the regression test for P-19 (`btree.MD`'s `get` entry): unlike
+  `get_on_a_duplicated_key_never_returns_a_rid_twice_while_its_own_run_keeps_splitting`,
+  which grows the key under test's *own* duplicate run, this test grows a
+  **different**, merely adjacent key's run instead, so every leaf split the
+  writer forces is one `dup_key` itself never triggers. Each reader calls
+  `get` on one segment's `dup_key` per iteration and asserts the result is
+  never shorter than `NEIGHBOR_GET_INITIAL_DUPLICATES` (naming the segment,
+  the observed length and the expected length in the failure message on
+  mismatch) - the property `descend_to_leaf` landing on a leaf that a
+  concurrent, unrelated insert has already split out from under it depends
+  on `get` re-running `lower_bound_leaf` on every leaf it visits rather
+  than assuming slot 0 after the first. Uses 40 independent segments rather
+  than one because the race only exists in the narrow window around each
+  segment's *first* `hot_neighbor`-forced split - once that split moves
+  `dup_key`'s leaf out of `hot_neighbor`'s path, `hot_neighbor`'s own
+  further growth never threatens it again - so one segment gives only one
+  narrow opportunity to hit the race per run; 40 segments, each crossing
+  that same one-shot threshold at roughly the same point in the writer's
+  round loop, give 40 simultaneous opportunities instead. Ends with
+  `check_invariants` on the writer's own final tree. Confirmed against a
+  reverted, pre-fix `get` (the `if first_leaf { lower_bound_leaf(...) }
+  else { 0 }` shape P-19 replaced): failed 11/20 runs under a
+  24-`yes > /dev/null &` background load and passed every isolated run
+  without that load, matching the investigation's finding that
+  low-contention runs hide this bug; the fixed `get` in this repository
+  passed 20/20 runs under the same load. This test is meant to be run
+  repeatedly under contention (e.g. `taskset -c 0,1`, or a background
+  `yes > /dev/null &`) rather than trusted from a single pass. Same
+  timing-dependent caveat otherwise as the other concurrency tests in this
+  file.
 - `scan_leaf_and_leaf_for_start_cross_a_leaf_boundary_like_range_scan_does` -
   drives `leaf_for_start`/`scan_leaf` by hand, the same way
   `executor::IndexScanExecutor` must (owned `(PageId, Option<Vec<u8>>)`
