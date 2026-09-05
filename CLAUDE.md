@@ -92,13 +92,15 @@ When asked to **"do next task"**, follow this procedure:
 
 When asked for the **"next task"** (the Task writer's job, not the
 Coder's), the queue is: schedulable entries in `.claude/problems.md`
-first, the next milestone in `docs/ROADMAP.md` second, and neither if the
-current milestone is finished — in that last case the answer is to say so
-and ask the human whether to hand the tree to the Milestone Reviewer, not
-to invent work. "Schedulable" excludes anything signed `Created by:
-Architect`: those are the Architect's own, and only the Architect turns
-one into a task or resolves it. The full procedure is in
-`.claude/agents/task-writer.md`.
+first; if there are none, the sub-milestone carrying 🚧 in
+`docs/ROADMAP.md` is finished, so it moves to ✅ Done and the next 🆕 New
+sub-milestone under the same parent starts, becoming the task; and if
+that parent has no 🆕 New sub-milestone left, no task at all — the answer
+is to say the milestone looks complete and ask the human whether to hand
+the tree to the Milestone Reviewer, not to invent work. "Schedulable"
+excludes anything signed `Created by: Architect`: those are the
+Architect's own, and only the Architect turns one into a task or resolves
+it. The full procedure is in `.claude/agents/task-writer.md`.
 
 ## LLM roles and channels
 
@@ -152,14 +154,19 @@ Role: <role name>
    other background, just the task. Decompose a large task or
    sub-milestone into several subtasks and order them with an Order
    Plan, each subtask starting at 🆕 New. Archives the finished
-   `.claude/task.md` to `docs/tasks/` and sets 🚧 In Progress in
-   `docs/ROADMAP.md` when it writes a milestone's first task.
+   `.claude/task.md` to `docs/tasks/`, and owns both sub-milestone status
+   transitions in `docs/ROADMAP.md`: 🚧 In Progress when it writes a
+   sub-milestone's first task, and ✅ Done when that sub-milestone's task
+   is fully accepted and no problems are left against it. Never sets ✅ on
+   a parent milestone.
 4. **Milestone Reviewer** — asked to review a finished milestone as a
-   whole against its `docs/ROADMAP.md` entry, once every subtask has
-   been accepted: the milestone's Done-when, cross-cutting
+   whole against its `docs/ROADMAP.md` entry, once every sub-milestone
+   under it is ✅ Done: the milestone's Done-when, cross-cutting
    invariants, documentation truth, forward dependencies it created, and
-   deferred items. Writes `.claude/problems.md`, and is the only role
-   that sets ✅ Done in `docs/ROADMAP.md`.
+   deferred items — functionality, never code style. Files every bug and
+   gap it finds as an entry in `.claude/problems.md`, which is how a
+   failed review reopens the work, and is the only role that sets ✅ Done
+   on a parent milestone in `docs/ROADMAP.md`.
 5. **Helper** — the default role: anything not covered by the four roles
    above, such as answering a question about the project. Read-only.
 
@@ -225,7 +232,7 @@ it changed asks through a channel above.
 | `README.md`, `CLAUDE.md` | Architect | Repository-level prose. "What works today" claims here are checked by the Milestone Reviewer at the end of each milestone. |
 | `docs/adr/**` | Architect | A decision worth an ADR is recorded by the role that investigated it. |
 | `docs/ROADMAP.md` — entry prose | Architect | Including retiring or splitting an entry. |
-| `docs/ROADMAP.md` — status markers | Architect sets 🆕 on a new entry, Task writer sets 🚧, Milestone Reviewer sets ✅ | Nobody else. ✅ means the milestone's functionality was reviewed and works, which is the gate that makes "Done" mean something. |
+| `docs/ROADMAP.md` — status markers | Architect sets 🆕 on a new entry, Task writer sets 🚧 and ✅ on a sub-milestone, Milestone Reviewer sets ✅ on a parent | Nobody else. ✅ on a parent means the milestone's functionality was reviewed as a whole and works, which is the gate that makes "Done" mean something. |
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
 | `docs/tasks/*.md` — archived specs | Task writer | Written once when a task is archived, and history from then on. |
 | `docs/tasks/README.md` | Architect | Not an archived spec: it explains what the archive is for, which is process prose and goes stale like any other. |
@@ -286,18 +293,26 @@ three:
 | Status | Meaning | Set by |
 | --- | --- | --- |
 | 🆕 New | not started | Architect, when it writes the entry |
-| 🚧 In Progress | started | Task writer, when it writes the milestone's first task |
-| ✅ Done | reviewed and accepted | Milestone Reviewer, and nobody else |
+| 🚧 In Progress | started | Task writer, when it writes the sub-milestone's first task |
+| ✅ Done | finished and accepted | Task writer on a sub-milestone; Milestone Reviewer on a parent |
 
 On a sub-milestone, 🚧 means someone is writing code for it now, and at
 most one sub-milestone anywhere carries it. On a parent, 🚧 means partly
-delivered, so several parents may carry it at once; a parent becomes ✅
-Done only when everything under it is.
+delivered, so several parents may carry it at once.
 
-✅ Done on a milestone means its functionality was reviewed and works —
-not that its subtasks were all ticked. That is why only the Milestone
-Reviewer sets it, and why the Task writer's "the milestone looks
-finished" is a question to the human rather than a status change.
+A **sub-milestone** reaches ✅ Done when the Task writer moves off it:
+every subtask of its task accepted by the human, and
+`.claude/problems.md` holding nothing schedulable against it. That is the
+same moment the next sub-milestone starts, so the two markers move in one
+edit.
+
+A **parent** reaches ✅ Done only through the Milestone Reviewer, and
+only once every sub-milestone under it is Done. It is a stronger claim
+than the sum of its children: that the milestone's functionality was
+reviewed as a whole and works. That is why the Task writer's "the
+milestone looks finished" is a question to the human rather than a status
+change, and why a review that fails files problems and leaves the parent
+at 🚧 instead of reopening children.
 
 `.claude/problems.md` is a queue, not a log. The file holds exactly the
 problems that have not yet been turned into work; an entry leaves it when

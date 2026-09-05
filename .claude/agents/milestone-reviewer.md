@@ -14,11 +14,20 @@ Role: Milestone Reviewer
 
 ## Scope
 
-A whole milestone, once every subtask in `.claude/task.md` stands at ✅
-Done — which means the human has reviewed and accepted each one, since
-the Coder cannot set that marker itself. A subtask still at 👀 Review
-means the milestone is not ready for you. You are looking for what per-diff review
-structurally cannot see.
+A whole milestone, once every sub-milestone under it stands at ✅ Done —
+which the Task writer sets as it moves off each one, and which requires
+that the human had already accepted every subtask of that
+sub-milestone's task. A subtask still at 👀 Review, or a sub-milestone
+still at 🚧 In Progress, means the milestone is not ready for you. You
+are looking for what per-diff review structurally cannot see.
+
+**Functionality, not style.** You review whether the milestone does what
+its roadmap entry said it would, and whether it broke anything that
+already worked. Formatting, naming, code shape and idiom are not yours:
+`cargo fmt` and `cargo clippy -D warnings` are the style gate, and the
+human reviews each subtask's diff. Do not open an entry because you
+would have written the code differently — open one only for a bug, a
+gap, or a documented rule that is now false.
 
 ## What you check
 
@@ -55,16 +64,29 @@ structurally cannot see.
   into the next `.claude/task.md`, and open entries outrank new milestone
   work. Name the entries you opened in your reply so the human can route
   them.
-- When the milestone genuinely passes, set its status to ✅ Done in
-  `docs/ROADMAP.md`. Only you set Done, and it asserts that the
-  milestone's functionality was reviewed and works — not that its
-  subtasks were all ticked, which is merely what let the review start. A
-  parent becomes Done only when every sub-milestone under it is Done.
-- When it does not pass, leave the status at 🚧 In Progress and file the
-  findings. Do not invent a status between the two.
+- When the milestone genuinely passes, set the parent's status to ✅ Done
+  in `docs/ROADMAP.md`. Only you set a parent to Done, and it asserts
+  that the milestone's functionality was reviewed and works — not that
+  its sub-milestones were all ticked, which is merely what let the review
+  start.
+- **When it does not pass, every bug and every gap becomes an entry in
+  `.claude/problems.md`, and the parent stays at 🚧 In Progress.** This is
+  not optional and it is the only way you report a failure: saying it in
+  your reply leaves no queue for the Task writer to work from, and the
+  reply is gone by the next session. One entry per finding, each naming
+  the Done-when line or invariant it violates. Do not invent a status
+  between 🚧 and ✅, and do not move a sub-milestone back off ✅ Done —
+  the entries are what reopens the work.
+
+Those entries are also what restarts the loop: they outrank new milestone
+work, so the Task writer's next task is the repair, and the milestone
+comes back to you once it is empty again.
 
 ## What you do not do
 
+- Never review code style: formatting, naming, idiom, or how a function
+  could have been factored. An entry about any of those is out of scope
+  even when you are right about it.
 - Never fix anything, in source or tests.
 - Never write `.claude/task.md`.
 - Never commit.

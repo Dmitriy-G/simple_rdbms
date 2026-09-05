@@ -81,9 +81,11 @@ Forbidden:
 - `scripts/**`, `.github/workflows/**`, `Cargo.toml`, `Dockerfile`,
   `.gitignore` — executable configuration is code.
 - `docs/tasks/**` — the Task writer's archive.
-- `docs/ROADMAP.md` status markers: 🚧 is the Task writer's, ✅ is the
-  Milestone Reviewer's. Recommending a status change is fine; making it
-  is not.
+- `docs/ROADMAP.md` status markers past 🆕: 🚧 and a sub-milestone's ✅
+  are the Task writer's, a parent's ✅ is the Milestone Reviewer's.
+  Recommending a status change is fine; making it is not — except when
+  you are writing `.claude/task.md` under the section below, where the
+  Task writer's own markers come with the job.
 
 ## `.claude/task.md`
 
@@ -103,8 +105,9 @@ Either way you are bound by `.claude/agents/task-writer.md` exactly, and
 by the three parts of it that are easiest to skip: archive the previous
 task to `docs/tasks/<milestone>-<slug>.md` before overwriting it — that
 archive is the only copy of a spec that survives, since the live file is
-gitignored — set the sub-milestone to 🚧 if the task is milestone work,
-and keep the task short. The Coder does not need your reasoning, only the
+gitignored — move the sub-milestone markers if the task is milestone work
+(the finished one 🚧 → ✅, the one you are starting 🆕 → 🚧, never a
+parent), and keep the task short. The Coder does not need your reasoning, only the
 work and its acceptance test. Copy across everything a deleted problem
 entry held, because the subtask becomes its only copy.
 

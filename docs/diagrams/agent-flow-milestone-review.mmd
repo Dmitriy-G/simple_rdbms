@@ -7,8 +7,8 @@ flowchart TD
     classDef channel fill:#dff0d8,stroke:#3c763d,color:#000
     classDef stop fill:#eeeeee,stroke:#777,color:#000
 
-    START(["Every subtask in .claude/task.md<br/>stands at ✅ Done — the human<br/>reviewed and accepted each one"]):::human
-    MR["Milestone Reviewer — whole-milestone scope"]:::role
+    START(["Every sub-milestone under the parent<br/>stands at ✅ Done — the Task writer set<br/>each one as it moved off it, which required<br/>the human accepting every subtask"]):::human
+    MR["Milestone Reviewer — whole-milestone scope.<br/>Functionality and gaps, never code style:<br/>fmt and clippy are the style gate"]:::role
 
     C1["1. The roadmap entry:<br/>does the code satisfy the Solution and<br/>every line of Done-when?<br/>Not 'did each subtask land'"]
     C2["2. Cross-cutting invariants across the<br/>milestone as a whole — multi-step protocols<br/>whose individual steps are each correct<br/>are the classic failure"]
@@ -18,13 +18,12 @@ flowchart TD
     C6["6. Deferred items: anything the Coder or<br/>the human's review put off is written down,<br/>not in someone's head"]
 
     VERDICT{"Verdict"}
-    BUGS[".claude/problems.md — defects,<br/>Created by: Milestone Reviewer,<br/>prevention field mandatory"]:::channel
+    BUGS["Every bug and every gap becomes an entry in<br/>.claude/problems.md — Created by: Milestone<br/>Reviewer, prevention field mandatory.<br/>The parent stays at 🚧 In Progress; the<br/>entries are what reopens the work"]:::channel
     PROB[".claude/problems.md — findings that are<br/>not defects but need investigation"]:::channel
     FWD["Write the forward dependency into the<br/>later milestone's docs/ROADMAP.md entry"]
 
     LOOP(["Task writer schedules the fixes,<br/>Coder works them as subtasks<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
-    DONE["Set the milestone to ✅ Done in<br/>docs/ROADMAP.md. Only this role sets it,<br/>and it means the functionality was<br/>reviewed and works — not that the<br/>subtasks were ticked.<br/>A parent is Done only when every<br/>sub-milestone under it is Done"]
-    ARCHIVE["Task writer archives .claude/task.md to<br/>docs/tasks/&lt;milestone&gt;-&lt;slug&gt;.md"]:::role
+    DONE["Set the parent milestone to ✅ Done in<br/>docs/ROADMAP.md. Only this role sets a<br/>parent, and it means the functionality was<br/>reviewed as a whole and works — not that the<br/>sub-milestones were ticked, which is merely<br/>what let the review start"]
     HUMAN["Human reviews and commits"]:::human
     NEXT(["Next milestone<br/>— see agent-flow-milestone-planning.mmd"]):::stop
 
@@ -32,6 +31,6 @@ flowchart TD
     VERDICT -- "defects" --> BUGS --> LOOP
     VERDICT -- "open questions" --> PROB
     VERDICT -- "forward dependency" --> FWD
-    VERDICT -- "passes" --> DONE --> ARCHIVE --> HUMAN --> NEXT
+    VERDICT -- "passes" --> DONE --> HUMAN --> NEXT
     PROB --> DONE
     FWD --> DONE

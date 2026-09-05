@@ -36,7 +36,7 @@ flowchart LR
     ROADMAP -- "read second" --> TW
     TW -- writes --> TASK
     TW -- "archives the finished task" --> ARCHIVE
-    TW -- "sets 🚧" --> ROADMAP
+    TW -- "sets 🚧 and ✅ on a sub-milestone" --> ROADMAP
 
     TASK -- "the Coder's only inbox" --> CODER
     CODER -- "subtask Status: lines only" --> TASK
@@ -45,7 +45,7 @@ flowchart LR
 
     HUMAN -- "reviews the subtask, sets ✅ Done,<br/>commits; defects go back as entries" --> PROB
     MR -- "defects and open questions" --> PROB
-    MR -- "sets ✅ Done" --> ROADMAP
+    MR -- "sets ✅ Done on a parent" --> ROADMAP
 
     PROB -- read --> ARCH
     HELP -- "answers, or names the right role" --> HUMAN

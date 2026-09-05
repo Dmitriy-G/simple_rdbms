@@ -16,7 +16,7 @@ flowchart TD
         MOD["Sibling module docs: crates/**/*.MD<br/>one per .rs, tests included.<br/>Owner: whoever edits the .rs — the Coder.<br/>Ships in the same commit as the .rs"]:::role
         NEWCRATE["A crate's README.md, new or changed.<br/>Owner: the Coder — it describes that<br/>crate's code, so it goes stale the moment<br/>code lands without it"]:::role
         CROSS["Cross-cutting prose: docs/adr/**,<br/>docs/ROADMAP.md entry text,<br/>README.md, CLAUDE.md, docs/diagrams/**,<br/>.claude/agents/*.md.<br/>Owner: the Architect"]:::role
-        STATUS["Roadmap status markers.<br/>🚧 Task writer, ✅ Milestone Reviewer.<br/>Nobody else, Architect included"]:::role
+        STATUS["Roadmap status markers.<br/>🚧 and ✅ on a sub-milestone: Task writer.<br/>✅ on a parent: Milestone Reviewer.<br/>Nobody else, Architect included —<br/>except 🆕 on an entry it writes"]:::role
     end
 
     RULES["Follow the fixed shapes:<br/>module .MD — title matching the stem,<br/>opening paragraph, Key Components,<br/>Usage Example, closing paragraph.<br/>README — role statement, Architecture,<br/>Key Components, Features, Dependencies,<br/>Configuration, Testing.<br/>A comment leaving a .rs file is a migration,<br/>not a deletion: the reasoning moves,<br/>it does not vanish"]

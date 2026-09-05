@@ -30,14 +30,17 @@ one role:
 - **🆕 New** — not started. The Architect sets it when the entry is
   written.
 - **🚧 In Progress** — started. The Task writer sets it when it writes
-  the milestone's first task. On a sub-milestone this means someone is
+  the sub-milestone's first task. On a sub-milestone this means someone is
   writing code for it right now, and at most one sub-milestone across the
   roadmap carries it. On a parent it means partly delivered, so several
   parents can carry it at once.
-- **✅ Done** — the Milestone Reviewer sets it, and nobody else. It
-  asserts that the milestone's functionality was reviewed and works, not
-  that its subtasks were all completed. A parent becomes Done only when
-  everything under it is.
+- **✅ Done** — on a *sub*-milestone, the Task writer sets it as it moves
+  on: every subtask of that sub-milestone's task accepted by the human,
+  and `.claude/problems.md` holding nothing schedulable against it. On a
+  *parent*, only the Milestone Reviewer sets it, and only once every
+  sub-milestone under it is Done; there it asserts that the milestone's
+  functionality was reviewed as a whole and works, not merely that its
+  parts were ticked.
 
 ## M1 — Durable, fixed-size storage ✅ Done
 **Problem:** a database needs a way to persist bytes to disk in units the

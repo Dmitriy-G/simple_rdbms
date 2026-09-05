@@ -32,18 +32,39 @@ step because the later one looks more interesting.
    the human names one at you — say it is the Architect's and hand it
    over rather than writing it. Mention any you skipped in your reply so
    the human knows what is waiting on a decision.
-2. **If nothing schedulable is left, take the next milestone** from
-   `docs/ROADMAP.md`: the first sub-milestone that is not ✅ Done,
-   respecting the dependencies its entry states. Decompose it and write
-   the task as usual.
-3. **If the current milestone is finished** — every subtask in the live
-   `.claude/task.md` at ✅ Done, nothing schedulable in
-   `.claude/problems.md`, and the roadmap entry still short of ✅ Done —
-   write no task at all. Say the milestone looks complete, name it, and
-   ask the human whether to hand the tree to the Milestone Reviewer. Only
-   the Milestone Reviewer sets ✅ Done, so the next milestone does not
-   start until that has happened. Asking is the deliverable here;
-   inventing a task to fill the gap is the failure.
+2. **If nothing schedulable is left, advance the roadmap by one
+   sub-milestone.** An empty `.claude/problems.md` is the signal that the
+   sub-milestone carrying 🚧 In Progress has nothing outstanding against
+   it, so in one edit:
+   - archive the live `.claude/task.md` (see "Archiving"),
+   - set that sub-milestone from 🚧 In Progress to ✅ Done in
+     `docs/ROADMAP.md`,
+   - set the next 🆕 New sub-milestone under the same parent to
+     🚧 In Progress, respecting the dependencies its entry states,
+   - decompose it and write its task as usual.
+
+   Do this only when every subtask in the live `.claude/task.md` is at
+   ✅ Done as well. A subtask at 👀 Review or 🚧 In Progress means the
+   sub-milestone is still being worked and there is nothing for you to
+   write: say so and stop. You set ✅ Done on a *sub*-milestone and never
+   on a parent — a parent's Done is the Milestone Reviewer's, and it is
+   the claim that the milestone as a whole works.
+
+   If no sub-milestone carries 🚧 at all, there is nothing to close, and
+   what you do next depends on the parent above the last finished one. If
+   it is ✅ Done, the Milestone Reviewer has passed it: take the first 🆕
+   New sub-milestone of the next parent, set it and its parent to 🚧, and
+   write its task. If it is still 🚧 with everything under it ✅ Done,
+   that is case 3 below and not an invitation to start the next
+   parent — the review has not happened yet.
+3. **If that was the last sub-milestone** — the parent's final 🚧 has
+   reached ✅ Done, whether you moved it just now or on an earlier turn,
+   and nothing under it is left at 🆕 New — write no task at all. Leave the parent at 🚧 In Progress, say the
+   milestone looks complete, name it, and ask the human whether to hand
+   the tree to the Milestone Reviewer. Only the Milestone Reviewer sets a
+   parent to ✅ Done, so the next milestone does not start until that has
+   happened. Asking is the deliverable here; inventing a task to fill the
+   gap is the failure.
 
 A human request naming specific work overrides the queue. The one thing
 it does not override is the Architect signature: that entry is scheduled
@@ -80,7 +101,7 @@ Format:
 - One section per subtask: what to do, how to test it, and a `Status:`
   line, also starting at 🆕 New.
 
-🆕 New is the only status you set. The subtask then climbs the ladder
+🆕 New is the only subtask status you set. The subtask then climbs the ladder
 without you: the Coder sets 🚧 In Progress when it starts and 👀 Review
 when it stops, and the human sets ✅ Done if the review passes or returns
 it to 🚧 if it does not. You read those markers — archiving needs
@@ -130,16 +151,21 @@ tidying; skipping it destroys the record.
 
 ## Roadmap status
 
-Move a milestone from 🆕 New to 🚧 In Progress when you write its first
-task, and at no other moment — that transition is the only roadmap status
-you own. At most one *sub*-milestone carries 🚧 at a time, the one being
-written right now. A parent carries 🚧 whenever it is partly delivered,
-so several parents can hold it at once.
+Two transitions are yours, both on *sub*-milestones:
 
-You do not set ✅ Done. That is the Milestone Reviewer's, and it means
-the milestone's functionality was reviewed and works — a stronger claim
-than "every subtask reached ✅ Done", which is only what lets the review
-begin.
+- 🆕 New to 🚧 In Progress, when you write that sub-milestone's first
+  task. At most one sub-milestone carries 🚧 at a time, the one being
+  written right now. A parent carries 🚧 whenever it is partly delivered,
+  so several parents can hold it at once, and you set a parent to 🚧 when
+  you start the first sub-milestone under it.
+- 🚧 In Progress to ✅ Done, when its task is fully accepted and
+  `.claude/problems.md` holds nothing schedulable — step 2 of the queue
+  above, in the same edit that starts the next sub-milestone.
+
+You never set ✅ Done on a parent milestone. That is the Milestone
+Reviewer's, and it means the milestone's functionality was reviewed as a
+whole and works — a stronger claim than "every sub-milestone under it
+reached ✅ Done", which is only what lets the review begin.
 
 A task built purely from `.claude/problems.md` entries changes no
 roadmap status: it is repair work on what already shipped, not progress

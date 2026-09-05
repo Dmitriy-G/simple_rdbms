@@ -26,8 +26,9 @@ no single agent file has.
   first.
 - [`agent-flow-milestone-planning.mmd`](agent-flow-milestone-planning.mmd)
   — how the Task writer decides what the next task is: open problems
-  first, then the next roadmap entry, and a question to the human rather
-  than a task when the milestone is already finished.
+  first; an empty problems file closes the current sub-milestone and
+  starts the next one; and a question to the human rather than a task
+  when the parent has no sub-milestone left.
 - [`agent-flow-task-implementation.mmd`](agent-flow-task-implementation.mmd)
   — the Coder's loop: one subtask, the gate, mark it done, stop for
   review. Includes the three conditions that stop the Coder instead.
@@ -38,7 +39,8 @@ no single agent file has.
   never touches and the Architect either settles or writes the task for
   itself.
 - [`agent-flow-milestone-review.mmd`](agent-flow-milestone-review.mmd) —
-  whole-milestone review and the only path to ✅ Done.
+  whole-milestone review, the only path to ✅ Done on a parent, and the
+  bugs and gaps it files when a milestone does not pass.
 - [`agent-flow-documentation.mmd`](agent-flow-documentation.mmd) — who
   owns which documentation, and the four layers that validate it.
 - [`agent-flow-investigation.mmd`](agent-flow-investigation.mmd) — the
