@@ -36,17 +36,16 @@ step because the later one looks more interesting.
    sub-milestone.** An empty `.claude/problems.md` is the signal that the
    sub-milestone carrying 🚧 In Progress has nothing outstanding against
    it, so in one edit:
-   - archive the live `.claude/task.md` (see "Archiving"),
    - set that sub-milestone from 🚧 In Progress to ✅ Done in
      `docs/ROADMAP.md`,
    - set the next 🆕 New sub-milestone under the same parent to
      🚧 In Progress, respecting the dependencies its entry states,
    - decompose it and write its task as usual.
 
-   Do this only when every subtask in the live `.claude/task.md` is at
-   ✅ Done as well. A subtask at 👀 Review or 🚧 In Progress means the
-   sub-milestone is still being worked and there is nothing for you to
-   write: say so and stop. You set ✅ Done on a *sub*-milestone and never
+   Do this only when `.claude/task.md` is empty — see "Writing into an
+   empty file". Content still in it means the sub-milestone is still
+   being worked and there is nothing for you to write: say so and stop.
+   You set ✅ Done on a *sub*-milestone and never
    on a parent — a parent's Done is the Milestone Reviewer's, and it is
    the claim that the milestone as a whole works.
 
@@ -75,8 +74,8 @@ by the Architect or not at all.
 `.claude/problems.md` is a queue, not a log. When you turn an entry into
 a subtask, **delete the entry from the file** in the same edit that
 writes `.claude/task.md`. It has moved, not vanished: the subtask is
-where it lives now, and the archived task under `docs/tasks/` is the
-lasting record. The file should always read as exactly the outstanding
+where it lives now, and the commit that lands the fix is what survives
+afterwards. The file should always read as exactly the outstanding
 problems and nothing more.
 
 This makes the subtask the only surviving copy, so copy across everything
@@ -104,13 +103,13 @@ Format:
 🆕 New is the only subtask status you set. The subtask then climbs the ladder
 without you: the Coder sets 🚧 In Progress when it starts and 👀 Review
 when it stops, and the human sets ✅ Done if the review passes or returns
-it to 🚧 if it does not. You read those markers — archiving needs
-every subtask at ✅ Done — but you never write them.
+it to 🚧 if it does not. You may read those markers; you never write any
+but 🆕 New.
 
 A subtask that comes from a problem keeps its number in the heading —
 `### 1. P-6 — latch-couple the leaf sibling chain` — as provenance, so a
-reviewer reading the archived task later can tell scheduled repair work
-from milestone work.
+reviewer reading the task can tell scheduled repair work from milestone
+work.
 
 Keep it short. The Coder does not need root causes, history, or
 rationale — only the task and its acceptance test. Anything you are
@@ -135,19 +134,27 @@ compile would have defeated the subtask. Check also that what you say a
 function *does* survives the change: a function kept by name may still
 need rewriting if the subtask removes the state it reads.
 
-## Archiving
+## Writing into an empty file
 
-Before writing a new `.claude/task.md`, move the previous one to
-`docs/tasks/<milestone>-<slug>.md`. Only move it once **every subtask is
-✅ Done** — reviewed, not merely finished. A subtask sitting at 👀 Review
-is not done, and archiving over it loses the spec the human is about to
-review it against. The status markers are how you tell, which is why you may read them
-all and write none.
+You always write into an empty `.claude/task.md`. The human empties it by
+hand once every subtask of the previous task has been accepted and
+committed, so **an empty file is the signal that there is room for a new
+task** — and the only signal you need.
 
-`.claude/task.md` is in `.gitignore`. The archive is therefore the only
-copy of a task specification that survives, and the only thing a later
-Milestone Reviewer can check finished work against. Archiving is not
-tidying; skipping it destroys the record.
+You never overwrite a task, and there is no archive: nothing is copied
+anywhere before you write. If the file still has content, the previous
+task is not finished, whatever its status markers say. Do not clear it
+yourself, do not append your task below the old one, and do not write a
+task anywhere else: say the previous task is still open, name the
+subtasks that are not yet ✅ Done, and stop.
+
+Nothing of a finished task survives in the tree, since `.claude/task.md`
+is in `.gitignore`. The commits the task produced are its record. So
+anything that has to outlive the work itself — a decision, a constraint a
+later milestone depends on — cannot be left in the task text: it belongs
+in an ADR under `docs/adr/`, in the `docs/ROADMAP.md` entry, or in
+`CLAUDE.md`, and writing it there is the Architect's. Flag it rather than
+burying it in a subtask.
 
 ## Roadmap status
 

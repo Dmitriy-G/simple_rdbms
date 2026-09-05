@@ -30,7 +30,7 @@ flowchart TD
 
     KIND{"What does the recommendation require?"}
     DOC["Architect does it: an ADR recording the<br/>decision, roadmap prose, CLAUDE.md,<br/>a role definition, a diagram"]:::role
-    CODE["Architect writes .claude/task.md itself<br/>for its own entries, bound by<br/>task-writer.md — archive, 🚧, keep it short"]:::role
+    CODE["Architect writes .claude/task.md itself<br/>for its own entries, bound by<br/>task-writer.md — empty file only,<br/>🚧, keep it short"]:::role
     NOTHING["Recommendation is 'leave it'.<br/>Say so in the reply and delete the entry:<br/>next time the question is already answered"]:::stop
     HUMAN["Human decides and commits"]:::human
 

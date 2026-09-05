@@ -34,7 +34,7 @@ flowchart TD
     CODER(["Coder works one subtask<br/>— see agent-flow-task-implementation.mmd"]):::role
     GATE["Gate green. Set the subtask 👀 Review<br/>in task.md; the human sets ✅ Done.<br/>Nothing to close in problems.md —<br/>the entry is already gone"]:::gate
     CR(["Human checks the fix<br/>and its prevention, then commits"]):::human
-    ARCHIVE["Whoever wrote the task archives it<br/>to docs/tasks/. That archive is the only<br/>lasting record of what was found"]:::stop
+    RECORD["The commit is the only lasting record<br/>of what was found. task.md is not archived:<br/>the human empties it once the whole<br/>task has been accepted"]:::stop
 
     SRC1 --> PROB
     SRC2 --> PROB
@@ -48,4 +48,4 @@ flowchart TD
     ARCHINV -- "decided: no code needed" --> DELINV
     WHO -- "Coder, Milestone Reviewer,<br/>Human" --> ANYOPEN
     ANYOPEN -- no --> MILESTONE
-    ANYOPEN -- yes --> TASK --> CONSUME --> CODER --> GATE --> CR --> ARCHIVE
+    ANYOPEN -- yes --> TASK --> CONSUME --> CODER --> GATE --> CR --> RECORD

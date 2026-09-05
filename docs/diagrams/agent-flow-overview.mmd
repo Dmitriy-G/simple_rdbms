@@ -18,7 +18,6 @@ flowchart LR
     PROB[".claude/problems.md<br/>the problems that are still open"]:::channel
     ADR["docs/adr/**<br/>decisions that outlive the working tree"]:::channel
     ROADMAP["docs/ROADMAP.md<br/>the whole project, milestone by milestone"]:::channel
-    ARCHIVE["docs/tasks/**<br/>the only durable copy of a task"]:::channel
 
     HUMAN --> ARCH
     HUMAN --> TW
@@ -34,8 +33,7 @@ flowchart LR
     PROB -- "read first: open entries outrank<br/>new milestone work, except<br/>Architect-signed ones, which the<br/>Task writer never touches" --> TW
     TW -- "deletes each entry it schedules" --> PROB
     ROADMAP -- "read second" --> TW
-    TW -- writes --> TASK
-    TW -- "archives the finished task" --> ARCHIVE
+    TW -- "writes, into an empty file only" --> TASK
     TW -- "sets 🚧 and ✅ on a sub-milestone" --> ROADMAP
 
     TASK -- "the Coder's only inbox" --> CODER
@@ -44,6 +42,7 @@ flowchart LR
     CODER -- "source, tests, sibling .MD;<br/>stops at 👀 Review" --> HUMAN
 
     HUMAN -- "reviews the subtask, sets ✅ Done,<br/>commits; defects go back as entries" --> PROB
+    HUMAN -- "empties it once the task is done;<br/>nothing is archived" --> TASK
     MR -- "defects and open questions" --> PROB
     MR -- "sets ✅ Done on a parent" --> ROADMAP
 

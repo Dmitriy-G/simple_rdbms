@@ -153,8 +153,10 @@ Role: <role name>
    understandable but short — the Coder role doesn't need root causes or
    other background, just the task. Decompose a large task or
    sub-milestone into several subtasks and order them with an Order
-   Plan, each subtask starting at 🆕 New. Archives the finished
-   `.claude/task.md` to `docs/tasks/`, and owns both sub-milestone status
+   Plan, each subtask starting at 🆕 New. Writes only into an empty
+   `.claude/task.md` — the human empties it by hand once the previous
+   task is accepted and committed, and nothing is archived — and owns
+   both sub-milestone status
    transitions in `docs/ROADMAP.md`: 🚧 In Progress when it writes a
    sub-milestone's first task, and ✅ Done when that sub-milestone's task
    is fully accepted and no problems are left against it. Never sets ✅ on
@@ -199,7 +201,7 @@ than cosmetic.
 
 | File | Written by | Read by | Carries |
 | --- | --- | --- | --- |
-| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; Coder for 🚧/👀 status; the human for ✅) | Coder, Milestone Reviewer, human | The current task's subtasks and their Order Plan |
+| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; Coder for 🚧/👀 status; the human for ✅, and for emptying the file once the task is accepted) | Coder, Milestone Reviewer, human | The current task's subtasks and their Order Plan |
 | `.claude/problems.md` | Everyone who finds something: Coder, Milestone Reviewer, Architect, human | Task writer first, Architect, human | A queue of everything found and not fixed on the spot: defects from review, incidental discoveries, and the Architect's findings with their evidence |
 
 Every finding goes to `.claude/problems.md`, whoever found it, signed
@@ -213,9 +215,11 @@ for that reasoning to accumulate.
 Both files are in `.gitignore`. They are live working state, not history:
 a channel entry is either scheduled into a task, or promoted into
 something durable — an ADR under `docs/adr/`, a `docs/ROADMAP.md` entry,
-this file — before it matters. The durable copies are `docs/tasks/**` for
-finished tasks and `docs/adr/**` for decisions. A conclusion that has to
-outlive the working tree is not finished until it is one of those, and
+this file — before it matters. **Nothing else survives.** A task is not
+archived anywhere: the human empties `.claude/task.md` once its subtasks
+are accepted, and the commits it produced are the only record left of it.
+A conclusion that has to outlive the working tree is therefore not
+finished until it is an ADR, a roadmap entry or a paragraph here, and
 deciding what graduates is part of the investigation that produced it.
 
 ### Who owns which files
@@ -234,10 +238,8 @@ it changed asks through a channel above.
 | `docs/ROADMAP.md` — entry prose | Architect | Including retiring or splitting an entry. |
 | `docs/ROADMAP.md` — status markers | Architect sets 🆕 on a new entry, Task writer sets 🚧 and ✅ on a sub-milestone, Milestone Reviewer sets ✅ on a parent | Nobody else. ✅ on a parent means the milestone's functionality was reviewed as a whole and works, which is the gate that makes "Done" mean something. |
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
-| `docs/tasks/*.md` — archived specs | Task writer | Written once when a task is archived, and history from then on. |
-| `docs/tasks/README.md` | Architect | Not an archived spec: it explains what the archive is for, which is process prose and goes stale like any other. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
-| `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. |
+| `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. Either one writes into an empty file: emptying it is the human's, and content still in it means no new task may be written. |
 | `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, the human sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it". |
 | `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows the signature: the Task writer deletes what it schedules and never an Architect entry, the Architect deletes its own. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
@@ -316,8 +318,8 @@ at 🚧 instead of reopening children.
 
 `.claude/problems.md` is a queue, not a log. The file holds exactly the
 problems that have not yet been turned into work; an entry leaves it when
-the Task writer schedules it, and the task — then the archived task under
-`docs/tasks/` — becomes the record of what was found. Its head carries a
+the Task writer schedules it, and the subtask — then the commit that
+lands the fix — becomes the record of what was found. Its head carries a
 `Next entry:` line giving the next free `P-` number, because numbers are
 never reused and the highest one in the file is no longer a reliable
 guide once entries start leaving it.

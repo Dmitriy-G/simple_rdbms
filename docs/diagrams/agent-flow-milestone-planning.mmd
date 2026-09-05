@@ -12,9 +12,8 @@ flowchart TD
     FIRST(["Those come first<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
 
     TW["Task writer"]:::role
-    ACCEPTED{"Is every subtask in the live<br/>.claude/task.md at ✅ Done?<br/>👀 Review is not done"}
-    KEEP["Leave it in place — the sub-milestone<br/>carrying 🚧 is still being worked,<br/>so there is no task to write"]:::stop
-    MOVE["Archive it to docs/tasks/&lt;milestone&gt;-&lt;slug&gt;.md.<br/>task.md is gitignored, so this archive is<br/>the only copy that survives"]
+    ACCEPTED{"Is .claude/task.md empty?<br/>The human empties it once every<br/>subtask has been accepted"}
+    KEEP["Leave it alone — the sub-milestone<br/>carrying 🚧 is still being worked,<br/>so there is no task to write.<br/>Never clear or overwrite it yourself"]:::stop
     CLOSE["Empty problems file + accepted task<br/>= the sub-milestone is finished.<br/>Set it 🚧 → ✅ Done in docs/ROADMAP.md.<br/>Sub-milestones only; never a parent"]
 
     MORE{"Is there a 🆕 New sub-milestone left<br/>under the same parent — or under the next<br/>parent, if this one has already been<br/>passed ✅ by the Milestone Reviewer?"}
@@ -36,8 +35,8 @@ flowchart TD
     START --> QUEUE
     QUEUE -- yes --> FIRST
     QUEUE -- no --> TW --> ACCEPTED
-    ACCEPTED -- "no, subtasks still open" --> KEEP
-    ACCEPTED -- yes --> MOVE --> CLOSE --> MORE
+    ACCEPTED -- "no, a task is still open" --> KEEP
+    ACCEPTED -- yes --> CLOSE --> MORE
     MORE -- no --> ASK
     MORE -- yes --> UNCLEAR
     UNCLEAR -- no --> ARCH --> INV --> READ

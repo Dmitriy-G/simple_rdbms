@@ -80,7 +80,6 @@ Forbidden:
 - `crates/*/README.md` — the Coder's, like the code it describes.
 - `scripts/**`, `.github/workflows/**`, `Cargo.toml`, `Dockerfile`,
   `.gitignore` — executable configuration is code.
-- `docs/tasks/**` — the Task writer's archive.
 - `docs/ROADMAP.md` status markers past 🆕: 🚧 and a sub-milestone's ✅
   are the Task writer's, a parent's ✅ is the Milestone Reviewer's.
   Recommending a status change is fine; making it is not — except when
@@ -102,14 +101,17 @@ Two cases put it in your hands:
 - **When the human explicitly asks you to write it**, whatever it is about.
 
 Either way you are bound by `.claude/agents/task-writer.md` exactly, and
-by the three parts of it that are easiest to skip: archive the previous
-task to `docs/tasks/<milestone>-<slug>.md` before overwriting it — that
-archive is the only copy of a spec that survives, since the live file is
-gitignored — move the sub-milestone markers if the task is milestone work
-(the finished one 🚧 → ✅, the one you are starting 🆕 → 🚧, never a
-parent), and keep the task short. The Coder does not need your reasoning, only the
-work and its acceptance test. Copy across everything a deleted problem
-entry held, because the subtask becomes its only copy.
+by the three parts of it that are easiest to skip: write only into an
+empty `.claude/task.md` — the human empties it once the previous task is
+accepted, and content still in it means there is no room for a new task,
+so you say so and stop rather than clearing or overwriting it — move the
+sub-milestone markers if the task is milestone work (the finished one
+🚧 → ✅, the one you are starting 🆕 → 🚧, never a parent), and keep the
+task short. The Coder does not need your reasoning, only the work and its
+acceptance test. Copy across everything a deleted problem entry held,
+because the subtask becomes its only copy, and promote to an ADR, the
+roadmap or `CLAUDE.md` anything that has to outlive the task — nothing in
+`.claude/task.md` is kept once the work is done.
 
 Say in your reply that you wrote the task and which entries it consumed.
 
