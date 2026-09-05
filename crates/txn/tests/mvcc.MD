@@ -1,9 +1,11 @@
 # mvcc
 
-Exercises `VersionChain::visible_version` directly, proving the
-visibility rule it implements: newest-first traversal, an uncommitted
-version is never visible, a committed version becomes visible at its
-`begin_ts` and stops being visible at its `end_ts`.
+Exercises `VersionChain::visible_version`/`visible_version_for` directly,
+proving the visibility rule each implements: newest-first traversal, an
+uncommitted version is never visible to anyone except (via
+`visible_version_for`) the transaction that created it, and a committed
+version becomes visible at its `begin_ts` and stops being visible at its
+`end_ts`.
 
 ## Key Components
 
@@ -27,6 +29,18 @@ version is never visible, a committed version becomes visible at its
   still visible.
 - `empty_chain_returns_none` - a chain with no versions returns `None`
   for any `read_ts`.
+- `visible_version_for_shows_the_readers_own_uncommitted_entry` - an
+  entry with `begin_ts: None` created by `TxnId(7)` is visible to a
+  `visible_version_for(TxnId(7), _)` call at any `read_ts`, unlike plain
+  `visible_version`.
+- `visible_version_for_still_hides_another_transactions_uncommitted_entry` -
+  the same entry is invisible to `visible_version_for(TxnId(8), _)`,
+  proving the self-visibility rule only ever applies to the entry's own
+  creator.
+- `visible_version_for_falls_back_to_the_ordinary_rule_for_committed_entries` -
+  for an entry some other transaction created and committed,
+  `visible_version_for` agrees with `visible_version` exactly: invisible
+  one tick before `begin_ts`, visible at it.
 
 ## Usage Example
 
@@ -46,6 +60,6 @@ assert!(chain.visible_version(5).is_some());
 ```
 
 Run as part of `cargo test --workspace`; this is the crate's proof that
-`VersionChain::visible_version` implements the snapshot-isolation
-visibility rule correctly, ahead of `VersionStore` (M10.3's next subtask)
-wiring version chains up to real `Rid`s.
+`VersionChain::visible_version`/`visible_version_for` implement the
+snapshot-isolation visibility rule correctly, underneath `VersionStore`
+(`tests/version_store.rs`) wiring version chains up to real `Rid`s.

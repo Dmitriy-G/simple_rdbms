@@ -102,7 +102,16 @@ over a sequential scan where `planner::optimizer::IndexScanRule` applies),
 `BEGIN`/`COMMIT`/`ROLLBACK`, and `EXPLAIN [VERBOSE]` (of any statement
 `planner::plan` can handle - not a transaction-control statement or
 another `EXPLAIN`) all work end to end today, durable across a restart
-and atomic per transaction (`docs/adr/0004-acid-scope.md`). Crash
+and atomic per transaction (`docs/adr/0004-acid-scope.md`). Every
+transaction runs under `txn::IsolationLevel::SnapshotIsolation` (M10.3,
+`docs/ROADMAP.md`; `runtime.MD`'s M10.3 note): a `SELECT` sees a
+consistent snapshot as of its own `BEGIN` (or, for autocommit, the
+statement's own start) without taking a single row lock, while an
+`INSERT`/`CREATE TABLE`/`CREATE INDEX` still takes the same exclusive
+table and row locks as before, so two writers touching the same row still
+serialize through the lock manager
+(`crates/engine/tests/snapshot_isolation.rs`). There is no SQL syntax to
+choose a different isolation level. Crash
 recovery and torn-page repair run on every open and are swept exhaustively
 by `tests/crash_injection.rs` across every fail point and every
 `storage::block_device::DurabilityModel`; `tests/index_equivalence.rs`
@@ -165,7 +174,11 @@ sequential-scan query results for equality across randomized data and
 predicates - the test that matters most for catching a wrong-rows bug in
 `executor::IndexScanExecutor` or `planner::optimizer::IndexScanRule`.
 `tests/transactions.rs` checks `BEGIN`/`COMMIT`/`ROLLBACK` group statements
-atomically. `tests/rollback_matches_recovery_undo.rs` proves
+atomically. `tests/snapshot_isolation.rs` checks snapshot isolation across
+two real sessions: an uncommitted insert stays invisible to a concurrent
+`SELECT`, a transaction's snapshot does not move even after another
+session commits, and a rolled-back insert is never visible to anyone.
+`tests/rollback_matches_recovery_undo.rs` proves
 `TransactionManager::abort` and `storage::recovery::recover`'s Undo pass
 are one mechanism. `tests/crash_injection.rs` is the crash-injection
 harness described in Features. `tests/smoke.rs` is the minimum-viable

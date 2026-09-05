@@ -38,10 +38,13 @@ LockMode::Shared)`, and each `next` that yields a row takes
 row's `Rid` (already known from the index entry, unlike `SeqScanExecutor`
 which has to construct one from `page_id`/`slot`) before fetching it from
 the heap. Under `SnapshotIsolation`, neither lock is taken; instead,
-`next` checks `ctx.version_store.is_visible(rid, ctx.txn.read_ts)` after
-the `end`-bound check and before fetching the row, `continue`-ing past an
-invisible entry to the next one in the leaf (or the next leaf) rather
-than returning it.
+`next` checks `ctx.version_store.is_visible_to(rid, ctx.txn.txn_id,
+ctx.txn.read_ts)` after the `end`-bound check and before fetching the
+row, `continue`-ing past an invisible entry to the next one in the leaf
+(or the next leaf) rather than returning it - `is_visible_to`, passing
+this transaction's own id, so a row it inserted itself earlier in the
+same transaction is visible even before anyone commits it (`seq_scan.MD`
+explains why this matters, identically here).
 
 ## Key Components
 

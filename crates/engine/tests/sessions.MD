@@ -37,9 +37,12 @@ everything else exercises exactly one connection.
   table (`t`/`u`) rather than both writing `t`: since subtask 2 wires up
   real table-level locking, two open, uncommitted transactions both
   taking an `Exclusive` lock on the *same* table would have the second
-  block behind the first - real 2PL behavior
-  (`a_scan_and_a_write_to_the_same_table_do_not_interleave`, below, is the
-  test that exercises that blocking on purpose) - which on this test's own
+  block behind the first - real 2PL behavior for two writers, still true
+  after M10.3 since `InsertExecutor` takes its `Exclusive` table lock
+  unconditionally regardless of isolation level
+  (`a_scan_and_a_concurrent_insert_to_the_same_table_do_not_block_each_other`,
+  below, exercises the *reader* side, which no longer blocks anyone since
+  M10.3) - which on this test's own
   single calling thread (not two genuinely concurrent ones, unlike
   `inserts_from_eight_sessions_concurrently_all_land`) would hang forever
   waiting on a `COMMIT` the same thread hasn't reached yet.
@@ -62,16 +65,23 @@ everything else exercises exactly one connection.
 - `dropping_a_session_mid_transaction_rolls_it_back` - `db2` begins,
   inserts, and is dropped without `COMMIT`/`ROLLBACK`; the row is not
   visible afterward through `db1` - `disconnect`'s abort path.
-- `a_scan_and_a_write_to_the_same_table_do_not_interleave` - `db1` begins
-  and runs a `SELECT` (taking and holding a `Shared` table lock,
-  `executor::seq_scan.MD`, for the rest of its still-open transaction);
-  meanwhile a spawned thread's `db2.execute("INSERT ...")` against the
-  same table must not complete within 200ms, proving `InsertExecutor`'s
-  `Exclusive` table lock (`executor::insert.MD`) genuinely blocks behind
-  it rather than the two statements interleaving. `db1.execute("COMMIT")`
-  releases the `Shared` lock via `TransactionManager::release_all`
-  (`txn::manager.MD`), after which the blocked insert completes within
-  `CONCURRENT_TEST_TIMEOUT` and both rows are visible.
+- `a_scan_and_a_concurrent_insert_to_the_same_table_do_not_block_each_other` -
+  `db1` begins and runs a `SELECT` under the engine's default
+  `txn::IsolationLevel::SnapshotIsolation` (`runtime.MD`'s M10.3 note),
+  taking no table or row lock at all
+  (`executor::operators::seq_scan.MD`); meanwhile a spawned thread's
+  `db2.execute("INSERT ...")` against the same table completes within
+  `CONCURRENT_TEST_TIMEOUT` *without* waiting for `db1` to `COMMIT` -
+  proving a reader's still-open snapshot never blocks a concurrent writer.
+  Before M10.3 this same shape (then named
+  `a_scan_and_a_write_to_the_same_table_do_not_interleave`) asserted the
+  opposite: that the insert blocked behind the scan's `Shared` table lock
+  for at least 200ms. Both the original row and the concurrent insert are
+  visible once `db1` commits and re-selects - `InsertExecutor`'s own
+  `Exclusive` table and row locks (`executor::operators::insert.MD`) are
+  unconditional regardless of isolation level, so a second *writer*
+  touching the same table still serializes normally; only the reader side
+  of this test changed.
 - `locks_are_released_after_commit_and_after_abort` - after `BEGIN` and an
   `INSERT`, `Database::current_txn_id`/`lock_count_for_txn`
   (`database.MD`, both `#[cfg(feature = "test-util")]`) show the

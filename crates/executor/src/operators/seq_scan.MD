@@ -24,11 +24,16 @@ Under `SnapshotIsolation`, `init` and `next` take none of those locks at
 all - not even the per-row one, since the shared table lock a partial
 skip would still need conflicts with `InsertExecutor`'s exclusive table
 lock and would park the reader behind a writer regardless. Instead, each
-`next` checks `ctx.version_store.is_visible(rid, ctx.txn.read_ts)`
-(`txn::version_store.MD`) once it has a candidate row's `Rid`; a row that
-fails this check is skipped - the `while` loop's `continue` moves on to
-the next slot - rather than returned, so an in-progress or
-later-committed writer's row never reaches this transaction's snapshot.
+`next` checks `ctx.version_store.is_visible_to(rid, ctx.txn.txn_id,
+ctx.txn.read_ts)` (`txn::version_store.MD`) once it has a candidate row's
+`Rid`; a row that fails this check is skipped - the `while` loop's
+`continue` moves on to the next slot - rather than returned, so an
+in-progress or later-committed writer's row never reaches this
+transaction's snapshot. `is_visible_to` rather than the plainer
+`is_visible` is deliberate: it also passes `ctx.txn.txn_id`, so a row this
+same transaction inserted earlier in its own lifetime is visible even
+though nobody has committed it yet - without that, `BEGIN; INSERT ...;
+SELECT ...` would not show the row it just inserted.
 
 ## Key Components
 

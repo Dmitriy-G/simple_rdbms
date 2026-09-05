@@ -48,4 +48,12 @@ impl VersionStore {
             None => true,
         }
     }
+
+    pub fn is_visible_to(&self, rid: Rid, reader_txn_id: TxnId, read_ts: u64) -> bool {
+        let chains = recover_lock(self.chains.lock(), "VersionStore.chains");
+        match chains.get(&rid) {
+            Some(chain) => chain.visible_version_for(reader_txn_id, read_ts).is_some(),
+            None => true,
+        }
+    }
 }

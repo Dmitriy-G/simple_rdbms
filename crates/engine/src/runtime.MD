@@ -118,6 +118,28 @@ every test whose statement actually executed on a worker (which, since
 M10.2, is every test) would have silently seen zero captured events
 instead of failing loudly.
 
+**Every transaction runs under snapshot isolation (M10.3).** Every
+`TransactionManager::begin` call in this file - the bootstrap transaction
+in `open`, an explicit `BEGIN` (`handle_begin`), the short-lived
+transaction `reload_catalog` uses to re-read the catalog after an
+abort/rollback, and the autocommit transaction `txn_for_statement` begins
+for a bare statement - passes `txn::IsolationLevel::SnapshotIsolation`
+rather than `ReadCommitted`. There is no SQL syntax to choose a different
+level, so this is every transaction's level; a writer (`InsertExecutor`)
+is unaffected, since it takes its table and row locks unconditionally
+regardless of isolation level (`executor::operators::insert.MD`), but a
+reader (`SeqScanExecutor`/`IndexScanExecutor`) now takes none at all and
+instead checks `txn::VersionStore::is_visible` against its own `read_ts`
+(`executor::operators::seq_scan.MD`/`index_scan.MD`,
+`crates/executor/tests/snapshot_visibility.MD`). `run` (below) is what
+threads the shared `Arc<txn::VersionStore>` a scan needs into its
+`ExecutorContext`, cloned out of `txn_manager` alongside the
+`Arc<txn::LockManager>` it already cloned before this milestone.
+`crates/engine/tests/snapshot_isolation.rs` (`tests/snapshot_isolation.MD`)
+is the end-to-end proof: one session's uncommitted insert is invisible to
+another session's concurrent `SELECT`, and a session's own snapshot,
+taken at `BEGIN`, does not move even after the inserting session commits.
+
 ## Key Components
 
 - `SessionId` - private, `Copy`. An opaque per-connection identifier,
@@ -332,8 +354,11 @@ instead of failing loudly.
   did. `EngineShared::open(config, disk_manager, dwb, log_manager) ->
   Result<Self>` - repairs a torn page from the double-write buffer, stands
   up the buffer pool, runs ARIES recovery, bootstraps or loads the catalog
-  under its own committed transaction, and emits the `info!` "database
-  opened" event, identical in behavior to the pre-split `open_with_managers`.
+  under its own committed transaction (begun under
+  `txn::IsolationLevel::SnapshotIsolation`, like every transaction this
+  file begins - see the M10.3 note below), and emits the `info!`
+  "database opened" event, identical in behavior to the pre-split
+  `open_with_managers`.
 - `EngineShared::record_checkpoint_written(&self)` - locks `checkpoint`,
   increments `checkpoints_written` and
   `metrics::counter!("checkpoints_written_total")` together.
@@ -397,20 +422,24 @@ instead of failing loudly.
   identical in behavior to the pre-M10.2 methods of the same name, minus
   the `current_txn` bookkeeping those used to maintain (removed entirely -
   there is no longer one engine-wide "the" transaction to name).
-  `handle_begin` locks `txn_manager` only for the `begin` call itself.
+  `handle_begin` locks `txn_manager` only for the `begin` call itself, and
+  begins the new transaction under `txn::IsolationLevel::SnapshotIsolation`
+  - there is no SQL syntax to choose a different isolation level, so this
+  is every explicit transaction's level.
 - `EngineShared::handle_explain(&self, statement) -> Result<ResultSet>` -
   takes one `catalog` read lock spanning bind, optimize, and both
   `explain_logical`/`explain_physical` calls, since all three need the
   same borrowed `&Catalog`. Never begins a transaction and never touches
   the buffer pool beyond the catalog already resident in memory.
-- `EngineShared::reload_catalog(&self) -> Result<()>` - begins and commits
-  a short-lived bootstrap transaction, calls `Catalog::open` against it
-  outside any lock (this can take a while - it replays the whole catalog
-  heap), then swaps the result into `self.catalog` under a single brief
-  write lock. Called after every abort/rollback, since `Catalog::create_table`/
-  `create_index` mutate the in-memory catalog immediately rather than
-  waiting for commit, and an aborted transaction needs that mutation
-  discarded.
+- `EngineShared::reload_catalog(&self) -> Result<()>` - begins (under
+  `txn::IsolationLevel::SnapshotIsolation`, like every other transaction
+  this file begins) and commits a short-lived bootstrap transaction, calls
+  `Catalog::open` against it outside any lock (this can take a while - it
+  replays the whole catalog heap), then swaps the result into
+  `self.catalog` under a single brief write lock. Called after every
+  abort/rollback, since `Catalog::create_table`/`create_index` mutate the
+  in-memory catalog immediately rather than waiting for commit, and an
+  aborted transaction needs that mutation discarded.
 - `EngineShared::commit_txn(&self, txn_id) -> Result<()>`/`abort_txn(&self,
   txn_id) -> Result<()>` - private one-line wrappers that lock
   `txn_manager` just long enough for the underlying `TransactionManager`
@@ -419,8 +448,9 @@ instead of failing loudly.
   any longer than the single call needs.
 - `EngineShared::txn_for_statement(&self, session) -> Result<(TxnId, bool)>` -
   unchanged in behavior: returns the session's already-open transaction
-  (not autocommit) or begins a fresh one under a brief `txn_manager` lock
-  (autocommit) depending on `session.txn_slot`.
+  (not autocommit) or begins a fresh one, under
+  `txn::IsolationLevel::SnapshotIsolation`, under a brief `txn_manager`
+  lock (autocommit) depending on `session.txn_slot`.
 - `EngineShared::execute_bound(&self, bound, txn_id) -> Result<ResultSet>` -
   matches on `BoundStatement`. `CreateTable`/`CreateIndex` each take a
   `catalog` *write* lock spanning the whole mutation (`create_index` plus

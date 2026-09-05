@@ -60,3 +60,30 @@ fn empty_chain_returns_none() {
     let chain = VersionChain::new();
     assert!(chain.visible_version(0).is_none());
 }
+
+#[test]
+fn visible_version_for_shows_the_readers_own_uncommitted_entry() {
+    let mut chain = VersionChain::new();
+    chain.push(entry(7, None, None));
+
+    assert!(chain.visible_version_for(TxnId(7), 0).is_some());
+    assert!(chain.visible_version_for(TxnId(7), 1_000).is_some());
+}
+
+#[test]
+fn visible_version_for_still_hides_another_transactions_uncommitted_entry() {
+    let mut chain = VersionChain::new();
+    chain.push(entry(7, None, None));
+
+    assert!(chain.visible_version_for(TxnId(8), 0).is_none());
+    assert!(chain.visible_version_for(TxnId(8), 1_000).is_none());
+}
+
+#[test]
+fn visible_version_for_falls_back_to_the_ordinary_rule_for_committed_entries() {
+    let mut chain = VersionChain::new();
+    chain.push(entry(1, Some(5), None));
+
+    assert!(chain.visible_version_for(TxnId(2), 4).is_none());
+    assert!(chain.visible_version_for(TxnId(2), 5).is_some());
+}

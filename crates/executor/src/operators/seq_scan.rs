@@ -40,7 +40,7 @@ impl Executor for SeqScanExecutor {
                     self.next_slot = slot + 1;
                     let rid = Rid::new(page_id, slot);
                     if snapshot_isolation {
-                        if !ctx.version_store.is_visible(rid, ctx.txn.read_ts) {
+                        if !ctx.version_store.is_visible_to(rid, ctx.txn.txn_id, ctx.txn.read_ts) {
                             continue;
                         }
                     } else {

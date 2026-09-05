@@ -24,14 +24,24 @@ row.
 - `VersionChain::push(&mut self, entry)` - prepends a newly created
   version to the chain.
 - `VersionChain::visible_version(&self, read_ts) -> Option<&VersionEntry>` -
-  finds the version visible to a reader with snapshot timestamp `read_ts`:
-  the newest version whose `begin_ts` is at or before `read_ts` and whose
-  `end_ts` is either absent or after it. Since `push` inserts at index 0,
-  `versions` is newest-first, so this returns the first entry (in
-  iteration order) that qualifies. A version whose `begin_ts` is `None`
-  (its creator has not committed yet) never qualifies, regardless of
-  `read_ts`. Returns `None` when no entry qualifies, including on an
-  empty chain.
+  finds the version visible to *any* reader with snapshot timestamp
+  `read_ts`, regardless of who created it: the newest version whose
+  `begin_ts` is at or before `read_ts` and whose `end_ts` is either absent
+  or after it. Since `push` inserts at index 0, `versions` is newest-first,
+  so this returns the first entry (in iteration order) that qualifies. A
+  version whose `begin_ts` is `None` (its creator has not committed yet)
+  never qualifies here, regardless of `read_ts` - see
+  `visible_version_for` for the one case where an uncommitted version must
+  still be visible. Returns `None` when no entry qualifies, including on
+  an empty chain.
+- `VersionChain::visible_version_for(&self, reader_txn_id, read_ts) ->
+  Option<&VersionEntry>` - like `visible_version`, except an entry created
+  by `reader_txn_id` qualifies unconditionally, committed or not. A
+  transaction must always see its own writes even before it commits them -
+  otherwise `BEGIN; INSERT ...; SELECT ...` would not show the row it just
+  inserted, since nothing else has committed it yet. Delegates the
+  everyone-else case to the same rule `visible_version` uses (the private
+  `is_globally_visible` helper both share).
 - `VersionChain::mark_committed(&mut self, txn_id, commit_ts)` - sets
   `begin_ts = Some(commit_ts)` on every entry whose `creator_txn_id` is
   `txn_id`, making that transaction's versions visible to readers with a
@@ -45,6 +55,11 @@ row.
 - `VersionChain::is_empty(&self) -> bool` - true when the chain holds no
   versions, so its caller (`VersionStore`) knows to drop the chain
   entirely rather than keep an empty one keyed by a `Rid`.
+- `is_globally_visible(entry, read_ts) -> bool` - private. The shared
+  "would any reader with this snapshot see this version" predicate:
+  `begin_ts` at or before `read_ts` and (`end_ts` absent or after
+  `read_ts`). `visible_version` uses it as its whole rule; `visible_version_for`
+  uses it only for entries some other transaction created.
 
 ## Usage Example
 
@@ -61,6 +76,7 @@ chain.push(VersionEntry {
 let visible = chain.visible_version(1);
 ```
 
-Not yet wired into `executor` or `storage::heap`: this crate provides the
-version-chain type ahead of snapshot-isolation reads actually consulting
-it instead of reading a table heap's current tuple directly.
+`version_store::VersionStore` is the only caller: every `VersionChain` a
+running process holds lives inside one of its per-`Rid` map entries, and
+`executor`'s scan operators reach this type only indirectly, through
+`VersionStore::is_visible`/`is_visible_to`.

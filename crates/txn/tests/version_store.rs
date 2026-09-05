@@ -71,3 +71,26 @@ fn different_transactions_recording_different_rids_do_not_affect_each_other() {
     assert!(store.is_visible(r1, 5));
     assert!(store.is_visible(r2, 7));
 }
+
+#[test]
+fn is_visible_to_shows_the_readers_own_uncommitted_insert() {
+    let store = VersionStore::new();
+    let r = rid(1);
+
+    store.record_insert(TxnId(1), r, b"row".to_vec());
+
+    assert!(store.is_visible_to(r, TxnId(1), 0));
+    assert!(!store.is_visible_to(r, TxnId(2), 0));
+}
+
+#[test]
+fn is_visible_to_matches_is_visible_for_committed_rows() {
+    let store = VersionStore::new();
+    let r = rid(1);
+
+    store.record_insert(TxnId(1), r, b"row".to_vec());
+    store.commit_versions(TxnId(1), 5);
+
+    assert!(!store.is_visible_to(r, TxnId(2), 4));
+    assert!(store.is_visible_to(r, TxnId(2), 5));
+}

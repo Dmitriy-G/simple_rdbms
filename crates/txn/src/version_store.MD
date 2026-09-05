@@ -48,9 +48,18 @@ isn't wired up.
   for what a test of just this store cannot yet prove.
 - `VersionStore::is_visible(&self, rid, read_ts) -> bool` - `true` when
   `rid` has no chain, otherwise delegates to
-  `VersionChain::visible_version(read_ts).is_some()`. Called by a scan
-  executor under snapshot isolation to decide whether to yield a row it
-  read from the heap.
+  `VersionChain::visible_version(read_ts).is_some()`. Answers "would any
+  reader with this snapshot see this row," with no notion of who is
+  asking - see `is_visible_to` for the version an actual reader needs.
+- `VersionStore::is_visible_to(&self, rid, reader_txn_id, read_ts) -> bool` -
+  like `is_visible`, but via `VersionChain::visible_version_for`: a
+  version `reader_txn_id` itself created is visible even if nobody has
+  committed it yet. Called by a scan executor under snapshot isolation
+  (`executor::operators::seq_scan.MD`/`index_scan.MD`) to decide whether
+  to yield a row it read from the heap - always this method, not
+  `is_visible`, since a transaction that cannot see its own uncommitted
+  `INSERT` inside `BEGIN; INSERT ...; SELECT ...` would be a correctness
+  bug, not merely a stricter isolation level.
 
 Scanning every chain in `commit_versions`/`abort_versions` rather than
 tracking each transaction's touched `Rid`s separately is a chosen
@@ -77,7 +86,9 @@ store.commit_versions(TxnId(1), 10);
 assert!(store.is_visible(rid, 10));
 ```
 
-Not yet consulted by `executor` or `storage::heap`: a later M10.3 subtask
-adds a `version_store: &'a VersionStore` field to
-`executor::ExecutorContext` so scans and inserts actually call through to
-this store instead of every reader still taking a shared row lock.
+`executor::ExecutorContext` carries a `version_store: &'a VersionStore`
+field: `InsertExecutor` calls `record_insert` right after the heap
+assigns a new row's `Rid`, and `SeqScanExecutor`/`IndexScanExecutor` call
+`is_visible_to` under `txn::IsolationLevel::SnapshotIsolation` instead of
+taking a shared row lock (`executor::operators::insert.MD`/
+`seq_scan.MD`/`index_scan.MD`).

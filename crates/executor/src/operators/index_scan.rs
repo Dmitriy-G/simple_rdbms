@@ -72,7 +72,7 @@ impl Executor for IndexScanExecutor {
                         return Ok(None);
                     }
                     if snapshot_isolation {
-                        if !ctx.version_store.is_visible(rid, ctx.txn.read_ts) {
+                        if !ctx.version_store.is_visible_to(rid, ctx.txn.txn_id, ctx.txn.read_ts) {
                             continue;
                         }
                     } else {

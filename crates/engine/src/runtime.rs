@@ -525,7 +525,7 @@ impl EngineShared {
         let highest_txn_id = recovery::recover(&buffer_pool)?;
 
         let mut txn_manager = TransactionManager::new(highest_txn_id);
-        let bootstrap_txn = txn_manager.begin(&buffer_pool, IsolationLevel::ReadCommitted)?;
+        let bootstrap_txn = txn_manager.begin(&buffer_pool, IsolationLevel::SnapshotIsolation)?;
         let catalog = Catalog::open(&buffer_pool, bootstrap_txn)?;
         txn_manager.commit(bootstrap_txn, &buffer_pool)?;
 
@@ -762,7 +762,7 @@ impl EngineShared {
         if session.txn_slot.txn_id().is_some() {
             return Err(Error::NestedTransaction);
         }
-        let isolation_level = IsolationLevel::ReadCommitted;
+        let isolation_level = IsolationLevel::SnapshotIsolation;
         let txn_id = {
             let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
             txn_manager.begin(&self.buffer_pool, isolation_level)?
@@ -840,7 +840,7 @@ impl EngineShared {
     fn reload_catalog(&self) -> Result<()> {
         let reload_txn = {
             let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
-            txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?
+            txn_manager.begin(&self.buffer_pool, IsolationLevel::SnapshotIsolation)?
         };
         let fresh = Catalog::open(&self.buffer_pool, reload_txn)?;
         {
@@ -870,7 +870,8 @@ impl EngineShared {
             TxnSlot::None | TxnSlot::TimedOut => {
                 let mut txn_manager =
                     recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
-                let txn_id = txn_manager.begin(&self.buffer_pool, IsolationLevel::ReadCommitted)?;
+                let txn_id =
+                    txn_manager.begin(&self.buffer_pool, IsolationLevel::SnapshotIsolation)?;
                 Ok((txn_id, true))
             }
         }

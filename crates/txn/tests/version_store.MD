@@ -3,9 +3,10 @@
 Drives `VersionStore` directly through its public API, proving the
 `Rid`-keyed bookkeeping it layers on top of `VersionChain` (already
 covered in isolation by `mvcc.rs`): an unrecorded row is visible to
-everyone, a recorded-but-uncommitted insert is invisible to everyone, a
-commit makes it visible from its commit timestamp onward, and an abort
-makes it invisible forever regardless of what commits later.
+everyone, a recorded-but-uncommitted insert is invisible to everyone
+except its own creator, a commit makes it visible to everyone from its
+commit timestamp onward, and an abort makes it invisible forever
+regardless of what commits later.
 
 ## Key Components
 
@@ -37,6 +38,13 @@ makes it invisible forever regardless of what commits later.
   committing one `Rid`'s writer and, separately, another `Rid`'s writer at
   a different commit timestamp leaves each row's visibility independent
   of the other's.
+- `is_visible_to_shows_the_readers_own_uncommitted_insert` - a
+  recorded-but-uncommitted row is visible via `is_visible_to` to its own
+  creator's `TxnId` but not to a different one, at the same `read_ts`.
+- `is_visible_to_matches_is_visible_for_committed_rows` - once a row is
+  committed, `is_visible_to` for a *different* transaction's id agrees
+  exactly with plain `is_visible`: invisible one tick before the commit
+  timestamp, visible at it.
 
 ## Usage Example
 
@@ -56,6 +64,7 @@ assert!(store.is_visible(rid, 5));
 
 Run as part of `cargo test --workspace`; this is the crate's proof that
 `VersionStore`'s per-`Rid` map correctly delegates to and isolates
-`VersionChain`s from each other, ahead of `TransactionManager` (M10.3's
-next subtask) allocating the timestamps `commit_versions` and
-`is_visible` are driven with in a running transaction.
+`VersionChain`s from each other, independent of `TransactionManager`
+(`../src/manager.MD`) actually allocating the timestamps `commit_versions`,
+`is_visible`, and `is_visible_to` are driven with in a running
+transaction - `tests/lifecycle.rs` covers that integration.

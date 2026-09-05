@@ -90,6 +90,44 @@ fn seq_scan_under_snapshot_isolation_hides_uncommitted_rows_but_shows_untracked_
 }
 
 #[test]
+fn seq_scan_under_snapshot_isolation_sees_its_own_uncommitted_insert() {
+    let (pool, _dir) = open_pool(16);
+    let mut catalog = Catalog::new();
+    let mut txn_manager = TransactionManager::new(None);
+
+    let ddl_txn = txn_manager.begin(&pool, IsolationLevel::ReadCommitted).expect("begin ddl");
+    let schema = Schema::new(vec![Column::new("n", DataType::Integer, true)]);
+    let table_id =
+        catalog.create_table(&pool, ddl_txn, "t", schema).expect("create table").table_id;
+    txn_manager.commit(ddl_txn, &pool).expect("commit ddl");
+
+    let writer = txn_manager.begin(&pool, IsolationLevel::SnapshotIsolation).expect("begin writer");
+    let writer_txn = txn_manager.get(writer).expect("writer txn").clone();
+    let lock_manager = txn_manager.lock_manager().clone();
+    let version_store = txn_manager.version_store().clone();
+    let mut insert = InsertExecutor::new(table_id, vec![row(1)]);
+    let mut insert_ctx =
+        ExecutorContext::new(&catalog, &pool, &writer_txn, &lock_manager, &version_store);
+    insert.init(&mut insert_ctx).expect("init insert");
+    insert.next(&mut insert_ctx).expect("insert row");
+
+    let mut scan_ctx =
+        ExecutorContext::new(&catalog, &pool, &writer_txn, &lock_manager, &version_store);
+    let mut scan = SeqScanExecutor::new(table_id);
+    scan.init(&mut scan_ctx).expect("init scan");
+
+    let mut seen = Vec::new();
+    while let Some(tuple) = scan.next(&mut scan_ctx).expect("next") {
+        seen.push(as_integer(&tuple));
+    }
+    assert_eq!(
+        seen,
+        vec![1],
+        "a transaction must see its own uncommitted insert even though nobody has committed it"
+    );
+}
+
+#[test]
 fn seq_scan_under_read_committed_still_takes_its_locks() {
     let (pool, _dir) = open_pool(16);
     let mut catalog = Catalog::new();

@@ -41,6 +41,18 @@ builds within a test, not a fresh pair per call).
   run with that reader's transaction returns only the untracked row: the
   "no chain for this `Rid`" row is visible per `txn::version_store.MD`,
   and the row committed after `read_ts` is not.
+- `seq_scan_under_snapshot_isolation_sees_its_own_uncommitted_insert` - a
+  single transaction inserts a row via `InsertExecutor` and, without
+  committing, runs a `SeqScanExecutor` under its own `ExecutorContext`:
+  the row it just inserted comes back, proving `VersionStore::is_visible_to`
+  (`txn::version_store.MD`) is what `SeqScanExecutor` calls, not the
+  plainer `is_visible` - a transaction that could not see its own
+  uncommitted write would make `BEGIN; INSERT ...; SELECT ...` return
+  nothing, which is a correctness bug the milestone's own acceptance test
+  (`crates/engine/tests/explain.rs`'s
+  `explain_insert_inside_open_transaction_leaves_the_transaction_untouched`)
+  caught at the full-engine level before this narrower regression test
+  was added here.
 - `seq_scan_under_read_committed_still_takes_its_locks` - the same setup
   under plain `ReadCommitted` instead: after a full scan,
   `LockManager::held_lock_count` for the reader's `TxnId` is nonzero,

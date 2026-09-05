@@ -121,7 +121,8 @@ fn dropping_a_session_mid_transaction_rolls_it_back() -> Result<(), Box<dyn Erro
 }
 
 #[test]
-fn a_scan_and_a_write_to_the_same_table_do_not_interleave() -> Result<(), Box<dyn Error>> {
+fn a_scan_and_a_concurrent_insert_to_the_same_table_do_not_block_each_other()
+-> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let mut db1 = Database::open(DbConfig::new(dir.path().join("test.db")))?;
     db1.execute("CREATE TABLE t (a INTEGER)")?;
@@ -137,18 +138,17 @@ fn a_scan_and_a_write_to_the_same_table_do_not_interleave() -> Result<(), Box<dy
         let _ = done_tx.send(result);
     });
 
-    assert!(
-        done_rx.recv_timeout(Duration::from_millis(200)).is_err(),
-        "an insert into a table a concurrent, uncommitted scan holds a shared lock on must block \
-         until that scan's transaction ends"
-    );
-
-    db1.execute("COMMIT")?;
-    recv_within(&done_rx, CONCURRENT_TEST_TIMEOUT, "the blocked insert to finish")?;
+    recv_within(&done_rx, CONCURRENT_TEST_TIMEOUT, "the concurrent insert to finish")?;
     handle.join().expect("worker thread must not panic");
 
+    db1.execute("COMMIT")?;
     let rows = db1.execute("SELECT * FROM t")?;
-    assert_eq!(row_count(rows), 2, "both the original row and the once-blocked insert must land");
+    assert_eq!(
+        row_count(rows),
+        2,
+        "both the original row and the concurrent insert, which must not have waited for db1's \
+         still-open snapshot-isolation transaction, must land"
+    );
     Ok(())
 }
 
