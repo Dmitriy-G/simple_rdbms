@@ -685,6 +685,24 @@ Branches are named `<type>/<kebab-description>`, e.g.
 
 ## Testing rules
 
+The suite is run **once, at the end of a subtask**, not continuously
+while it is written. Finish the subtask — code, tests, `.MD`s, README —
+then run the gate (`cargo build --workspace`, `cargo fmt --all --
+--check`, `cargo clippy --workspace --all-targets -- -D warnings`, `bash
+scripts/check_docs.sh`, `cargo test --workspace`); if it fails, fix what
+it reports and run it again until it is clean. `cargo check`/`cargo
+build` is the feedback loop during the work, because it answers the
+question actually being asked mid-edit — does this compile — in a
+fraction of the time. Running `cargo test --workspace` after every added
+line does not: the crash-injection sweeps
+(`crates/engine/tests/crash_injection.rs`,
+`crates/storage/tests/btree_crash_injection.rs`) are minutes of work each
+time, and a suite run against half-written code reports failures that are
+expected and teaches nothing. The single exception is a genuine unknown —
+reproducing a reported bug, or settling a hypothesis that cannot be
+settled by reading — where one targeted `cargo test -p <crate> <filter>`
+is the cheapest answer.
+
 Tests must be deterministic: no assertions that depend on wall-clock time,
 hash map/set iteration order, or thread scheduling. Use `tempfile` for
 anything touching the filesystem so tests don't collide or leave state

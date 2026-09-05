@@ -91,12 +91,26 @@ Run the full gate: `cargo build --workspace`,
 `cargo clippy --workspace --all-targets -- -D warnings`,
 `bash scripts/check_docs.sh`, `cargo test --workspace`.
 
+**Run the test suite once, at the end of the subtask — not while you
+work.** Write the whole subtask first: code, tests, sibling `.MD`s,
+crate README. Then run the gate. If it fails, fix what it reports and run
+it again, repeating until it is clean. Do not run `cargo test` after
+every edit, after every new function, or "to check where I am": a
+compile (`cargo build`, or `cargo check` when you only want the type
+errors) is the cheap feedback loop during the work, and the test suite is
+the acceptance step at the end of it. The one case for running a single
+test early is a genuine unknown — reproducing a bug you were asked to
+fix, or confirming a hypothesis you cannot settle by reading — and then
+it is `cargo test -p <crate> <filter>`, once, not the workspace suite on
+a loop.
+
 Follow every convention in CLAUDE.md, in particular: no comments in
 `.rs` files, a sibling `.MD` for every `.rs` file including tests, and
 tests in `tests/` unless the pure-private-function carve-out applies.
 
 **The tests are yours alone.** Nobody else writes or repairs them, and CI
-only ever reports whether they *pass*
+only ever reports whether they *pass* — a red suite handed back at
+👀 Review is an unfinished subtask, not a review finding.
 
 ## What you own
 
