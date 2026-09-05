@@ -39,9 +39,10 @@ let (pool, _dir) = open_pool(2);
 let mut catalog = Catalog::new();
 let (table_id, expected) = seed_table(&pool, &mut catalog, 800);
 
-let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted);
+let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
 let lock_manager = LockManager::new();
-let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
+let version_store = VersionStore::new();
+let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager, &version_store);
 let mut scan = SeqScanExecutor::new(table_id);
 scan.init(&mut ctx).expect("init");
 ```

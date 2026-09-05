@@ -3,7 +3,7 @@ use executor::{Executor, ExecutorContext};
 use planner::BoundExpr;
 use storage::buffer::BufferPool;
 use test_support::PoolOptions;
-use txn::{LockManager, Transaction};
+use txn::{LockManager, Transaction, VersionStore};
 use types::{MemcomparableEncode, Tuple, Value};
 
 #[cfg(test)]
@@ -21,7 +21,8 @@ pub fn run_to_completion(
     executor: &mut dyn Executor,
 ) -> Vec<Tuple> {
     let lock_manager = LockManager::new();
-    let mut ctx = ExecutorContext::new(catalog, pool, txn, &lock_manager);
+    let version_store = VersionStore::new();
+    let mut ctx = ExecutorContext::new(catalog, pool, txn, &lock_manager, &version_store);
     executor.init(&mut ctx).expect("init");
     let mut rows = Vec::new();
     while let Some(tuple) = executor.next(&mut ctx).expect("next") {

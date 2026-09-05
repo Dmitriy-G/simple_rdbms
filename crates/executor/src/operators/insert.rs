@@ -68,6 +68,7 @@ impl Executor for InsertExecutor {
             tuple.encode(&mut bytes);
             let rid = heap.insert_tuple(ctx.txn.txn_id, &bytes)?;
             ctx.lock_manager.lock(ctx.txn.txn_id, rid, LockMode::Exclusive)?;
+            ctx.version_store.record_insert(ctx.txn.txn_id, rid, bytes);
 
             for target in &mut targets {
                 let value = &tuple.values()[target.column_index];

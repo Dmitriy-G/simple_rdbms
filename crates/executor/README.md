@@ -17,9 +17,10 @@ sequential scan, for instance, never holds more than the one row it's
 currently deciding whether to pass through.
 
 `ExecutorContext` carries the shared state (catalog, buffer pool,
-transaction) every operator needs while executing, threaded through every
-`init`/`next` call rather than captured at construction, so the same
-operator tree shape could in principle be reused across transactions.
+transaction, lock manager, MVCC version store) every operator needs while
+executing, threaded through every `init`/`next` call rather than captured
+at construction, so the same operator tree shape could in principle be
+reused across transactions.
 
 ## Key Components
 
@@ -45,7 +46,12 @@ runs through. `SeqScanExecutor`/`IndexScanExecutor` are both lazy and
 page-at-a-time — neither materializes its table/index before yielding its
 first row (`tests/seq_scan.rs`, `tests/index_scan.rs`). `InsertExecutor`
 maintains every index on its target table as it inserts
-(`tests/index_maintenance.rs`).
+(`tests/index_maintenance.rs`) and records each new row's version in the
+MVCC version store. `SeqScanExecutor`/`IndexScanExecutor` take no table or
+row locks and instead consult that store under
+`txn::IsolationLevel::SnapshotIsolation` (M10.3, `docs/ROADMAP.md`;
+`tests/snapshot_visibility.rs`), while every other isolation level still
+locks exactly as before.
 
 `NestedLoopJoinExecutor::init`/`next` are both `todo!()`. Nothing
 constructs one outside of tests, since `sql` has no `JOIN` syntax for a
@@ -57,9 +63,11 @@ cost-based choice among join algorithms would come from. See
 ## Dependencies
 
 Workspace: `common`, `types`, `catalog`, `storage`, `txn`, `planner`.
-External: `thiserror`, for `ExecutorError`. Dev-only: `storage` again, with
-its `test-util` feature enabled, plus `tempfile` and `test-support`
-(`crates/test-support/README.md`) for shared pool-opening fixtures.
+External: `thiserror`, for `ExecutorError`. Dev-only: `storage` and `txn`
+again, each with its `test-util` feature enabled (`txn`'s exposes
+`LockManager::held_lock_count`, used by `tests/snapshot_visibility.rs`),
+plus `tempfile` and `test-support` (`crates/test-support/README.md`) for
+shared pool-opening fixtures.
 
 ## Configuration
 
@@ -79,8 +87,12 @@ is still reachable through the index after enough inserts to force a
 B+tree root split, proving `InsertExecutor` actually persists a changed
 root page rather than leaving the catalog pointing at a stale one. Both files
 declare `mod support;` for shared setup helpers (`tests/support/mod.MD`).
-`tests/smoke.rs` is the minimum-viable compile-and-construct check. Run
-just this crate with:
+`tests/snapshot_visibility.rs` checks `SeqScanExecutor`/`IndexScanExecutor`
+under `txn::IsolationLevel::SnapshotIsolation`: a reader's snapshot hides a
+row committed after it began, still shows a row the version store never
+tracked, and takes no locks at all, while the same scan under
+`ReadCommitted` is unaffected and still locks. `tests/smoke.rs` is the
+minimum-viable compile-and-construct check. Run just this crate with:
 
 ```sh
 cargo test -p executor

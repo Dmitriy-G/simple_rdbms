@@ -4,7 +4,7 @@ use executor::{Executor, ExecutorContext, SeqScanExecutor};
 use storage::buffer::BufferPool;
 use storage::heap::TableHeap;
 use test_support::PoolOptions;
-use txn::{IsolationLevel, LockManager, Transaction};
+use txn::{IsolationLevel, LockManager, Transaction, VersionStore};
 use types::{DataType, Encode, Tuple, Value};
 
 const TXN: TxnId = TxnId(0);
@@ -48,7 +48,8 @@ fn scan_spanning_pages_preserves_insertion_order() {
 
     let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();
-    let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
+    let version_store = VersionStore::new();
+    let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager, &version_store);
     let mut scan = SeqScanExecutor::new(table_id);
     scan.init(&mut ctx).expect("init");
 
@@ -67,7 +68,8 @@ fn pulling_one_tuple_never_fetches_pages_beyond_the_first() {
 
     let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();
-    let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
+    let version_store = VersionStore::new();
+    let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager, &version_store);
     let mut scan = SeqScanExecutor::new(table_id);
     scan.init(&mut ctx).expect("init");
 
@@ -89,7 +91,8 @@ fn interleaved_scans_over_the_same_table_each_yield_the_full_result() {
 
     let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();
-    let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
+    let version_store = VersionStore::new();
+    let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager, &version_store);
 
     let mut scan_a = SeqScanExecutor::new(table_id);
     let mut scan_b = SeqScanExecutor::new(table_id);

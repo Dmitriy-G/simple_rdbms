@@ -979,13 +979,18 @@ impl EngineShared {
     }
 
     fn run(&self, physical: PhysicalPlan, txn_id: TxnId) -> Result<Vec<Tuple>> {
-        let (txn, lock_manager) = {
+        let (txn, lock_manager, version_store) = {
             let txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
-            (txn_manager.get(txn_id)?.clone(), txn_manager.lock_manager().clone())
+            (
+                txn_manager.get(txn_id)?.clone(),
+                txn_manager.lock_manager().clone(),
+                txn_manager.version_store().clone(),
+            )
         };
         let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
         let mut executor = build_executor(physical);
-        let mut ctx = ExecutorContext::new(&catalog, &self.buffer_pool, &txn, &lock_manager);
+        let mut ctx =
+            ExecutorContext::new(&catalog, &self.buffer_pool, &txn, &lock_manager, &version_store);
         executor.init(&mut ctx)?;
 
         let mut rows = Vec::new();

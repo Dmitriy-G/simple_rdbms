@@ -1,7 +1,7 @@
 use common::{IndexId, PageId, TableId};
 use storage::btree::{BTreeIndex, LeafScan};
 use storage::heap::TableHeap;
-use txn::LockMode;
+use txn::{IsolationLevel, LockMode};
 use types::{DataType, Tuple};
 
 use crate::context::ExecutorContext;
@@ -42,7 +42,9 @@ impl IndexScanExecutor {
 impl Executor for IndexScanExecutor {
     fn init(&mut self, ctx: &mut ExecutorContext<'_>) -> Result<(), ExecutorError> {
         let table = ctx.catalog.get_table_by_id(self.table_id)?;
-        ctx.lock_manager.lock_table(ctx.txn.txn_id, self.table_id, LockMode::Shared)?;
+        if ctx.txn.isolation_level != IsolationLevel::SnapshotIsolation {
+            ctx.lock_manager.lock_table(ctx.txn.txn_id, self.table_id, LockMode::Shared)?;
+        }
         self.column_types = table.schema.columns().iter().map(|column| column.data_type).collect();
         self.table_first_page_id = Some(table.first_page_id);
 
@@ -59,6 +61,7 @@ impl Executor for IndexScanExecutor {
             ExecutorError::Evaluation("IndexScanExecutor::next called before init".to_string())
         })?;
         let heap = TableHeap::open(ctx.buffer_pool, table_first_page_id);
+        let snapshot_isolation = ctx.txn.isolation_level == IsolationLevel::SnapshotIsolation;
 
         while let Some(leaf) = self.current_leaf {
             match BTreeIndex::scan_leaf(ctx.buffer_pool, leaf, self.next_after.as_deref())? {
@@ -68,7 +71,13 @@ impl Executor for IndexScanExecutor {
                         self.current_leaf = None;
                         return Ok(None);
                     }
-                    ctx.lock_manager.lock(ctx.txn.txn_id, rid, LockMode::Shared)?;
+                    if snapshot_isolation {
+                        if !ctx.version_store.is_visible(rid, ctx.txn.read_ts) {
+                            continue;
+                        }
+                    } else {
+                        ctx.lock_manager.lock(ctx.txn.txn_id, rid, LockMode::Shared)?;
+                    }
                     let bytes = heap.get_tuple(rid)?.ok_or_else(|| {
                         ExecutorError::CorruptTuple(format!(
                             "index entry points at a missing heap row: {rid:?}"

@@ -19,5 +19,6 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 storage = { workspace = true, features = ["test-util"] }
+txn = { workspace = true, features = ["test-util"] }
 test-support = { workspace = true }
 tempfile = { workspace = true }

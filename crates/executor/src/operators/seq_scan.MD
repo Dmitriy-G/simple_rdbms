@@ -10,6 +10,7 @@ guard before returning, following `next_page_id` once a page is
 exhausted. Memory use is therefore independent of table size, and no page
 stays pinned across a `next` call.
 
+Under every isolation level except `txn::IsolationLevel::SnapshotIsolation`,
 `init` takes `ctx.lock_manager.lock_table(ctx.txn.txn_id, table_id,
 LockMode::Shared)` before resolving the table's schema, and each `next`
 that returns a tuple takes `ctx.lock_manager.lock(ctx.txn.txn_id,
@@ -17,8 +18,17 @@ Rid::new(page_id, slot), LockMode::Shared)` on that row before decoding
 it - see `txn::lock_manager.MD`. Under strict two-phase locking neither
 lock releases until the transaction commits or aborts
 (`txn::manager.MD`), so a full scan holds a growing set of row locks for
-its whole duration; that's the cost of read consistency until MVCC
-(`docs/ROADMAP.md`'s M10.3) replaces it.
+its whole duration.
+
+Under `SnapshotIsolation`, `init` and `next` take none of those locks at
+all - not even the per-row one, since the shared table lock a partial
+skip would still need conflicts with `InsertExecutor`'s exclusive table
+lock and would park the reader behind a writer regardless. Instead, each
+`next` checks `ctx.version_store.is_visible(rid, ctx.txn.read_ts)`
+(`txn::version_store.MD`) once it has a candidate row's `Rid`; a row that
+fails this check is skipped - the `while` loop's `continue` moves on to
+the next slot - rather than returned, so an in-progress or
+later-committed writer's row never reaches this transaction's snapshot.
 
 ## Key Components
 

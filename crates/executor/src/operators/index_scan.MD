@@ -29,12 +29,19 @@ silently skip or re-yield rows, where comparing against the last row's
 own sort key finds the next one correctly regardless of which physical
 leaf a split has since moved it to).
 
-Locking mirrors `seq_scan.MD`: `init` takes `ctx.lock_manager.lock_table(ctx.txn.txn_id,
-table_id, LockMode::Shared)`, and each `next` that yields a row takes
+Locking and snapshot visibility mirror `seq_scan.MD` exactly, keyed off
+`ctx.txn.isolation_level` rather than a separate flag: under every
+isolation level except `txn::IsolationLevel::SnapshotIsolation`, `init`
+takes `ctx.lock_manager.lock_table(ctx.txn.txn_id, table_id,
+LockMode::Shared)`, and each `next` that yields a row takes
 `ctx.lock_manager.lock(ctx.txn.txn_id, rid, LockMode::Shared)` on that
 row's `Rid` (already known from the index entry, unlike `SeqScanExecutor`
 which has to construct one from `page_id`/`slot`) before fetching it from
-the heap.
+the heap. Under `SnapshotIsolation`, neither lock is taken; instead,
+`next` checks `ctx.version_store.is_visible(rid, ctx.txn.read_ts)` after
+the `end`-bound check and before fetching the row, `continue`-ing past an
+invisible entry to the next one in the leaf (or the next leaf) rather
+than returning it.
 
 ## Key Components
 

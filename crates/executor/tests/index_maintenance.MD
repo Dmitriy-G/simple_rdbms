@@ -57,11 +57,13 @@ support::run_to_completion(&pool, &catalog, &txn, &mut insert);
 `run_to_completion` builds its own `ExecutorContext` internally (see
 `support/mod.MD`), so a test driving `InsertExecutor::init`/`next` by
 hand instead (`a_failed_index_insert_returns_an_error_and_leaves_that_row_out_of_the_index`,
-below) builds a `txn::LockManager` and `ExecutorContext` itself:
+below) builds a `txn::LockManager`, a `txn::VersionStore`, and
+`ExecutorContext` itself:
 
 ```rust
 let lock_manager = txn::LockManager::new();
-let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager);
+let version_store = txn::VersionStore::new();
+let mut ctx = ExecutorContext::new(&catalog, &pool, &txn, &lock_manager, &version_store);
 ```
 
 Run as part of `cargo test --workspace`, or just this file with

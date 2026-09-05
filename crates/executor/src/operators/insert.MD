@@ -16,7 +16,18 @@ LockMode::Exclusive)` on each row's `Rid` immediately after
 inserted can never block (no other transaction can know its `Rid` yet),
 but it still registers the row in this transaction's held-lock set so
 `TransactionManager::release_all` (`txn::manager.MD`) accounts for it at
-commit or abort.
+commit or abort. `InsertExecutor` always takes this row lock, regardless
+of isolation level: it is what resolves a write-write conflict against
+another writer, which snapshot isolation still needs even though its
+readers stop taking locks (`txn::version_store.MD`).
+
+**MVCC version stamping.** Right after the row lock, `next` calls
+`ctx.version_store.record_insert(ctx.txn.txn_id, rid, bytes)`, handing
+over the same encoded `bytes` just written to the heap. This registers
+the row as an uncommitted version so a `SeqScanExecutor`/`IndexScanExecutor`
+running under `txn::IsolationLevel::SnapshotIsolation` will not return it
+to another transaction until `ctx.txn.txn_id` commits (see
+`txn::version_store.MD` and `seq_scan.MD`).
 
 **Index maintenance.** Before the row loop, `next` resolves
 `ctx.catalog.indexes_for_table(self.table_id)` once into a `Vec<IndexTarget>`

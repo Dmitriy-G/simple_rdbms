@@ -435,20 +435,24 @@ instead of failing loudly.
   (`get_table_by_id`, `index_root_page`, `update_index_root_page`) only
   ever needed `&Catalog` in the first place.
 - `EngineShared::run(&self, physical, txn_id) -> Result<Vec<Tuple>>` -
-  clones the transaction and an `Arc<txn::LockManager>` clone out of
-  `txn_manager` (a brief lock; `txn::Transaction` is cheap `Clone` data
-  with no ties back to the manager, and cloning the `Arc` is just a
-  refcount bump, so together they're the *only* borrow the executor ever
-  needs - this is what keeps a possibly-long-running scan from holding
-  `txn_manager` for its whole duration), then takes a `catalog` read lock
-  spanning `ExecutorContext` construction and the entire `init`/`next`
-  loop, since `ExecutorContext` borrows `&Catalog` for as long as the
-  executor runs. The same shared `LockManager` every transaction against
-  this database locks and unlocks through is what lets one session's
+  clones the transaction and an `Arc<txn::LockManager>` and an
+  `Arc<txn::VersionStore>` out of `txn_manager` (a brief lock;
+  `txn::Transaction` is cheap `Clone` data with no ties back to the
+  manager, and cloning each `Arc` is just a refcount bump, so together
+  they're the *only* borrow the executor ever needs - this is what keeps
+  a possibly-long-running scan from holding `txn_manager` for its whole
+  duration), then takes a `catalog` read lock spanning `ExecutorContext`
+  construction and the entire `init`/`next` loop, since `ExecutorContext`
+  borrows `&Catalog` for as long as the executor runs. The same shared
+  `LockManager` every transaction against this database locks and unlocks
+  through is what lets one session's
   `SeqScanExecutor`/`IndexScanExecutor`/`InsertExecutor` (`executor`'s own
   `seq_scan.MD`/`index_scan.MD`/`insert.MD`) block behind another
   session's conflicting table or row lock, taken through the same
-  instance.
+  instance; the same shared `VersionStore` is what lets a
+  `SnapshotIsolation` reader in one session see exactly the versions
+  another session's `InsertExecutor` has committed as of its own
+  `read_ts`, without taking any of those locks at all.
 - `new_connection_span(session_id) -> tracing::Span` - private free
   function. Creates an `info_span!("connection", conn_id)`, enters it just
   long enough to log `info!` "connection opened", then exits and returns
