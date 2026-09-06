@@ -39,7 +39,8 @@ no single agent file has.
   writer never touches and the Architect either settles or writes the
   task for itself, and the triage — the Architect estimating every entry,
   the human approving, and the backlogged ones moving to
-  `docs/backlog.md`.
+  `docs/backlog.md` — plus the one way back out of that file, which is a
+  revive the human has approved.
 - [`agent-flow-milestone-review.mmd`](agent-flow-milestone-review.mmd) —
   whole-milestone review, the only path to ✅ Done on a parent, and the
   bugs and gaps it files when a milestone does not pass.

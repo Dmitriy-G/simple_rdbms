@@ -53,12 +53,21 @@ gap, or a documented rule that is now false.
 ## What you write
 
 - Read `docs/backlog.md` before you open anything. A problem listed there
-  was triaged and deliberately not scheduled: do not file it again, and
+  was triaged and deliberately not scheduled: do not file it again — a
+  duplicate entry revives a decision the human made, without asking — and
   do not fail the milestone on it. If you think a backlog decision is
-  wrong, say so in your reply — reviving one is the Architect's.
-- Never write a `Triage:` line on an entry, your own included. Estimating
-  importance and effort is the Architect's triage, which the human asks
-  for and approves; your entries arrive without one.
+  wrong, say so in your reply; reviving one takes the human's approval
+  and is then the Architect's to carry out.
+- Estimate every entry you file: `Importance:` — `🔴 High`, `🟡 Medium`
+  or `🟢 Low`, icon and word together — and `Effort:` in story points, on
+  their own lines under `Created by:` with a blank line between, using
+  `docs/backlog.md`'s scales. You have just read the milestone whole, so
+  you are the best-placed role to say how much a gap matters; the
+  Architect may correct either number in a triage.
+- Never write a `Decision:` line, on your own entry or anyone's, and
+  never touch another entry's estimate. Whether something gets done is
+  settled in the Architect's triage, which the human asks for and
+  approves; your entries arrive without that line.
 - Everything you find → `.claude/problems.md`, in CLAUDE.md's problem
   format, signed `Created by: Milestone Reviewer`. Defects and findings
   that merely need investigation go to the same file; the prevention

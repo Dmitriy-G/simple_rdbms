@@ -13,7 +13,7 @@ flowchart TD
     SRC3["Milestone Reviewer — what per-subtask<br/>review structurally could not see"]:::role
     SRC4["Architect — a judgement call, a design<br/>question, a finding from a project review,<br/>with its evidence in the entry"]:::role
 
-    PROB[".claude/problems.md — the open queue:<br/>P-n title, Created by: role, Reason,<br/>Description, How to prevent in future.<br/>Number taken from the 'Next entry:' line"]:::channel
+    PROB[".claude/problems.md — the open queue:<br/>P-n title, Created by: role,<br/>Importance: and Effort: from the filer,<br/>Reason, Description,<br/>How to prevent in future.<br/>Number taken from the 'Next entry:' line"]:::channel
 
     NEXT(["Human asks for the next task"]):::human
     TW["Task writer reads problems.md<br/>before docs/ROADMAP.md"]:::role
@@ -26,15 +26,17 @@ flowchart TD
     DELINV["Settled instead: the conclusion graduates<br/>to an ADR, a roadmap entry or CLAUDE.md,<br/>and only then is the entry deleted"]:::stop
 
     REVIEW(["Human asks for a triage —<br/>a task, a sub-milestone or a<br/>milestone has just finished"]):::human
-    ARCHREV["Architect annotates every entry,<br/>whoever signed it:<br/>Triage: importance | effort SP | decision.<br/>Nothing moved, nothing deleted.<br/>Reports the table and stops"]:::role
+    ARCHREV["Architect adds Decision: to every entry,<br/>whoever signed it, and corrects an<br/>Importance: or Effort: the filer got wrong.<br/>Nothing moved, nothing deleted.<br/>Reports the table and stops"]:::role
     APPROVE{"Human reviews the estimates,<br/>edits any by hand, approves"}:::human
-    ACCEPT["Backlog: moved to docs/backlog.md<br/>— heading, one or two sentences,<br/>importance and effort — and deleted from<br/>problems.md in the same edit. The one<br/>deletion that crosses the signature.<br/>Nobody schedules from that file"]:::stop
-    WILLDO["Will do: stays in the queue with its<br/>Triage line, which the Task writer<br/>orders the subtasks by"]:::channel
+    ACCEPT["Backlog: moved to docs/backlog.md<br/>— heading, one or two sentences,<br/>Created: date, Importance:, Effort:,<br/>each on its own line, entries split by ---<br/>— and deleted from problems.md in<br/>the same edit. The one deletion that<br/>crosses the signature.<br/>Nobody schedules from that file"]:::stop
+    REVIVE{"Architect proposes a revive:<br/>says which entry and what changed,<br/>then stops. The human decides"}:::human
+    REVIVED["Approved: the Architect deletes the<br/>backlog entry and files a fresh P- entry<br/>citing it, in the same edit. A problem<br/>whose code is gone is deleted outright<br/>instead, and nothing re-enters the queue"]:::role
+    WILLDO["Will do: stays in the queue with its<br/>three triage lines, which the Task writer<br/>orders the subtasks by"]:::channel
 
     ANYOPEN{"Anything schedulable left?"}
     MILESTONE(["Next milestone instead<br/>— see agent-flow-milestone-planning.mmd"]):::stop
 
-    TASK["Write .claude/task.md: one subtask per<br/>problem, heading keeping the P-n,<br/>restating everything the fix needs<br/>including the prevention"]
+    TASK["Write .claude/task.md: one subtask per<br/>problem, heading keeping the P-n,<br/>Effort: copied from the entry,<br/>restating everything the fix needs<br/>including the prevention"]
     CONSUME["Delete the entry from problems.md<br/>in the same edit. It has moved, not gone:<br/>the subtask is where it lives now.<br/>No roadmap status changes — repair<br/>is not milestone progress"]
 
     CODER(["Coder works one subtask<br/>— see agent-flow-task-implementation.mmd"]):::role
@@ -48,8 +50,10 @@ flowchart TD
     SRC4 --> PROB
 
     PROB --> REVIEW --> ARCHREV --> APPROVE
-    APPROVE -- "decision Backlog" --> ACCEPT
-    APPROVE -- "decision Will do" --> WILLDO --> PROB
+    APPROVE -- "Decision: Backlog" --> ACCEPT
+    APPROVE -- "Decision: Will do" --> WILLDO --> PROB
+    ACCEPT -.-> REVIVE
+    REVIVE -- "human approves" --> REVIVED --> PROB
 
     NEXT --> TW --> WHO
     WHO -- "Architect — the Task writer<br/>neither schedules nor deletes it,<br/>even if the human names it" --> SKIP --> HUMANCALL

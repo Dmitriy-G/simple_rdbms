@@ -21,7 +21,7 @@ flowchart TD
 
     FIXABLE{"Can the Architect fix it outright,<br/>inside its own write targets?"}
     FIXNOW["Fix it and report it in the reply.<br/>No entry: the queue is for what<br/>cannot be fixed on the spot"]:::stop
-    WRITE["Write an entry in .claude/problems.md,<br/>signed Created by: Architect:<br/>problem, evidence with file:line citations,<br/>options, recommendation, what to do next.<br/>An entry that does not say<br/>what to do next is not finished"]
+    WRITE["Write an entry in .claude/problems.md,<br/>signed Created by: Architect, with its own<br/>Importance: and Effort: and no Decision: line —<br/>problem, evidence with file:line citations,<br/>options, recommendation, what to do next.<br/>An entry that does not say<br/>what to do next is not finished"]
     PROB[".claude/problems.md"]:::channel
 
     CLOSES{"Does it settle an existing entry?"}

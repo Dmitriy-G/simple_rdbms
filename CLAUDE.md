@@ -146,7 +146,8 @@ Role: <role name>
    the Architect is the one role that may write `.claude/task.md` for its
    own entries. A conclusion that must outlive the working tree becomes
    an ADR, a roadmap entry or a paragraph here. Also runs the problem
-   triage on request — estimating every entry, then, once the human has
+   triage on request — deciding every entry and correcting the estimate
+   its filer gave it, then, once the human has
    approved, moving the backlogged ones to `docs/backlog.md`, which is
    the one move that lets the Architect delete another role's entry.
    Owns the project's
@@ -215,7 +216,12 @@ Every finding goes to `.claude/problems.md`, whoever found it, signed
 with `Created by:`. That line is the whole difference between a defect a
 reviewer found, something the Coder noticed in passing, and an Architect
 finding that needs a decision — one queue, one numbering scheme, one
-place for the Task writer to look. An Architect entry carries its own
+place for the Task writer to look. Whoever files an entry also estimates
+it — `Importance:` and `Effort:`, on the scales `docs/backlog.md`
+defines — because the role holding the evidence is the cheapest place to
+get a first number; what nobody but the Architect and the human writes is
+`Decision:`, since that is the call about whether the project spends time
+on it. An Architect entry carries its own
 evidence and citations in the entry itself; there is no separate place
 for that reasoning to accumulate.
 
@@ -244,38 +250,67 @@ been settled.
 
 The human asks for a triage when a task, a sub-milestone or a milestone
 is finished — it is a request, never something a role starts on its own,
-because it ends with entries leaving the queue. It runs in two passes
-with the human between them:
+because it ends with entries leaving the queue. It runs as two Architect
+passes over entries that already carry their filer's estimate, with the
+human sitting between them:
 
-1. **The Architect estimates.** Every entry in `.claude/problems.md`,
-   including its own, gets one `Triage:` line directly under its
-   `Created by:` line, and nothing else in the file changes — nothing
-   moved, nothing deleted, no entry reworded:
+1. **Whoever files an entry estimates it.** `Importance:` and `Effort:`
+   are written by the role that opens the entry — Coder, Milestone
+   Reviewer, Architect, human — at the moment it is filed, not later. The
+   filer has the evidence in front of it and is the cheapest place to get
+   a first number.
+2. **The Architect decides.** Every entry in `.claude/problems.md`,
+   including its own, gets a `Decision:` line, and any `Importance:` or
+   `Effort:` the filer got wrong is corrected in place. Nothing else in
+   the file changes: nothing moved, nothing deleted, no entry reworded.
+   Each field is its own line, separated by a blank line, in this order:
 
    ```
-   Triage: importance High | effort 3 SP | decision Will do
+   Created by: Milestone Reviewer
+
+   Importance: 🔴 High
+
+   Effort: 3 SP
+
+   Decision: Will do
    ```
 
-   Importance is `High`, `Medium` or `Low`; effort is story points on the
+   Importance is `🔴 High`, `🟡 Medium` or `🟢 Low` — icon and word
+   together, so the line stays greppable; effort is story points on the
    Fibonacci scale 1/2/3/5/8/13; the decision is `Will do` or `Backlog`,
    and may carry a short clause of reason when the two criteria pull
-   against each other. `docs/backlog.md` defines all three scales, and
+   against each other, wrapping onto the next line if it needs to. Only
+   the Architect and the human ever write `Decision:`.
+   `docs/backlog.md` defines all three scales, and
    defines them once — this section does not restate them.
-2. **The human approves.** The estimates are read, edited by hand where
+3. **The human approves.** The estimates are read, edited by hand where
    they are wrong, and approved. A decision the human changes is the
    decision; the Architect may argue in its reply but moves the entries
    as the file stands.
-3. **The Architect moves the backlog.** Every entry marked
-   `decision Backlog` is summarized into `docs/backlog.md` and deleted
+4. **The Architect moves the backlog.** Every entry whose `Decision:`
+   reads `Backlog` is summarized into `docs/backlog.md` and deleted
    from `.claude/problems.md` in the same edit. What remains in the queue
-   is the will-do list, each entry keeping its `Triage:` line so the Task
-   writer can order subtasks by it.
+   is the will-do list, each entry keeping its three triage lines so the
+   Task writer can order subtasks by them.
 
 The decision follows from the two criteria together: `High` is always
 done, effort `1`–`2` is always done, `Low` at effort `5`+ is backlogged,
 and `Medium` at effort `5`+ is the judgement call worth a clause. An
-entry filed after a triage carries no `Triage:` line, which is exactly
-how the next triage finds it.
+entry filed after a triage carries an importance and an effort but no
+`Decision:` line, and that missing line is exactly how the next triage
+finds it.
+
+An entry that reaches `docs/backlog.md` does not come back on any agent's
+say-so. **Reviving one takes the human's approval**, every time: the
+Architect may propose it, and only after the answer does it delete the
+backlog entry and file a fresh `P-` entry in the same edit. The same rule
+read forwards forbids duplicates — **no role files a problem that is
+already in `docs/backlog.md`**, because a duplicate entry gets triaged as
+if the earlier decision had never been made, which is a revive with the
+approval skipped. Read that file before filing; if what you found is
+already there, say so in your reply and file nothing. The one case
+needing no approval is a backlog entry whose problem is gone, which the
+Architect deletes outright, since nothing re-enters the queue.
 
 ### Who owns which files
 
@@ -292,12 +327,12 @@ it changed asks through a channel above.
 | `docs/adr/**` | Architect | A decision worth an ADR is recorded by the role that investigated it. |
 | `docs/ROADMAP.md` — entry prose | Architect | Including retiring or splitting an entry. |
 | `docs/ROADMAP.md` — status markers | Architect sets 🆕 on a new entry, Task writer sets 🚧 and ✅ on a sub-milestone, Milestone Reviewer sets ✅ on a parent | Nobody else. ✅ on a parent means the milestone's functionality was reviewed as a whole and works, which is the gate that makes "Done" mean something. |
-| `docs/backlog.md` | Architect | The checked-in list of problems the project has decided not to do. An entry gets there only through an approved triage, and leaves only when the Architect revives it — filing a fresh `P-` entry in the same edit. |
+| `docs/backlog.md` | Architect | The checked-in list of problems the project has decided not to do. An entry gets there only through an approved triage, and leaves only when the human approves a revive — the Architect then deletes it and files a fresh `P-` entry in the same edit — or when the problem it describes is gone. |
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
 | `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. Either one writes into an empty file: emptying it is the human's, and content still in it means no new task may be written. |
 | `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, the human sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it". |
-| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows the signature: the Task writer deletes what it schedules and never an Architect entry, the Architect deletes its own. The one exception to the signature rule is triage: on an approved triage the Architect moves every `decision Backlog` entry, whoever signed it, into `docs/backlog.md` in the same edit. The `Triage:` line itself is written by the Architect and edited by the human, by nobody else. |
+| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows the signature: the Task writer deletes what it schedules and never an Architect entry, the Architect deletes its own. The one exception to the signature rule is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:` and `Effort:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; the `Decision:` line is the Architect's and the human's alone. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
 Milestone planning is the Task writer's, milestone review is the
@@ -314,8 +349,15 @@ to review and commit.
 - Order Plan: a numbered list (1 to N) giving the subtask order, each
   line carrying its own status marker.
 - A description for every subtask in the Order Plan, including how to
-  test it, and a `Status:` line. A subtask that exists to fix a problem
-  names its `P-<n>` in its heading.
+  test it, then a `Status:` line and an `Effort:` line. A subtask that
+  exists to fix a problem names its `P-<n>` in its heading and copies
+  that entry's `Effort:` verbatim, since the entry is deleted in the same
+  edit and the subtask becomes the only copy; a subtask decomposed out of
+  a roadmap sub-milestone gets the Task writer's own estimate on
+  `docs/backlog.md`'s scale. `Effort:` is written once, by whoever writes
+  the task, and is not a status: nobody revises it as the work proceeds,
+  and a subtask that turns out to cost far more than its estimate is
+  worth a sentence in the Coder's reply rather than an edit to the file.
 
 ### Status, and who may set it
 
@@ -390,10 +432,16 @@ Per entry:
   neither schedules nor deletes one; the Architect resolves it, or writes
   the task for it itself, and reports it to the human either way. Every
   other signature is schedulable work.
-- `Triage:` importance, effort and decision, on one line — written only
-  by the Architect during a triage and edited only by the human. A new
-  entry does not have one; whoever files it leaves it out, and its
-  absence is what the next triage looks for. See "Problem triage".
+- `Importance:`, `Effort:` and `Decision:` — three lines, one field each,
+  never joined into one, each separated from its neighbours by a blank
+  line like every other paragraph in the entry. `Importance:` carries its
+  icon and its word together (`🔴 High`, `🟡 Medium`, `🟢 Low`) and
+  `Effort:` its story points; both are written by whoever files the
+  entry, and corrected only by the Architect in a triage or by the human.
+  `Decision:` is written only by the Architect in a triage and edited
+  only by the human — a newly filed entry has no `Decision:` line at all,
+  and its absence is what the next triage looks for. See "Problem
+  triage".
 - Reason: why it is a problem, in one or two sentences.
 - Description: full detail, with file paths and line numbers. Assume the
   entry will be read once, by whoever writes the task, and then deleted —

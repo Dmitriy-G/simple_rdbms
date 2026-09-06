@@ -33,16 +33,22 @@ step because the later one looks more interesting.
    over rather than writing it. Mention any you skipped in your reply so
    the human knows what is waiting on a decision.
 
-   An entry may carry a `Triage:` line — importance, effort in story
-   points, decision — left by an Architect triage the human approved.
-   Everything still in the file is `Will do`; use the line to order the
-   subtasks, most important first and cheap ones early, and copy nothing
-   of it into the task. Never write or edit one: it is the Architect's
-   and the human's.
+   Every entry carries `Importance:` and `Effort:` — the role that filed
+   it estimated them — and an entry that has been through a triage the
+   human approved carries `Decision:` as well, one field per line under
+   `Created by:`. Everything still in the file is `Will do`; use those
+   lines to order the subtasks, most important first and cheap ones
+   early. Never write or edit any of the three: they are the Architect's
+   and the human's. The one thing you carry across is `Effort:`, which
+   becomes the subtask's own — see "Writing task.md".
 
    `docs/backlog.md` is not part of this queue and never becomes a task.
-   It lists problems triaged as `Backlog`, and only the Architect takes
-   one back out.
+   It lists problems triaged as `Backlog`, and an entry only comes back
+   out when the human approves it — the Architect then files it as a
+   fresh `P-` entry, which is the only form you will ever see it in. Do
+   not schedule from that file, do not copy an entry out of it into a
+   subtask, and if a backlog entry looks like it should be worked, say so
+   in your reply instead of working around the approval.
 2. **If nothing schedulable is left, advance the roadmap by one
    sub-milestone.** An empty `.claude/problems.md` is the signal that the
    sub-milestone carrying 🚧 In Progress has nothing outstanding against
@@ -90,8 +96,9 @@ afterwards. The file should always read as exactly the outstanding
 problems and nothing more.
 
 This makes the subtask the only surviving copy, so copy across everything
-the fix needs — the failing behaviour, the paths and line numbers, and
-the entry's "How to prevent in future" as part of the work. A Coder
+the fix needs — the failing behaviour, the paths and line numbers, the
+entry's `Effort:` as the subtask's own, and the entry's "How to prevent
+in future" as part of the work. A Coder
 reading the subtask must never need the deleted entry. Keep the `P-<n>`
 in the subtask heading as provenance, and take the next free number for a
 new entry from the `Next entry:` line at the head of
@@ -108,8 +115,21 @@ Format:
   short description when the task is a batch of `P-` entries.
 - Order Plan: a numbered list, 1 to N, giving subtask order. Every line
   carries a status marker, and every one you write starts at 🆕 New.
-- One section per subtask: what to do, how to test it, and a `Status:`
-  line, also starting at 🆕 New.
+- One section per subtask: what to do, how to test it, a `Status:` line
+  starting at 🆕 New, and an `Effort:` line in story points on the line
+  after it.
+
+Every subtask carries an effort, and where the number comes from depends
+on where the subtask came from. A subtask consuming a `P-` entry copies
+that entry's `Effort:` verbatim — the entry is about to be deleted, so
+this is the only place its estimate survives, and re-deriving it would
+quietly overrule a number the human approved. A subtask that comes from
+`docs/ROADMAP.md` gets your own estimate on `docs/backlog.md`'s Fibonacci
+scale, judged as work for the Coder including tests and `.MD`s: a
+sub-milestone decomposed into five subtasks is five separate estimates,
+not one divided up. If a copied estimate looks plainly wrong, keep it and
+say so in your reply; changing it is the Architect's in a triage, not
+yours here.
 
 🆕 New is the only subtask status you set. The subtask then climbs the ladder
 without you: the Coder sets 🚧 In Progress when it starts and 👀 Review

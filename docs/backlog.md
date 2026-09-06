@@ -17,30 +17,35 @@ Only the Architect writes this file, and only through the triage the
 human asks for — normally when a task, a sub-milestone or a milestone is
 finished. The full protocol is `CLAUDE.md`'s "Problem triage"; in short:
 
-1. The Architect annotates **every** entry in `.claude/problems.md` with
-   a `Triage:` line — importance, effort in story points, decision — and
+1. Whoever files an entry in `.claude/problems.md` estimates its
+   `Importance:` and `Effort:` there and then, using the scales below.
+   Nobody but the Architect and the human writes its `Decision:`.
+2. The Architect goes through **every** entry, corrects an `Importance:`
+   or `Effort:` the filer got wrong, adds the `Decision:` line, and
    stops. Nothing is moved or deleted in that pass.
-2. The human reviews the estimates, edits any of them by hand, and
+3. The human reviews the estimates, edits any of them by hand, and
    approves.
-3. The Architect then moves every entry marked `decision Backlog` here,
-   deleting it from `.claude/problems.md` in the same edit. What is left
-   in the queue is the will-do list.
+4. The Architect then moves every entry whose `Decision:` reads `Backlog`
+   here, deleting it from `.claude/problems.md` in the same edit. What is
+   left in the queue is the will-do list.
 
-The human's edit wins at step 3. If the Architect disagrees with a
+The human's edit wins at step 4. If the Architect disagrees with a
 changed decision it says so in its reply and moves the entries as the
 file stands.
 
 ## The three criteria
 
-**Importance** — how much the problem matters:
+**Importance** — how much the problem matters. Each level carries an
+icon, and the icon is written with the word, never instead of it, so the
+line stays greppable: `Importance: 🔴 High`.
 
-- `High` — correctness, durability, data loss, a broken invariant from
+- `🔴 High` — correctness, durability, data loss, a broken invariant from
   `CLAUDE.md`, a rule about logging user data, or something a later
   milestone will otherwise build on top of. Never backlogged, whatever
   it costs.
-- `Medium` — a real defect or a false statement in documentation, but
+- `🟡 Medium` — a real defect or a false statement in documentation, but
   with a workaround, a narrow blast radius, or no user reaching it yet.
-- `Low` — cosmetic, tidying, a limitation nobody has hit.
+- `🟢 Low` — cosmetic, tidying, a limitation nobody has hit.
 
 **Effort** — classic story points, Fibonacci, judged as work for the
 Coder including its tests and `.MD` updates:
@@ -55,8 +60,9 @@ Coder including its tests and `.MD` updates:
   sign that it is a roadmap milestone rather than a problem entry; say
   so instead of backlogging it.
 
-**Decision** — `Will do` or `Backlog`, and it follows from the pair, not
-from either half:
+**Decision** — `Will do` or `Backlog`, written only by the Architect in a
+triage or by the human, never by the role that filed the entry. It
+follows from the pair, not from either half:
 
 - `High` importance → `Will do`, at any effort. Cost decides when, not
   whether.
@@ -68,7 +74,16 @@ from either half:
   and why in one clause, because this is the row the human is most
   likely to overturn.
 
-An entry that names only one of the two criteria has not been triaged.
+An entry with no `Decision:` line has not been triaged — that, not a
+missing estimate, is what the next triage looks for, since `Importance:`
+and `Effort:` are there from the moment the entry is filed.
+
+Each field goes on its own line with a blank line between, in the queue
+and here alike, never joined into one. An entry in `.claude/problems.md`
+carries all three — `Importance:`, `Effort:`, `Decision:`; an entry here
+carries `Created:`, `Importance:` and `Effort:`, its decision being the
+file it is in. A `Decision:` may carry a clause of reason and may wrap
+onto the next line; the other two are a single word or a single number.
 
 ## What does not belong here
 
@@ -84,23 +99,40 @@ An entry that names only one of the two criteria has not been triaged.
 ## Reading it
 
 Read this file before filing a finding: something already here has been
-triaged once and re-filing it re-runs a decision that was made. The
-Milestone Reviewer checks it before opening entries and does not fail a
-milestone on a backlogged problem. The Task writer never schedules from
-it — it is a record, not a queue.
+triaged once and re-filing it re-runs a decision that was made. **A
+duplicate of a backlog entry is never opened in `.claude/problems.md`**,
+by any role — it is a revive with the approval step skipped, and it
+works, because the new entry gets triaged as if the earlier decision had
+never happened. A role that believes a backlogged problem now matters
+says so in its reply and files nothing. The Milestone Reviewer checks
+this file before opening entries and does not fail a milestone on a
+backlogged problem. The Task writer never schedules from it — it is a
+record, not a queue.
 
-An entry leaves only when the Architect takes it out: because the problem
-stopped being true, or because something changed its importance — a
-milestone that now depends on it, a user who now hits it — and then the
-same edit files a fresh `P-` entry in `.claude/problems.md`, since
-nothing else would pick it up again.
+An entry leaves this file in one of exactly two ways, and neither is an
+agent's own judgement:
+
+- **The human approves a revive.** Something changed its importance — a
+  milestone that now depends on it, a user who now hits it. The Architect
+  may propose this and must wait for the answer; no agent moves an entry
+  back into `.claude/problems.md` unasked. Once approved, the Architect
+  deletes it here and files a fresh `P-` entry citing this one, in the
+  same edit, since nothing else would pick it up again.
+- **The problem stopped being true.** The code it describes is gone, so
+  there is nothing to revive and nothing re-enters the queue. The
+  Architect deletes it and reports that it did.
 
 ## Entries
 
 Each one is `## <short title>`, one or two sentences saying what is wrong
-and why it is not being done, and the triage it came out of on its own
-line. No `P-` number: those belong to the queue, are never reused, and
-would only send a reader looking for an entry that is no longer there.
+and why it is not being done, then `Created:` — the date the triage put
+it here, `YYYY-MM-DD`, so a reader can tell a decision made last week
+from one made ten milestones ago — and the two criteria it came out with,
+one field per line, as in the queue. Entries are separated from each
+other by a `---` rule, so nothing about where one ends is left to
+guesswork. No `P-` number: those belong to the queue, are never reused,
+and would only send a reader looking for an entry that is no longer
+there.
 
 ```
 ## Sequential scan re-reads the page header per tuple
@@ -109,7 +141,13 @@ Every `next()` re-decodes the slot directory instead of caching it, so a
 full scan does measurably redundant work; the fix touches the heap
 iterator and its crash tests for a cost nothing has yet noticed.
 
-Importance: Low · Effort: 8 SP
+Created: 2026-09-06
+
+Importance: 🟢 Low
+
+Effort: 8 SP
+
+---
 ```
 
 _None yet._

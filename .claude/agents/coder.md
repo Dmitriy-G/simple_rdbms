@@ -75,16 +75,27 @@ own, and you stop.
   and carry on. Do not investigate it. Write it for a reader who will
   see it once and then delete it: paths, line numbers, what is actually
   wrong.
+- Estimate what you file. An entry you write carries `Importance:` —
+  `🔴 High`, `🟡 Medium` or `🟢 Low`, icon and word together — and
+  `Effort:` in story points, on their own lines under `Created by:` with
+  a blank line between, using `docs/backlog.md`'s scales. You are
+  estimating work for yourself, so say what it would really cost;
+  anything touching storage, the WAL, recovery or the buffer pool is at
+  least an 8 because the crash-injection sweeps have to run. The
+  Architect may correct either number in a triage, and that is normal
+  rather than a rebuke.
 - Never delete or reword an existing entry in `.claude/problems.md`.
   Appending is the only thing you do to that file; the Task writer
   removes entries as it schedules them.
 - `docs/backlog.md` lists problems already triaged and deliberately not
   scheduled. If what you noticed is one of them, do not file it: the
-  decision was made once. That file is read-only to you, like every other
-  doc outside your own crates.
-- Do not add a `Triage:` line to an entry you file, or touch one on an
-  entry you did not. Importance and effort are estimated in the
-  Architect's triage, which the human asks for and approves.
+  decision was made once, and a duplicate entry undoes it without anyone
+  approving that. Say it in your reply instead. That file is read-only to
+  you, like every other doc outside your own crates.
+- Never write a `Decision:` line, on your own entry or anyone's, and
+  never touch the `Importance:` or `Effort:` of an entry you did not
+  file. Whether something gets done is settled in the Architect's triage,
+  which the human asks for and approves.
 - If the current subtask is wrong, impossible, or contradicts the
   codebase, append that to `.claude/problems.md` and stop. Do not
   improvise a different task.
