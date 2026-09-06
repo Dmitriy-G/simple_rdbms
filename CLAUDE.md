@@ -247,7 +247,7 @@ with `Created by:`. That line is the whole difference between a defect a
 reviewer found, something the Coder noticed in passing, and an Architect
 finding that needs a decision — one queue, one numbering scheme, one
 place for the Task writer to look. Whoever files an entry also fills in
-`Importance:` and `Effort:`, on the scales `docs/backlog.md` defines,
+`Importance:` and `Effort:`, on the scales "Problem triage" below defines,
 because the role holding the evidence is the cheapest place to get a
 first number. The two fields nobody but the Architect and the human
 writes are `Thinking:` and `Decision:` — how hard the entry is to think
@@ -273,10 +273,11 @@ deciding what graduates is part of the investigation that produced it.
 problem that is real, that nobody is going to fix, and that would
 otherwise be re-found and re-filed every few milestones. It is checked
 in, Architect-written, and an entry only ever gets there through the
-triage below. Its own header states the full rule; the short version is
-that it is a record of decisions, not a queue, so nobody schedules from
-it and everybody reads it before filing a finding that may already have
-been settled.
+triage below. **That file holds entries and nothing else** — the rules
+governing it live here, not in it, so it stays a list a reader can skim
+top to bottom. It is a record of decisions, not a queue: nobody schedules
+from it, and everybody reads it before filing a finding that may already
+have been settled.
 
 ### Problem triage
 
@@ -311,16 +312,7 @@ human sitting between them:
    Decision: Will do
    ```
 
-   Importance is `🔴 High`, `🟡 Medium` or `🟢 Low` — icon and word
-   together, so the line stays greppable; effort is story points on the
-   Fibonacci scale 1/2/3/5/8/13; thinking is a bare number from 1 to 10
-   saying how much reasoning the fix needs, where `1`–`7` is the Coder's
-   and `8`–`10` is the Architect's; the decision is `Will do` or
-   `Backlog`,
-   and may carry a short clause of reason when importance and effort pull
-   against each other, wrapping onto the next line if it needs to.
-   `docs/backlog.md` defines all four scales, and
-   defines them once — this section does not restate them.
+   The four scales are defined below, and defined only there.
 3. **The human approves.** The estimates are read, edited by hand where
    they are wrong, and approved. A decision the human changes is the
    decision; the Architect may argue in its reply but moves the entries
@@ -331,22 +323,108 @@ human sitting between them:
    is the will-do list, each entry keeping its four triage lines so the
    Task writer can order subtasks by them.
 
-The decision follows from the two criteria together: `High` is always
-done, effort `1`–`2` is always done, `Low` at effort `5`+ is backlogged,
-and `Medium` at effort `5`+ is the judgement call worth a clause. An
-entry filed after a triage carries an importance and an effort but no
-`Decision:` line, and that missing line is exactly how the next triage
-finds it.
+   A backlog entry is a `## <short title>`, one or two sentences saying
+   what is wrong **and why it is not being done**, then `Created:` with
+   the triage's date, `Importance:`, `Effort:` and `Thinking:`, one per
+   line, closed by a `---` rule. It carries no `P-` number — those belong
+   to the queue, are never reused, and would only send a reader looking
+   for an entry that is no longer there.
 
-**A fix in Architect-owned files is never rated below `Thinking: 8`** —
-an ADR, this file, the root `README.md`, roadmap prose, a diagram, a role
-definition, `.claude/settings*.json` — however small the edit looks,
-because the Coder may not write them and the rating is what routes the
-entry. A change to how work moves is at `8` for a second reason too:
-these files are where every later session gets its instructions, so a
-wrong rule in one is not one mistake but every task after it. An entry
-that is part code and part Architect prose is filed as two entries, one
-on each side of the line.
+### The four criteria
+
+Every entry in `.claude/problems.md` carries all four, one field per
+line with a blank line between, in the order `Importance:`, `Effort:`,
+`Thinking:`, `Decision:`. An entry in `docs/backlog.md` carries
+`Created:` and the first three; its decision is the file it is in.
+
+**Importance** — how much the problem matters. The icon is written with
+the word, never instead of it, so the line stays greppable:
+`Importance: 🔴 High`.
+
+- `🔴 High` — correctness, durability, data loss, a broken invariant from
+  this file, a rule about logging user data, or something a later
+  milestone will otherwise build on top of. Never backlogged, whatever it
+  costs.
+- `🟡 Medium` — a real defect or a false statement in documentation, but
+  with a workaround, a narrow blast radius, or no user reaching it yet.
+- `🟢 Low` — cosmetic, tidying, a limitation nobody has hit.
+
+**Effort** — story points, Fibonacci, judged as work for the Coder
+including its tests and `.MD` updates:
+
+- `1` — a line or two in one file. A doc sentence, a stale reference.
+- `2` — one file plus a test, no design thinking.
+- `3` — a few files inside one crate, tests, no cross-crate effects.
+- `5` — several files, a crate boundary crossed, or a new test harness.
+- `8` — cross-cutting, or touching storage/WAL/recovery/the buffer pool,
+  which means the crash-injection sweeps must run.
+- `13` — needs a design decision or an ADR before any code. Usually the
+  sign that it is a roadmap milestone rather than a problem entry; say so
+  instead of backlogging it.
+
+**Thinking** — how much reasoning the fix needs, a bare number from 1 to
+10. It decides *who* works the entry, and only the Architect and the
+human write it.
+
+- `1` — one obvious edit. A typo, a stale sentence, a renamed symbol.
+- `2` — a localized change with the fix already stated in the entry.
+- `3` — several files, following a pattern already in the tree to copy.
+- `4` — the design is given, but carrying it out means holding a
+  subsystem's invariants in mind: the WAL ordering rule, latch ordering,
+  a crash-injection sweep that has to keep passing.
+- `5` — the fix is known but its consequences cross crates, so where it
+  belongs is a judgement call made while carrying it out.
+- `6` — a choice between options the entry has already enumerated, with
+  enough evidence in the entry to settle it.
+- `7` — the entry names the fix and recommends it, but carrying it out
+  changes a public API or a documented behaviour other modules rely on.
+- `8` — the answer is not known before the work starts, or the fix is in
+  Architect-owned prose: a design question whose options are not
+  enumerated yet, a boundary that has to move, an ADR to correct, a
+  roadmap entry to rewrite, a change to the process itself.
+- `9` — a decision that constrains later milestones and needs an ADR
+  before any code is written.
+- `10` — a change to the project's own model: an invariant in this file,
+  the durability contract.
+
+**`1`–`7` is a Coder problem, `8`–`10` an Architect problem**, and that
+one number is the whole routing rule — not the signature, not the files.
+Two things put an entry at `8`, and either alone is enough. The first is
+that **the answer is not known before the work starts**: options with no
+choice made, a boundary nobody has placed. The second is that **the fix
+lands in Architect-owned files** — an ADR, this file, the root
+`README.md`, roadmap prose, a diagram, a role definition,
+`.claude/settings*.json` — because the Coder may not write them and the
+rating is what routes the entry. A one-line correction to an ADR is an
+`8` for that reason alone, and a change to how work moves is an `8` for
+both, since these files are where every later session gets its
+instructions and a wrong rule in one is not one mistake but every task
+after it.
+
+The level is about the thinking, not the size: a 1 SP entry is a `9` when
+its single line is obvious only once the decision is made, and an 8 SP
+entry is a `3` when it is long but entirely settled. An entry that is a
+decision *followed by* mechanical work takes the number of the decision.
+An entry that is part code and part Architect prose is filed as two
+entries, one on each side of the line.
+
+**Decision** — `Will do` or `Backlog`, from importance and effort
+together and never from the thinking level; a `9` is done or backlogged
+on the same grounds as a `2`:
+
+- `High` importance → `Will do` at any effort. Cost decides when, not
+  whether.
+- Effort `1`–`2` → `Will do` even at `Low` importance: scheduling it
+  costs about what arguing about it costs.
+- `Low` importance and effort `5`+ → `Backlog`. This is the case
+  `docs/backlog.md` exists for.
+- `Medium` importance and effort `5`+ → the judgement call. Say which way
+  and why in one clause on the line, because it is the row the human is
+  most likely to overturn.
+
+An entry filed after a triage carries an importance and an effort but no
+`Decision:` and no `Thinking:`, and that absence is exactly how the next
+triage finds it.
 
 An entry that reaches `docs/backlog.md` does not come back on any agent's
 say-so. **Reviving one takes the human's approval**, every time: the
@@ -422,8 +500,8 @@ to review and commit.
   entry's `Effort:` verbatim onto its Order Plan line, since the entry is
   deleted in the same edit and the plan becomes the only copy; a subtask
   decomposed out of a roadmap sub-milestone gets the Task writer's own
-  estimate on `docs/backlog.md`'s scale. The effort is written once, by
-  whoever writes the task, and is not a status: nobody revises it as the
+  estimate on the effort scale in "The four criteria". The effort is
+  written once, by whoever writes the task, and is not a status: nobody revises it as the
   work proceeds, and a subtask that turns out to cost far more than its
   estimate is worth a sentence in the Coder's reply rather than an edit
   to the file.

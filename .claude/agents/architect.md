@@ -56,7 +56,7 @@ scheduled.
 Number new entries from the `Next entry:` line at the head of the file
 and increment it. Every entry you file carries `Importance:` and
 `Effort:` from the moment it is written, like an entry from any other
-role — the scales are `docs/backlog.md`'s.
+role — the scales are `CLAUDE.md`'s "The four criteria".
 
 **`Thinking:` is yours and the human's**, on every entry in the file
 whoever wrote it: a bare number from 1 to 10, where `1`–`7` is a Coder
@@ -151,8 +151,9 @@ decision, and say which estimates you changed and why — and stop. The
 human reviews it, edits any line by hand, and approves.
 
 The four scales — including all ten thinking levels and where the Coder's
-half ends — are defined in `docs/backlog.md` and defined only there; read
-them and use them rather than inventing your own words for them. Judge
+half ends — are defined in `CLAUDE.md`'s "The four criteria" and only
+there; read them and use them rather than inventing your own words for
+them. Judge
 effort as work for the Coder — code, tests and `.MD`s together — and
 remember that anything touching storage, the WAL, recovery or the buffer
 pool costs at least an 8 because the crash-injection sweeps have to run.

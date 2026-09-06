@@ -80,9 +80,9 @@ gap, or a documented rule that is now false.
   `🔴 High`, `🟡 Medium` or `🟢 Low`, icon and word together — and
   `Effort:` in story points, on
   their own lines under `Created by:` with a blank line between, using
-  `docs/backlog.md`'s scales. You have just read the milestone whole, so
-  you are the best-placed role to say how much a gap matters; the
-  Architect may correct either number in a triage.
+  `CLAUDE.md`'s "The four criteria". You have just read the milestone
+  whole, so you are the best-placed role to say how much a gap matters;
+  the Architect may correct either number in a triage.
 - Never write a `Thinking:` or `Decision:` line, on your own entry or
   anyone's, and never touch another entry's estimate. How hard a problem
   is to think about, and whether it gets done, are settled in the

@@ -139,8 +139,8 @@ Format:
   ```
 
   The thinking level is copied from the problem entry the subtask
-  consumes, or estimated by you on `docs/backlog.md`'s scale for a subtask
-  decomposed out of the roadmap. It is there to be checked: every level on
+  consumes, or estimated by you on `CLAUDE.md`'s "The four criteria"
+  for a subtask decomposed out of the roadmap. It is there to be checked: every level on
   a `For: Coder` task must be `1`–`7` and every level on a `For:
   Architect` task `8`–`10`, so a line that disagrees with the `For:` line
   is a routing mistake visible at a glance.
@@ -155,7 +155,7 @@ that entry's `Effort:` verbatim — the entry is about to be deleted, so
 the Order Plan is the only place its estimate survives, and re-deriving
 it would quietly overrule a number the human approved. A subtask that
 comes from `docs/ROADMAP.md` gets your own estimate on
-`docs/backlog.md`'s Fibonacci scale, judged as work for the Coder
+`CLAUDE.md`'s Fibonacci effort scale, judged as work for the Coder
 including tests and `.MD`s: a sub-milestone decomposed into five subtasks
 is five separate estimates, not one divided up. If a copied estimate
 looks plainly wrong, keep it and say so in your reply; changing it is the
