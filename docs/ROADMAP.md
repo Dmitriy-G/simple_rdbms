@@ -208,6 +208,33 @@ which a snapshot-isolated database does not require.
 consistent snapshot without taking row locks, letting readers and writers
 stop blocking each other.
 
+### M10.4 — Bounded, prunable version storage 🆕 New
+**Problem:** M10.3's `txn::VersionStore` is only ever appended to. It
+gains a chain for every row inserted since process start and loses one
+never, so a long-running engine holds version state proportional to
+everything it has ever written — the opposite of the bounded-memory
+property M2 exists to provide. Worse for latency, `commit_versions` and
+`abort_versions` iterate *every* chain in the map under the store's
+single mutex, so each commit costs time proportional to the whole
+database rather than to the committing transaction's write set, while
+readers contend on that same mutex once per tuple.
+**Solution:** the design in `docs/adr/0013-version-identity-and-lifetime.md`.
+Each transaction tracks the rows it wrote, so commit and abort touch only
+their own chains; `TransactionManager` exposes the oldest `read_ts` among
+active transactions, the analogue of the `earliest_active_begin_lsn` it
+already computes; and a chain whose newest version is committed at or
+below that watermark with no `end_ts` is dropped, since "no chain"
+already means "visible to everyone". Pruning happens where the watermark
+moves — as a transaction leaves the active set — with no vacuum process
+and no background thread. Deleted rows are deliberately out of scope
+here: their chains may only be dropped together with the heap tuple they
+describe, which is M14's compaction path.
+**Constraint for M14:** the `RowId` key that same ADR decides on is *not*
+part of this sub-milestone, because it needs a heap tuple header field
+that only M14 can add. Until then the store stays keyed by `Rid`, which
+is sound exactly as long as no slot is ever reused — true until `DELETE`
+exists, and false the day it does.
+
 ## M11 — Surviving a torn page write ✅ Done
 **Problem:** even a single page write is not atomic at the hardware level —
 a page-sized write can be interrupted mid-sector, leaving a page with some
@@ -349,7 +376,10 @@ key, rid)` removes the target entry, located by `key ++ rid` the same way
 page left orphaned but unreachable rather than reclaimed), and a merely
 partly empty node is left alone - no merge, no
 borrow-from-sibling, the same choice Postgres's `nbtree` makes
-(`storage::btree.MD`, `docs/adr/0012-btree-delete-does-not-merge.md`).
+(`storage::btree.MD`, plus an ADR written when this milestone lands —
+the number 0012 this once named was taken by
+`docs/adr/0012-bounded-lock-waits.md`, and an unwritten ADR does not
+reserve a number).
 Index maintenance on both paths, and in-page compaction in `heap.rs` so
 tombstoned space is actually reclaimed, keeping slot indices stable since
 a `Rid` is half slot index.
