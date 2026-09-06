@@ -30,6 +30,8 @@ operator precedence.
 - `error` - `SqlError`, errors raised while lexing or parsing, renderable
   against the original source text via `SqlError::render`. See
   [error.MD](src/error.MD).
+- `fingerprint` - `fingerprint`, redacts a statement's literal values so
+  it's safe to log at `info`. See [fingerprint.MD](src/fingerprint.MD).
 
 ## Features
 

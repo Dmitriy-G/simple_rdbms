@@ -88,6 +88,9 @@ was (`Database::handle_explain`, `database.MD`).
 - `executor_factory` - `build_executor`, lowers a `planner::PhysicalPlan`
   into an `executor` operator tree. Private to the crate. See
   [executor_factory.MD](src/executor_factory.MD).
+- `worker_pool` - `WorkerPool`, the fixed-size thread pool that runs each
+  `EngineMessage::Execute`'s actual work off the engine's dispatch thread.
+  Private to the crate. See [worker_pool.MD](src/worker_pool.MD).
 
 `DataType`, `Tuple`, and `Value` are also part of this crate's public API,
 re-exported from `types` rather than duplicated, so `cli` — which may

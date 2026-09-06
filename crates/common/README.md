@@ -27,6 +27,11 @@ deliberately small: a change here is felt by the whole workspace.
 - `crc` - a hand-written CRC-32 implementation, kept as its own submodule
   rather than re-exported flat since it's a utility, not a domain type. See
   [crc.MD](src/crc.MD).
+- `sql_state` - `SqlState`, one constant per SQLSTATE code this engine can
+  raise or is reserved to raise. See [sql_state.MD](src/sql_state.MD).
+- `sync` - `recover_lock`, the poisoned-lock recovery helper every
+  `std::sync::{Mutex, RwLock}` acquisition below `engine` goes through. See
+  [sync.MD](src/sync.MD).
 
 ## Features
 

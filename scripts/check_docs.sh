@@ -93,6 +93,32 @@ while IFS= read -r toml; do
     [ -f "$dir/README.md" ] || fail "$dir has a Cargo.toml but no README.md"
 done < <(find crates -name 'Cargo.toml')
 
+# Every crates/<crate>/src/*.rs module must have a matching bullet -
+# "- `stem` - ..." - in that crate's README.md's "## Key Components"
+# list, so a new top-level module can't land without the crate's outside
+# view mentioning it. `lib.rs` is exempt: it's the crate root, documented
+# by its own sibling `src/lib.MD` rather than a Key Components bullet in
+# most crates (CLAUDE.md's README outline draws that line between the
+# crate's outside view and its root module) - `cli`/`server` choose to
+# bullet `lib`/`main` anyway, which this check does not forbid, only not
+# require. Only direct children of `src/` are considered: a submodule
+# under a subdirectory (e.g. `executor/src/operators/insert.rs`) is
+# covered by its directory's own bullet (`operators`), not one of its
+# own.
+while IFS= read -r src_dir; do
+    crate_dir="$(dirname "$src_dir")"
+    readme="$crate_dir/README.md"
+    [ -f "$readme" ] || continue
+    section="$(awk '/^## Key Components$/{flag=1; next} /^## /{flag=0} flag' "$readme")"
+    while IFS= read -r rs; do
+        stem="$(basename "$rs" .rs)"
+        [ "$stem" = "lib" ] && continue
+        if ! grep -qE "^- \`${stem}\`( |$)" <<<"$section"; then
+            fail "$rs: module '$stem' has no bullet in $readme's '## Key Components' list"
+        fi
+    done < <(find "$src_dir" -maxdepth 1 -name '*.rs')
+done < <(find crates -maxdepth 2 -type d -name src)
+
 comment_re='(^|[[:space:]])(//.*)$'
 
 while IFS= read -r rs; do

@@ -26,8 +26,8 @@ Atomicity and durability are real today, built on exactly that WAL
 plumbing; consistency and isolation are much narrower than the word
 "transaction" implies — see `docs/adr/0004-acid-scope.md` for precisely
 what holds and why. `LockManager` is wired into `TransactionManager` and
-the executors as of M10.2 (see Features); `mvcc` still exists here only as
-a type, not yet wired into anything.
+the executors as of M10.2, and `mvcc`/`version_store` are wired into the
+same path as of M10.3 (see Features).
 
 ## Key Components
 
@@ -47,20 +47,32 @@ a type, not yet wired into anything.
 - `transaction` - `Transaction`, `TransactionState`: a single unit of work
   and its position in the 2PL protocol. See
   [transaction.MD](src/transaction.MD).
+- `version_store` - `VersionStore`: the shared, process-wide map from
+  `Rid` to `VersionChain` that backs snapshot-isolation reads. See
+  [version_store.MD](src/version_store.MD).
 
 ## Features
 
 `BEGIN`/`COMMIT`/`ROLLBACK` work today with real atomicity and durability,
 and checkpointing is wired into `engine::Database` on a byte-growth
-threshold. Isolation is enforced by two-phase locking rather than by the
-absence of concurrency: `engine::Database` runs different sessions'
-statements concurrently on a worker pool (`docs/ROADMAP.md`'s M10.2), and
-every reader and writer holds its table/row locks until its transaction
-ends (see below), so one transaction's uncommitted writes are never
-visible to, or overwritten by, another. What 2PL alone does not give is a
-repeatable-read or snapshot guarantee - a transaction that reads the same
-row twice, releasing and reacquiring the lock in between, can still see it
-change - until MVCC (`docs/ROADMAP.md`'s M10.3) lands.
+threshold. `engine::Database` runs different sessions' statements
+concurrently on a worker pool (`docs/ROADMAP.md`'s M10.2). The isolation a
+transaction gets today depends on which side of a read/write pair it is
+on, not on a single mechanism for every transaction: every writer still
+takes table/row locks under two-phase locking and holds them until its
+transaction ends, so one transaction's uncommitted writes are never
+overwritten by another and two writers never race on the same row; a
+reader running under `IsolationLevel::SnapshotIsolation` takes no
+table or row locks at all and instead consults `VersionStore` to see
+exactly the rows committed at or before its own snapshot's `read_ts` (plus
+its own uncommitted writes), which is what actually gives it a repeatable,
+non-changing view of the database across the whole transaction - something
+2PL alone cannot, since releasing and reacquiring a row lock lets the row
+change underneath a reader in between. There is no write-write conflict
+detection beyond the row locks writers already take: today `INSERT` is the
+only write path, so two writers can never target the same existing `Rid`,
+which is the only reason this is harmless rather than a gap - it stops
+being harmless the moment `UPDATE`/`DELETE` (`docs/ROADMAP.md`) land.
 
 `LockManager::lock`/`lock_table`/`release_all` are implemented, with
 deadlock detection (there is no `unlock` method - strict two-phase locking
@@ -68,9 +80,15 @@ releases a transaction's whole lock set at once, via `release_all`, never
 one lock at a time). `TransactionManager::commit`/`abort` both call
 `release_all`, and `executor::SeqScanExecutor`/`IndexScanExecutor`/
 `InsertExecutor` take the locks it grants (`docs/ROADMAP.md`'s M10.2).
-`VersionChain::visible_version` is still `todo!()` - that's M10.3, MVCC for
-snapshot isolation, wired into every read and write path once it lands.
-See `docs/ROADMAP.md` and `docs/adr/0004-acid-scope.md`.
+`VersionChain::visible_version`/`visible_version_for` are implemented and
+`VersionStore` (`mvcc.MD`, `version_store.MD`) wraps them behind a shared,
+`Rid`-keyed map: `TransactionManager::commit`/`abort` call
+`VersionStore::commit_versions`/`abort_versions`
+(`crates/txn/src/manager.rs`), `InsertExecutor` records every inserted
+row's version, and `SeqScanExecutor`/`IndexScanExecutor` consult
+`VersionStore::is_visible_to` under `SnapshotIsolation` instead of locking
+(`docs/ROADMAP.md`'s M10.3). See `docs/ROADMAP.md` and
+`docs/adr/0004-acid-scope.md`.
 
 ## Dependencies
 
@@ -95,8 +113,16 @@ and `write_checkpoint` against a real `BufferPool`, proving the wiring —
 not just that the types compile. `tests/lock_manager.rs` exercises
 `LockManager` directly: shared/exclusive conflicts, upgrade-in-place,
 blocking and waking via `release_all`, and deadlock detection choosing
-exactly one victim. `tests/smoke.rs` is the minimum-viable
-compile-and-construct check. Run just this crate with:
+exactly one victim. `tests/mvcc.rs` exercises `VersionChain`/`VersionEntry`
+directly: visibility around `begin_ts`/`end_ts`, uncommitted entries never
+being visible to another transaction, and a reader seeing its own
+uncommitted entry. `tests/version_store.rs` exercises `VersionStore` the
+same way, but through its shared, `Rid`-keyed map rather than a single
+chain: recording, committing and aborting insert versions, and
+`is_visible`/`is_visible_to` agreeing on committed rows while
+`is_visible_to` alone shows a reader its own uncommitted insert.
+`tests/smoke.rs` is the minimum-viable compile-and-construct check. Run
+just this crate with:
 
 ```sh
 cargo test -p txn
