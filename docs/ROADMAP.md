@@ -383,6 +383,16 @@ reserve a number).
 Index maintenance on both paths, and in-page compaction in `heap.rs` so
 tombstoned space is actually reclaimed, keeping slot indices stable since
 a `Rid` is half slot index.
+**Also in scope:** revising `docs/adr/0004-acid-scope.md`'s isolation
+section, which names this milestone as its own revisit trigger. Today it
+says there is no first-committer-wins check and none is needed, because a
+writer holds an exclusive table lock for its whole transaction; `UPDATE`
+and `DELETE` are the first writes that supersede a version, so this
+milestone has to answer what a write-write conflict under snapshot
+isolation does, whether a deleted row stays visible to an older snapshot,
+and whether the write path may drop to row-level locking. An ADR that
+names a milestone as its trigger is scheduled here rather than left to
+someone re-reading the ADR.
 **Constraints for M10.3:** two decisions here are made to avoid a rewrite
 once MVCC (M10.3) lands. First, reserve space in the heap tuple header for
 version metadata now, even though nothing reads or writes it yet -
