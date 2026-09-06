@@ -63,11 +63,10 @@ Coder including its tests and `.MD` updates:
   so instead of backlogging it.
 
 **Thinking** — how much reasoning the fix needs, on a scale of **1 to
-10**, written as a bare number: `Thinking: 7`. It decides *who* gets the
-entry, and unlike importance and effort it is **written only by the
-Architect**, in a triage or when filing one of its own entries, and
-changed by the human. No other role writes it, and an entry without it is
-not scheduled by anyone.
+10**, written as a bare number: `Thinking: 7`. It is the field that
+decides *who* works the entry, and it is written by **the Architect or
+the human** and by nobody else. An entry without it is scheduled by
+nobody.
 
 - `1` — one obvious edit. A typo, a stale sentence, a renamed symbol.
 - `2` — a localized change with the fix already stated in the entry.
@@ -77,46 +76,46 @@ not scheduled by anyone.
   subsystem's invariants in mind: the WAL ordering rule, latch ordering,
   a crash-injection sweep that has to keep passing.
 - `5` — the fix is known but its consequences cross crates, so where it
-  belongs is a judgement call.
-- `6` — a choice between options the entry has already enumerated.
-- `7` — a design question whose options are not enumerated yet; finding
-  them is part of the work.
-- `8` — a boundary has to move: a module decomposition, an ownership
-  change between crates, a data structure whose key or lifetime changes.
+  belongs is a judgement call made while carrying it out.
+- `6` — a choice between options the entry has already enumerated, with
+  enough evidence in the entry to settle it.
+- `7` — the entry names the fix and recommends it, but carrying it out
+  changes a public API or a documented behaviour other modules rely on.
+- `8` — the answer is not known before the work starts, or the fix is in
+  Architect-owned prose: a design question whose options are not
+  enumerated yet, a boundary that has to move, an ADR to correct, a
+  roadmap entry to rewrite, a change to the process itself.
 - `9` — a decision that constrains later milestones and needs an ADR
   before any code is written.
 - `10` — a change to the project's own model: an invariant in
-  `CLAUDE.md`, the durability contract, the role process itself.
+  `CLAUDE.md`, the durability contract.
 
-**`1`–`4` is Coder work** and reaches the Coder through the Task writer.
-**`5`–`10` is Architect work** and reaches the Architect **through the
-human**, never automatically. The line between 4 and 5 is one question:
-*is the answer known before the work starts?* If yes it is at most a 4,
-however long the work is; if no it is at least a 5, however short.
+**`1`–`7` is a Coder problem. `8`–`10` is an Architect problem.** That
+one number is the whole routing rule: the Task writer batches `1`–`7`
+entries into a Coder task and `8`–`10` entries into an Architect task,
+and nothing else — not the signature, not the files — decides who works
+it.
+
+Two things put an entry at `8` or above, and either one is enough:
+
+- **The answer is not known before the work starts.** Options with no
+  choice made, a boundary nobody has placed, a decision a later milestone
+  will build on.
+- **The fix lands in Architect-owned files** — an ADR, `CLAUDE.md`, the
+  root `README.md`, roadmap prose, a diagram, a role definition,
+  `.claude/settings*.json` — because the Coder may not write them. A
+  one-line correction to an ADR is an `8` for this reason alone, and a
+  change to the process itself is never below `8` for both.
 
 The level is about the thinking, not the size: a 1 SP entry is a `9` when
 the single line to change is obvious only once the decision is made, and
 an 8 SP entry is a `3` when it is long but entirely settled. An entry
 that is a decision *followed by* mechanical work takes the number of the
-decision, because that half comes first and produces its own task.
+decision. An entry that is part code and part Architect prose is split
+into two entries with their own numbers, so each lands in the right
+task.
 
-One floor overrides the whole scale: **a change to the process itself is
-never below `8`.** If the fix edits a role definition under
-`.claude/agents/`, `.claude/settings*.json`, or the part of `CLAUDE.md`
-that describes how work moves — the roles, the channels, the ownership
-table, the status ladders, the triage — it is an `8`, a `9` or a `10`,
-whatever it looks like from the size of the edit. The reason is that
-these files are the only thing telling every future session how to
-behave, so a wrong sentence in one is not a wrong sentence: it is every
-subsequent task carried out wrongly, with nothing in the tree
-contradicting it. The floor is not a claim that such an edit is always
-hard, only that none of them is ever the Coder's to make unreviewed —
-`8` is the smallest number that keeps it with the Architect and the
-human. A one-word typo in prose that carries no rule is the one thing
-this does not cover, because it changes no behaviour; anything that
-changes what a role may do, write, or decide does.
-
-**Decision** — `Will do` or `Backlog`, written only by the Architect in a
+**Decision** — `Will do` or `Backlog`, written by the Architect in a
 triage or by the human, never by the role that filed the entry. It
 follows from importance and effort, not from either half, and not from
 the thinking level — a `9` is done or backlogged on the same grounds as a

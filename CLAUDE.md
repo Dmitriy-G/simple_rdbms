@@ -62,13 +62,15 @@ name a branch:
 
 When asked to **"do next task"**, follow this procedure:
 
-1. Read `.claude/task.md` — and nothing else as a work queue. It is the
-   Coder's only inbox. If it contains a numbered subtasks list (1 to N),
-   work through that list in the order given — that is the "recommended
-   order." Start at the first subtask that is 🆕 New. Complete one
-   subtask, then stop and hand control back for review before starting
-   the next one. If `.claude/task.md` has no subtasks list, treat the
-   whole file as a single task and do it in full.
+1. Read `.claude/task.md` — and nothing else as a work queue. Check its
+   `For:` line first: a task marked `For: Architect` is not the Coder's,
+   so say so and stop. If it is `For: Coder` and contains a numbered
+   subtasks list (1 to N), work through that list in the order given —
+   that is the "recommended order." Start at the first subtask that is
+   🆕 New. Complete one subtask, then stop and hand control back for
+   review before starting the next one. If `.claude/task.md` has no
+   subtasks list, treat the whole file as a single task and do it in
+   full.
 2. Move the subtask's status as you work it, in `.claude/task.md` — and
    move only the status. Set 🚧 In Progress when you start it and
    👀 Review when you finish it, in both the Order Plan line and the
@@ -94,46 +96,28 @@ When asked to **"do next task"**, follow this procedure:
    related work is also finished.
 
 When asked for the **"next task"** (the Task writer's job, not the
-Coder's), the queue is: schedulable entries in `.claude/problems.md`
-first; if there are none, the sub-milestone carrying 🚧 in
-`docs/ROADMAP.md` is finished, so it moves to ✅ Done and the next 🆕 New
-sub-milestone under the same parent starts, becoming the task; and if
-that parent has no 🆕 New sub-milestone left, no task at all — the answer
-is to say the milestone looks complete and ask the human whether to hand
-the tree to the Milestone Reviewer, not to invent work.
+Coder's), the queue is worked in this order, and everything in it is
+scheduled sooner or later — nothing is left behind for a human to route
+by hand:
 
-"Schedulable" is decided by three tests, and the `Created by:` signature
-is not one of them:
+1. **Problems rated `Thinking: 1`–`7`.** They become a task marked
+   `For: Coder`.
+2. **Problems rated `Thinking: 8`–`10`**, once no `1`–`7` entry is left.
+   They become a task marked `For: Architect`.
+3. **The roadmap**, once the queue is empty: the sub-milestone carrying
+   🚧 in `docs/ROADMAP.md` is finished, so it moves to ✅ Done and the
+   next 🆕 New sub-milestone under the same parent starts, becoming a
+   `For: Coder` task. If that parent has no 🆕 New sub-milestone left,
+   write no task — say the milestone looks complete and ask the human
+   whether to hand the tree to the Milestone Reviewer, rather than
+   inventing work.
 
-1. **`Thinking:` present and `1`–`4`.** The Task writer schedules
-   low-thinking entries only. An entry rated `5`–`10` is one whose answer
-   is not known yet — a decomposition, a boundary that has to move,
-   options with no choice made — and it does not become a subtask on any
-   role's initiative. It stays in the queue, the Task writer names it in
-   its reply, and **the human decides when to hand it to the Architect.**
-   That hand-off is manual on purpose: it is the point where the project
-   spends real reasoning, and it is worth a human looking at it first. An
-   entry with **no `Thinking:` line at all** is not scheduled either —
-   only the Architect writes that line, so its absence means no one has
-   judged how hard the entry is, and guessing is exactly what the field
-   exists to stop.
-2. **`Decision: Will do`.** A triage the human approved settled whether
-   the project spends time on it, whoever raised it — a `Created by:
-   Architect` entry included. An entry with no `Decision:` line has not
-   been triaged and is not scheduled; the next triage is what releases
-   it.
-3. **Coder-owned files.** An entry whose fix lies wholly in
-   Architect-owned files — an ADR, `CLAUDE.md`, `README.md`, roadmap
-   prose, a diagram, a role definition — is not a Coder subtask even at
-   `Thinking: 1`, because the Coder may not write those files. It stays
-   in the queue and the Architect carries it out and deletes it. A mixed
-   entry is split: the code half becomes a subtask, the prose half goes
-   to the Architect, and the entry stays until both halves are done.
-
-Tests 1 and 2 are both written by the Architect in a triage, so in
-practice **nothing is schedulable until a triage has run over it.** That
-is deliberate: it is the point where a human sees the whole queue and
-what each entry will cost before any of it turns into work. The full
+An entry is schedulable when it carries `Thinking:` and
+`Decision: Will do`. Both lines come from a triage, so **nothing is
+schedulable until a triage has run over it** — the point where a human
+sees the whole queue and what each entry will cost before any of it turns
+into work. The `Created by:` signature decides nothing: an Architect
+entry at `3` goes into a Coder task exactly like a Coder's. The full
 procedure is in `.claude/agents/task-writer.md`.
 
 ## LLM roles and channels
@@ -173,14 +157,13 @@ Role: <role name>
    etc.). Records findings in that same file, as entries signed
    `Created by: Architect`, carrying their own evidence — file paths and
    line numbers — and what to do next. It is also the only role that
-   rates an entry's `Thinking:`. An entry rated `5`–`10` is the
-   Architect's, because it is a question rather than a job, and it
-   reaches the Architect when the human hands it over rather than
-   automatically; a `1`–`4` that has been triaged `Will do` is
-   ordinary schedulable work like any other entry, and the Task writer
-   turns it into a subtask unless its fix lands in Architect-owned files.
-   The Architect is also the one role that may write `.claude/task.md`
-   for its own entries. A conclusion that must outlive the working tree
+   rates an entry's `Thinking:`, together with the human. An entry rated
+   `8`–`10` is the Architect's — a question rather than a job, or a fix
+   in files only it may write — and it reaches the Architect as a
+   `For: Architect` task from the Task writer, worked one subtask at a
+   time exactly as the Coder works its own. A `1`–`7` goes into a
+   `For: Coder` task whoever signed it. The Architect may also *write*
+   `.claude/task.md` for its own entries. A conclusion that must outlive the working tree
    becomes an ADR, a roadmap entry or a paragraph here. Also runs the
    problem triage on request — deciding every entry and correcting the
    estimate its filer gave it, then, once the human has
@@ -194,10 +177,12 @@ Role: <role name>
    `.claude/agents/*.md` plus `.claude/settings*.json`. Never touches a
    `.rs` file, a test, a sibling module `.MD` or a crate `README.md`.
 3. **Task writer** — asked to turn a user request, the open entries in
-   `.claude/problems.md`, or the next milestone into a task for the Coder
-   role. Write `.claude/task.md` using the task format below: keep it
-   understandable but short — the Coder role doesn't need root causes or
-   other background, just the task. Decompose a large task or
+   `.claude/problems.md`, or the next milestone into a task. Write
+   `.claude/task.md` using the task format below: keep it understandable
+   but short — whoever works a subtask doesn't need root causes or other
+   background, just the task. Schedule every entry that passes the two
+   tests above, whoever filed it and whatever files its fix touches,
+   tagging each subtask `Coder` or `Architect` on its Order Plan line. Decompose a large task or
    sub-milestone into several subtasks and order them with an Order
    Plan, each subtask starting at 🆕 New. Writes only into an empty
    `.claude/task.md` — the human empties it by hand once the previous
@@ -247,7 +232,7 @@ than cosmetic.
 
 | File | Written by | Read by | Carries |
 | --- | --- | --- | --- |
-| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; Coder for 🚧/👀 status; the human for ✅, and for emptying the file once the task is accepted) | Coder, Milestone Reviewer, human | The current task's subtasks and their Order Plan |
+| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; the role a subtask is tagged with for its 🚧/👀 status; the human for ✅, and for emptying the file once the task is accepted) | Coder, Architect, Milestone Reviewer, human | The current task's subtasks, their Order Plan and each subtask's owner |
 | `.claude/problems.md` | Everyone who finds something: Coder, Milestone Reviewer, Architect, human | Task writer first, Architect, human | A queue of everything found and not fixed on the spot: defects from review, incidental discoveries, and the Architect's findings with their evidence |
 
 Every finding goes to `.claude/problems.md`, whoever found it, signed
@@ -260,9 +245,8 @@ because the role holding the evidence is the cheapest place to get a
 first number. The two fields nobody but the Architect and the human
 writes are `Thinking:` and `Decision:` — how hard the entry is to think
 about, and whether the project spends time on it. `Thinking:` is the
-routing field: a `1`–`4` reaches the Coder through the Task writer, a
-`5`–`10` reaches the Architect through the human, and nothing routes
-itself. An Architect entry carries its own
+routing field: a `1`–`7` becomes a `For: Coder` task and an `8`–`10` a
+`For: Architect` task, both written by the Task writer. An Architect entry carries its own
 evidence and citations in the entry itself; there is no separate place
 for that reasoning to accumulate.
 
@@ -323,8 +307,8 @@ human sitting between them:
    Importance is `🔴 High`, `🟡 Medium` or `🟢 Low` — icon and word
    together, so the line stays greppable; effort is story points on the
    Fibonacci scale 1/2/3/5/8/13; thinking is a bare number from 1 to 10
-   saying how much reasoning the fix needs, where `1`–`4` is the Coder's
-   and `5`–`10` is the Architect's; the decision is `Will do` or
+   saying how much reasoning the fix needs, where `1`–`7` is the Coder's
+   and `8`–`10` is the Architect's; the decision is `Will do` or
    `Backlog`,
    and may carry a short clause of reason when importance and effort pull
    against each other, wrapping onto the next line if it needs to.
@@ -347,17 +331,15 @@ entry filed after a triage carries an importance and an effort but no
 `Decision:` line, and that missing line is exactly how the next triage
 finds it.
 
-**A change to the process itself is never rated below `Thinking: 8`.**
-If the fix edits a role definition under `.claude/agents/`,
-`.claude/settings*.json`, or the part of this file that says how work
-moves — the roles, the channels, the ownership table, the status ladders,
-the triage — the rating is `8` or more no matter how small the edit
-looks, which puts it with the Architect and the human and never in a
-Coder subtask. These files are where every later session gets its
-instructions, so a wrong rule in one of them is not one mistake, it is
-every task after it done wrongly with nothing in the tree to contradict
-it. A typo in surrounding prose that carries no rule is not a process
-change; anything that alters what a role may do, write or decide is.
+**A fix in Architect-owned files is never rated below `Thinking: 8`** —
+an ADR, this file, the root `README.md`, roadmap prose, a diagram, a role
+definition, `.claude/settings*.json` — however small the edit looks,
+because the Coder may not write them and the rating is what routes the
+entry. A change to how work moves is at `8` for a second reason too:
+these files are where every later session gets its instructions, so a
+wrong rule in one is not one mistake but every task after it. An entry
+that is part code and part Architect prose is filed as two entries, one
+on each side of the line.
 
 An entry that reaches `docs/backlog.md` does not come back on any agent's
 say-so. **Reviving one takes the human's approval**, every time: the
@@ -380,9 +362,10 @@ it changed asks through a channel above.
 This table also decides who *carries out* a problem entry: **the fix is
 made by the owner of the files it touches, whatever role found it.** A
 Milestone Reviewer's finding about a false statement in an ADR is the
-Architect's to fix and delete; a Coder's note about a stale sentence in
-`CLAUDE.md` is the same. A role added to this table later inherits that
-rule without anyone rewriting the queue's routing.
+Architect's to fix; a Coder's note about a stale sentence in `CLAUDE.md`
+is the same. That is why a fix landing in Architect-owned files is rated
+`Thinking: 8` or above: the rating carries the ownership, so the routing
+needs one field and not two.
 
 | Area | Owner | Notes |
 | --- | --- | --- |
@@ -397,8 +380,8 @@ rule without anyone rewriting the queue's routing.
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
 | `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. Either one writes into an empty file: emptying it is the human's, and content still in it means no new task may be written. |
-| `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, the human sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it". |
-| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows who did the work: the Task writer deletes an entry it scheduled in full, and the Architect deletes its own settled entries plus any entry whose fix it carried out in its own files. The one deletion that follows neither is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:` and `Effort:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; the `Thinking:` and `Decision:` lines are the Architect's and the human's alone. `Thinking:` decides who works the entry — `1`–`4` to the Coder through the Task writer, `5`–`10` to the Architect through the human, and an entry without the line goes nowhere. |
+| `.claude/task.md` — subtask status | Task writer sets 🆕, the role named on the `For:` line sets 🚧 and 👀, the human sets ✅ | Each role moves the status only to its own rung, and only in a task addressed to it. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it" and "The `For:` line". |
+| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows who did the work: the Task writer deletes an entry it scheduled in full, and the Architect deletes its own settled entries plus any entry whose fix it carried out in its own files. The one deletion that follows neither is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:` and `Effort:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; the `Thinking:` and `Decision:` lines are the Architect's and the human's alone. `Thinking:` decides who works the entry — `1`–`7` into a `For: Coder` task, `8`–`10` into a `For: Architect` task, and an entry without the line goes nowhere. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
 Milestone planning is the Task writer's, milestone review is the
@@ -412,6 +395,8 @@ to review and commit.
 `.claude/task.md`:
 - Title: milestone number + a short description, or `Problems` when the
   task is a batch of `P-` entries.
+- `For:` line, directly under the title: `For: Coder` or
+  `For: Architect`. One role per task file.
 - Order Plan: a numbered list (1 to N) giving the subtask order, each
   line carrying its own status marker and its effort in story points:
   `1. 🆕 New — 3 SP — P-6 latch-couple the leaf sibling chain`. The
@@ -430,6 +415,25 @@ to review and commit.
   estimate is worth a sentence in the Coder's reply rather than an edit
   to the file.
 
+### The `For:` line
+
+`.claude/task.md` carries `For: Coder` or `For: Architect` directly under
+its title, and every subtask in it belongs to that one role. A task is
+never mixed: the Task writer batches `Thinking: 1`–`7` problems into a
+Coder task and `8`–`10` problems into an Architect task, so the number
+that routed the problem also decides the file's audience.
+
+This is what stops a problem sitting in the queue because the Coder may
+not write the file its fix lands in. A fix that is a paragraph in an ADR
+is rated `8`+ for exactly that reason, and it reaches the Architect the
+same way any other work reaches anyone — as a task.
+
+Whoever the `For:` line names works the whole file, one subtask at a
+time, moving 🚧 and 👀 as usual; the other role reads it and stops. The
+Architect working a task is bound by everything else it is bound by: an
+ADR still has to be an ADR, and a conclusion still has to graduate to a
+durable file before the human empties the task.
+
 ### Status, and who may set it
 
 Two ladders, one for subtasks and one for milestones. Each rung is owned
@@ -441,8 +445,8 @@ A **subtask** in `.claude/task.md` carries one of four:
 | Status | Meaning | Set by |
 | --- | --- | --- |
 | 🆕 New | written, not started | Task writer, when it writes the subtask |
-| 🚧 In Progress | being worked right now | Coder, when it starts |
-| 👀 Review | finished and awaiting review | Coder, when it stops |
+| 🚧 In Progress | being worked right now | the role on the task's `For:` line, when it starts |
+| 👀 Review | finished and awaiting review | the same role, when it stops |
 | ✅ Done | reviewed and accepted | the human, and nobody else |
 
 A review that fails does not invent a fifth status: the subtask goes back
@@ -453,7 +457,7 @@ the defect being scheduled as new work.
 **A status change is a marker and nothing else.** Whoever moves a subtask
 changes the emoji on its Order Plan line and on its `Status:` line, and
 touches no other character in the file — not the story points beside the
-marker, no clause explaining the move,
+marker, not the `For:` line, no clause explaining the move,
 no "see P-n", no correction to the description. The task's prose belongs
 to the Task writer, and a description carrying edits from three roles
 stops being a specification anyone can trust. What a role wants to say
@@ -498,8 +502,8 @@ Per entry:
 - Title: `P-<n>` + a short description.
 - `Created by:` who found it — Coder, Milestone Reviewer, Architect, or
   Human. It is not optional: it says whose reply the entry came out of
-  and who to ask about it. It does not route the entry — `Thinking:` and
-  file ownership do that.
+  and who to ask about it. It does not route the entry — `Thinking:`
+  alone does that.
 - `Importance:`, `Effort:`, `Thinking:` and `Decision:` — four lines, one
   field each,
   never joined into one, each separated from its neighbours by a blank
@@ -508,10 +512,9 @@ Per entry:
   `Effort:` its story points; both are written by whoever files the
   entry and corrected only by the Architect in a triage or by the human.
   `Thinking:` is a bare `1`–`10` and `Decision:` is `Will do` or
-  `Backlog`; **both are written only by the Architect** in a triage and
-  edited only by the human, so a newly filed entry has neither, and their
-  absence is what the next triage looks for. See "Problem
-  triage".
+  `Backlog`; **both are written by the Architect or the human**, in a
+  triage, so a newly filed entry has neither, and their absence is what
+  the next triage looks for. See "Problem triage".
 - Reason: why it is a problem, in one or two sentences.
 - Description: full detail, with file paths and line numbers. Assume the
   entry will be read once, by whoever writes the task, and then deleted —
@@ -527,16 +530,13 @@ Per entry:
 The file holds open problems only. There is no resolved state and no
 `Status:` line: an entry that has been dealt with is deleted, not
 annotated. Two roles delete, and **what decides is who did the work, not
-who signed the entry.** The Task writer deletes an entry once the
-corresponding subtask exists in `.claude/task.md` — the whole entry, not
-half of one: an entry it split keeps its place until the Architect has
-done the other half. The Architect deletes its own entries when the
-question is settled — and then whatever was decided has already graduated
-to an ADR, a roadmap entry or this file, because otherwise deleting the
-entry loses it — or when it has written the task for one. It deletes
-anyone's entry whose fix it carried out itself, which is the case for
-every finding that lands in an ADR, this file, `README.md`, roadmap prose
-or a role definition, and says in its reply which entries it consumed.
+who signed the entry.** The Task writer deletes an entry once its subtask
+exists in `.claude/task.md`, whichever role the task is for. The
+Architect deletes its own entries when the question is settled — and then
+whatever was decided has already graduated to an ADR, a roadmap entry or
+this file, because otherwise deleting the entry loses it — and anyone's
+entry whose fix it carried out on the spot rather than through a task,
+saying in its reply which entries it consumed.
 The last deletion is an approved triage, where the Architect moves every
 `Decision: Backlog` entry — whoever raised it — to `docs/backlog.md` in
 the same edit. Reading the file top to bottom should show exactly the

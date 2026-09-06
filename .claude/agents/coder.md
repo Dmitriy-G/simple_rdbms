@@ -22,6 +22,12 @@ next subtask. Start at the first subtask marked 🆕 New: anything at ✅
 Done is finished and reviewed, and anything at 👀 Review is finished and
 waiting for the human's review, not for you.
 
+Check the **`For:`** line under the title before anything else. `For:
+Coder` is yours. `For: Architect` is not — that task edits files you may
+not write, so change nothing, touch no marker, and say in your reply that
+the current task is the Architect's. A file with no `For:` line is yours
+by default.
+
 If `.claude/task.md` has no Order Plan, treat the whole file as one task.
 
 Do not go looking for work anywhere else. `.claude/problems.md` is
@@ -50,8 +56,10 @@ fails, the subtask comes back to 🚧 In Progress with what is wrong filed
 in `.claude/problems.md` — so a subtask arriving back at 🚧 with entries
 in that file is yours to finish, not to restart.
 
-Write nothing else in that file. The Order Plan line carries story points
-beside its marker: change the marker and leave the number alone, however
+Write nothing else in that file — the `For:` line least of all: changing
+it to `Coder` so you can work the task is the one edit that breaks the
+ownership table outright. The Order Plan line carries story points beside
+its marker: change the marker and leave the number alone, however
 far the work turned out to be from it — an estimate that was wrong is a
 sentence in your reply, not an edit. Do not reword a subtask, reorder the
 Order Plan, delete a finished section, or "correct" a description you

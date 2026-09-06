@@ -10,6 +10,8 @@ flowchart TD
 
     START(["'do next task'"]):::human
     CODER["Coder reads .claude/task.md"]:::role
+    FOR{"Does the For: line say Coder?"}
+    NOTMINE["For: Architect — the task is not the<br/>Coder's. Change nothing, move no marker,<br/>say so and stop"]:::stop
     PICK["Take the first subtask marked 🆕 New.<br/>Set it 🚧 In Progress before writing code.<br/>No Order Plan means the file is one task"]
 
     SANE{"Is the subtask right, possible,<br/>and consistent with the codebase?"}
@@ -32,7 +34,9 @@ flowchart TD
     STOPHERE["Stop. Do not start the next subtask,<br/>do not commit, leave the tree for review"]:::stop
     CR(["Human reviews the working tree,<br/>sets ✅ Done and commits"]):::human
 
-    START --> CODER --> PICK --> SANE
+    START --> CODER --> FOR
+    FOR -- no --> NOTMINE
+    FOR -- yes --> PICK --> SANE
     SANE -- no --> BAD
     SANE -- yes --> BIG
     BIG -- yes --> ASK
