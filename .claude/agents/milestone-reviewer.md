@@ -46,7 +46,17 @@ gap, or a documented rule that is now false.
    resolve to real headings.
 5. **Forward dependencies.** Did this milestone leave work a later one
    now silently depends on? If so it belongs in that milestone's entry,
-   not in someone's head.
+   not in someone's head. Two places this hides, both worth grepping for
+   by name:
+   - a **constraint block in another milestone's entry** written for the
+     one you are closing — a paragraph telling M14 what to do "once M10.3
+     lands" is written in the future tense and stays that way after M10.3
+     ships, so closing a milestone means re-reading every entry that
+     names it and rewriting those instructions against what was actually
+     built;
+   - an **ADR that names a milestone as its own revisit trigger**. If
+     this milestone is that trigger, the revisit is part of closing it,
+     and the ADR is wrong until it happens.
 6. **Deferred items.** Anything the Coder or the human's review deferred is
    recorded in `.claude/problems.md` or a milestone entry, not lost.
 

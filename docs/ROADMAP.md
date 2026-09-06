@@ -381,8 +381,11 @@ the number 0012 this once named was taken by
 `docs/adr/0012-bounded-lock-waits.md`, and an unwritten ADR does not
 reserve a number).
 Index maintenance on both paths, and in-page compaction in `heap.rs` so
-tombstoned space is actually reclaimed, keeping slot indices stable since
-a `Rid` is half slot index.
+tombstoned space is actually reclaimed, keeping slot indices stable
+because every index entry stores a `Rid` and a moved slot would strand
+them. Slot stability is no longer what makes a row *identifiable* — see
+the version-metadata block below — only what keeps existing index entries
+pointing at the right tuple.
 **Also in scope:** revising `docs/adr/0004-acid-scope.md`'s isolation
 section, which names this milestone as its own revisit trigger. Today it
 says there is no first-committer-wins check and none is needed, because a
@@ -393,15 +396,62 @@ isolation does, whether a deleted row stays visible to an older snapshot,
 and whether the write path may drop to row-level locking. An ADR that
 names a milestone as its trigger is scheduled here rather than left to
 someone re-reading the ADR.
-**Constraints for M10.3:** two decisions here are made to avoid a rewrite
-once MVCC (M10.3) lands. First, reserve space in the heap tuple header for
-version metadata now, even though nothing reads or writes it yet -
-retrofitting that space into an on-disk format already in use is a
-migration, not a field addition. Second, implement `UPDATE` as a delete of
-the old tuple plus an insert of a new one, never as an in-place rewrite of
-the tuple's bytes - MVCC needs the old version to remain reachable to a
-snapshot that started before the update, which an in-place write
-destroys.
+**What MVCC already decided, and what this milestone owes it.** M10.3
+shipped snapshot isolation, so the constraints this entry once wrote in
+the future tense are now facts to build against. Depends on M10.4, which
+delivers the write-set tracking and the oldest-active-`read_ts` watermark
+the rules below are stated in terms of.
+
+- **Stamp the row id.** The heap tuple header field this entry used to
+  call "space reserved for version metadata" is the `RowId` of
+  `docs/adr/0013-version-identity-and-lifetime.md`: assigned at first
+  insert from a durable high-water mark in the page-0 header, carried
+  unchanged through `UPDATE`, never reused, `0` meaning unstamped. It
+  bumps the on-disk format version. It has to land here because it needs
+  a header field, and because the moment a tombstoned slot is reused the
+  `Rid`-keyed version store starts mixing two rows' histories into one
+  chain — a silent wrong answer, not a crash.
+- **`UPDATE` is a delete plus an insert, never an in-place rewrite of the
+  tuple's bytes.** An older snapshot must still reach the pre-update
+  version, which an in-place write destroys.
+  `TableHeap::update_tuple_in_place` (`crates/storage/src/heap.rs:296`)
+  exists for the catalog's own bookkeeping and stays for that; SQL
+  `UPDATE` must not be routed through it.
+- **Set `end_ts` on the superseded version.** Nothing does today:
+  `VersionEntry::end_ts` is `None` on every entry ever created
+  (`crates/txn/src/mvcc.rs:7`, `crates/txn/src/version_store.rs:24`) and
+  `VersionStore` has no mutator that sets it, because until now no write
+  ever superseded another. Both `DELETE` and `UPDATE` must, or an older
+  snapshot silently loses the row it is entitled to see.
+- **Decide where an old version's bytes live — this is the first thing to
+  settle, and it is an ADR.** The scan executors currently return the
+  *heap's* bytes and ask the version store only for a boolean
+  (`crates/executor/src/operators/seq_scan.rs:36-43`,
+  `crates/executor/src/operators/index_scan.rs:64-88`), which is correct
+  only while a `Rid` can have at most one version. Once `UPDATE` exists a
+  scan must return the bytes of the version its snapshot may see, and the
+  store does not hold any bytes. The option that fits everything else
+  here is Postgres-shaped: each version is an ordinary heap tuple, and a
+  chain maps one `RowId` to its versions' `Rid`s and timestamps, so
+  "visible version" resolves to a `Rid` the scan then reads. Whichever
+  way it goes, record it, because every later scan, index and vacuum
+  decision inherits it.
+- **A deleted row stays readable to an older snapshot**, so `DELETE`
+  tombstones and does not reclaim. In-page compaction may physically
+  remove a tombstoned tuple only once the deleting transaction's commit
+  timestamp is at or below the oldest active `read_ts`, and the row's
+  chain is dropped in the same step — never before it, since ADR 0013's
+  store treats a missing chain as "visible to everyone" and would
+  resurrect the row.
+- **Delete `VersionStore::is_visible`** (`version_store.rs:42`), whose
+  only callers are tests; the live path is `is_visible_to` (line 50).
+
+**Prevention, which ships with this milestone:** a test in
+`crates/executor/tests/` that deletes a row, inserts another into the
+freed slot in a later transaction, and asserts a snapshot opened before
+the delete still sees the old row and never the new one. That is the
+assertion that fails loudly if row identity ever collapses back onto the
+slot.
 
 ## M15 — Column constraints that hold 🆕 New
 **Problem:** `Column::nullable` is parsed as a hardcoded `true`, plumbed
