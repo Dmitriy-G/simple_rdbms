@@ -100,6 +100,22 @@ an 8 SP entry is a `3` when it is long but entirely settled. An entry
 that is a decision *followed by* mechanical work takes the number of the
 decision, because that half comes first and produces its own task.
 
+One floor overrides the whole scale: **a change to the process itself is
+never below `8`.** If the fix edits a role definition under
+`.claude/agents/`, `.claude/settings*.json`, or the part of `CLAUDE.md`
+that describes how work moves — the roles, the channels, the ownership
+table, the status ladders, the triage — it is an `8`, a `9` or a `10`,
+whatever it looks like from the size of the edit. The reason is that
+these files are the only thing telling every future session how to
+behave, so a wrong sentence in one is not a wrong sentence: it is every
+subsequent task carried out wrongly, with nothing in the tree
+contradicting it. The floor is not a claim that such an edit is always
+hard, only that none of them is ever the Coder's to make unreviewed —
+`8` is the smallest number that keeps it with the Architect and the
+human. A one-word typo in prose that carries no rule is the one thing
+this does not cover, because it changes no behaviour; anything that
+changes what a role may do, write, or decide does.
+
 **Decision** — `Will do` or `Backlog`, written only by the Architect in a
 triage or by the human, never by the role that filed the entry. It
 follows from importance and effort, not from either half, and not from

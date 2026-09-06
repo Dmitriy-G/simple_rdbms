@@ -347,6 +347,18 @@ entry filed after a triage carries an importance and an effort but no
 `Decision:` line, and that missing line is exactly how the next triage
 finds it.
 
+**A change to the process itself is never rated below `Thinking: 8`.**
+If the fix edits a role definition under `.claude/agents/`,
+`.claude/settings*.json`, or the part of this file that says how work
+moves — the roles, the channels, the ownership table, the status ladders,
+the triage — the rating is `8` or more no matter how small the edit
+looks, which puts it with the Architect and the human and never in a
+Coder subtask. These files are where every later session gets its
+instructions, so a wrong rule in one of them is not one mistake, it is
+every task after it done wrongly with nothing in the tree to contradict
+it. A typo in surrounding prose that carries no rule is not a process
+change; anything that alters what a role may do, write or decide is.
+
 An entry that reaches `docs/backlog.md` does not come back on any agent's
 say-so. **Reviving one takes the human's approval**, every time: the
 Architect may propose it, and only after the answer does it delete the

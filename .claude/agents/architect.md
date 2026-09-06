@@ -163,6 +163,17 @@ Use the whole thinking range rather than defaulting to the extremes: if
 most of a queue comes out above 5, the ratings have stopped
 distinguishing anything and the ordering they exist to give you is gone.
 
+The one rating that is not a judgement call is the process floor: **an
+entry whose fix changes a role definition in `.claude/agents/`,
+`.claude/settings*.json`, or `CLAUDE.md`'s description of how work moves
+— roles, channels, ownership table, status ladders, triage — is never
+rated below `8`**, however small the edit reads. These files are what
+every later session takes its instructions from, so getting one wrong is
+not one mistake but every task after it, and the floor is what keeps such
+a change with you and the human instead of in a Coder subtask. It applies
+to your own entries as much as anyone's, and it applies when you file
+them, not only in a triage.
+
 The decision follows from importance and effort **together**: `High` is
 done at any cost, effort `1`–`2` is done at any importance, `Low` at
 effort `5`+ is `Backlog`, and `Medium` at effort `5`+ is the judgement

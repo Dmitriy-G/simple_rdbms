@@ -28,7 +28,7 @@ flowchart TD
     DELINV["Settled instead: the conclusion graduates<br/>to an ADR, a roadmap entry or CLAUDE.md,<br/>and only then is the entry deleted"]:::stop
 
     REVIEW(["Human asks for a triage —<br/>a task, a sub-milestone or a<br/>milestone has just finished"]):::human
-    ARCHREV["Architect adds Thinking: and Decision:<br/>to every entry, whoever signed it, and<br/>corrects an Importance: or Effort:<br/>the filer got wrong.<br/>Nothing moved, nothing deleted.<br/>Reports the table and stops"]:::role
+    ARCHREV["Architect adds Thinking: and Decision:<br/>to every entry, whoever signed it, and<br/>corrects an Importance: or Effort:<br/>the filer got wrong.<br/>A fix that changes .claude/agents/,<br/>.claude/settings*.json or CLAUDE.md's<br/>process is never below Thinking: 8.<br/>Nothing moved, nothing deleted.<br/>Reports the table and stops"]:::role
     APPROVE{"Human reviews the estimates,<br/>edits any by hand, approves"}:::human
     ACCEPT["Backlog: moved to docs/backlog.md<br/>— heading, one or two sentences,<br/>Created: date, Importance:, Effort:,<br/>Thinking:, each on its own line,<br/>entries split by ---<br/>— and deleted from problems.md in<br/>the same edit. The one deletion that<br/>crosses the signature.<br/>Nobody schedules from that file"]:::stop
     REVIVE{"Architect proposes a revive:<br/>says which entry and what changed,<br/>then stops. The human decides"}:::human
