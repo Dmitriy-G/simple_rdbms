@@ -7,8 +7,14 @@ use common::{Rid, TxnId};
 use crate::mvcc::{VersionChain, VersionEntry};
 
 #[derive(Debug, Default)]
+struct StoreState {
+    chains: HashMap<Rid, VersionChain>,
+    write_sets: HashMap<TxnId, Vec<Rid>>,
+}
+
+#[derive(Debug, Default)]
 pub struct VersionStore {
-    chains: Mutex<HashMap<Rid, VersionChain>>,
+    state: Mutex<StoreState>,
 }
 
 impl VersionStore {
@@ -17,39 +23,50 @@ impl VersionStore {
     }
 
     pub fn record_insert(&self, txn_id: TxnId, rid: Rid) {
-        let mut chains = recover_lock(self.chains.lock(), "VersionStore.chains");
-        chains.entry(rid).or_default().push(VersionEntry {
+        let mut state = recover_lock(self.state.lock(), "VersionStore.state");
+        state.chains.entry(rid).or_default().push(VersionEntry {
             creator_txn_id: txn_id,
             begin_ts: None,
             end_ts: None,
         });
+        state.write_sets.entry(txn_id).or_default().push(rid);
     }
 
     pub fn commit_versions(&self, txn_id: TxnId, commit_ts: u64) {
-        let mut chains = recover_lock(self.chains.lock(), "VersionStore.chains");
-        for chain in chains.values_mut() {
-            chain.mark_committed(txn_id, commit_ts);
+        let mut state = recover_lock(self.state.lock(), "VersionStore.state");
+        let Some(rids) = state.write_sets.remove(&txn_id) else {
+            return;
+        };
+        for rid in rids {
+            if let Some(chain) = state.chains.get_mut(&rid) {
+                chain.mark_committed(txn_id, commit_ts);
+            }
         }
     }
 
     pub fn abort_versions(&self, txn_id: TxnId) {
-        let mut chains = recover_lock(self.chains.lock(), "VersionStore.chains");
-        for chain in chains.values_mut() {
-            chain.remove_creator(txn_id);
+        let mut state = recover_lock(self.state.lock(), "VersionStore.state");
+        let Some(rids) = state.write_sets.remove(&txn_id) else {
+            return;
+        };
+        for rid in rids {
+            if let Some(chain) = state.chains.get_mut(&rid) {
+                chain.remove_creator(txn_id);
+            }
         }
     }
 
     pub fn is_visible(&self, rid: Rid, read_ts: u64) -> bool {
-        let chains = recover_lock(self.chains.lock(), "VersionStore.chains");
-        match chains.get(&rid) {
+        let state = recover_lock(self.state.lock(), "VersionStore.state");
+        match state.chains.get(&rid) {
             Some(chain) => chain.visible_version(read_ts).is_some(),
             None => true,
         }
     }
 
     pub fn is_visible_to(&self, rid: Rid, reader_txn_id: TxnId, read_ts: u64) -> bool {
-        let chains = recover_lock(self.chains.lock(), "VersionStore.chains");
-        match chains.get(&rid) {
+        let state = recover_lock(self.state.lock(), "VersionStore.state");
+        match state.chains.get(&rid) {
             Some(chain) => chain.visible_version_for(reader_txn_id, read_ts).is_some(),
             None => true,
         }
@@ -57,7 +74,7 @@ impl VersionStore {
 
     #[cfg(any(test, feature = "test-util"))]
     pub fn chain_count(&self) -> usize {
-        let chains = recover_lock(self.chains.lock(), "VersionStore.chains");
-        chains.len()
+        let state = recover_lock(self.state.lock(), "VersionStore.state");
+        state.chains.len()
     }
 }

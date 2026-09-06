@@ -13,46 +13,63 @@ isn't wired up.
 
 ## Key Components
 
-- `VersionStore` - `Mutex<HashMap<Rid, VersionChain>>`, `Send + Sync`.
-  A `Rid` with no entry means the row predates this process's MVCC
-  bookkeeping (or has never been touched) and is visible to everyone;
-  only rows a running process has itself inserted, committed or aborted
-  carry a chain.
+- `VersionStore` - a single `Mutex<StoreState>`, `Send + Sync`, where
+  `StoreState` holds `chains: HashMap<Rid, VersionChain>` and
+  `write_sets: HashMap<TxnId, Vec<Rid>>` behind the one lock, so a
+  concurrent `record_insert` can never leave the two disagreeing about
+  which `Rid`s a transaction touched. A `Rid` with no chain entry means
+  the row predates this process's MVCC bookkeeping (or has never been
+  touched) and is visible to everyone; only rows a running process has
+  itself inserted, committed or aborted carry a chain. `write_sets` is
+  purely bookkeeping - it exists so `commit_versions`/`abort_versions`
+  can find "every `Rid` this `txn_id` touched" without scanning `chains`,
+  and an entry is removed from it the moment that transaction commits or
+  aborts.
 - `VersionStore::new() -> Self` - an empty store.
 - `VersionStore::record_insert(&self, txn_id, rid)` - pushes a new,
   uncommitted `VersionEntry` (`begin_ts: None`, `end_ts: None`) onto
   `rid`'s chain, creating the chain if this is the row's first recorded
-  version. Carries no copy of the row's bytes - visibility is a boolean,
-  and the scan executors already read the row's bytes back from the heap,
-  so a second copy here would just be a second copy of the whole database
-  living in memory for the life of the process. Called by the insert
-  executor from the closure it
-  passes to `storage::heap::TableHeap::insert_tuple_with`
+  version, and also records `rid` in `txn_id`'s write set. Carries no
+  copy of the row's bytes - visibility is a boolean, and the scan
+  executors already read the row's bytes back from the heap, so a second
+  copy here would just be a second copy of the whole database living in
+  memory for the life of the process. Called by the insert executor from
+  the closure it passes to `storage::heap::TableHeap::insert_tuple_with`
   (`storage::heap.MD`, `executor::operators::insert.MD`), which runs
   while the row's page latch is still held - so the row's bytes become
   readable in the heap and this version entry exist as one indivisible
   step, and no reader can ever observe the row with no chain at all.
-- `VersionStore::commit_versions(&self, txn_id, commit_ts)` - calls
-  `VersionChain::mark_committed(txn_id, commit_ts)` on every chain in the
-  store, making `txn_id`'s versions visible to readers with a snapshot at
-  or after `commit_ts`. Called by `TransactionManager::commit` after the
-  commit record is durable and before locks are released, so a version
-  never becomes visible ahead of its own durability.
-- `VersionStore::abort_versions(&self, txn_id)` - calls
-  `VersionChain::remove_creator(txn_id)` on every chain, but keeps every
-  chain in the map, empty or not - it never removes an entry. Called by
+- `VersionStore::commit_versions(&self, txn_id, commit_ts)` - looks up
+  and removes `txn_id`'s write set, then calls
+  `VersionChain::mark_committed(txn_id, commit_ts)` on only the chains it
+  names, making `txn_id`'s versions visible to readers with a snapshot at
+  or after `commit_ts`. A `txn_id` with no write set (nothing recorded)
+  is a no-op. Called by `TransactionManager::commit` after the commit
+  record is durable and before locks are released, so a version never
+  becomes visible ahead of its own durability. Cost scales with the
+  transaction's own write set rather than with every chain the store has
+  ever held.
+- `VersionStore::abort_versions(&self, txn_id)` - looks up and removes
+  `txn_id`'s write set, then calls `VersionChain::remove_creator(txn_id)`
+  on only the chains it names, but keeps every one of those chains in the
+  map, empty or not - it never removes a chain entry itself. Called by
   `TransactionManager::abort`. This matters because "no entry in the map"
   is `is_visible`/`is_visible_to`'s signal that a `Rid` predates this
   process's MVCC bookkeeping and is visible to everyone; if an aborted-
-  and-emptied chain were dropped instead, a `Rid` whose only recorded
-  version was just aborted would become indistinguishable from a `Rid`
-  never touched at all, and would read as visible again until something
-  else recorded a new version there. Keeping the (now empty) chain means
+  and-emptied chain were dropped here, a reader could still be holding a
+  copy of the row's bytes it read from the heap before
+  `TransactionManager::abort`'s undo ran (`crates/txn/src/manager.rs:86-97`,
+  `crates/executor/src/operators/seq_scan.rs:38-51`), and would then find
+  no chain at all for that `Rid` and treat the row as visible to
+  everyone. Keeping the (now empty) chain means
   `VersionChain::visible_version`/`visible_version_for` correctly return
-  `None` for it, so both lookup methods return `false`. The store has no
-  version GC yet, so an aborted-only `Rid` keeps an empty chain in the map
-  forever - accepted for now; revisit if profiling shows the map growing
-  unboundedly with aborted transactions.
+  `None` for it, so both lookup methods return `false`, until the chain
+  becomes provably safe to drop and something else drops it - the
+  watermark-gated prune `docs/adr/0013-version-identity-and-lifetime.md`
+  ("Lifetime") describes, not this method. This is now an ADR-level rule
+  rather than a local choice: this method itself never removes a chain
+  entry, empty or not, and leaves that decision to the pruning mechanism
+  the ADR's "Lifetime" section defines.
 - `VersionStore::is_visible(&self, rid, read_ts) -> bool` - `true` when
   `rid` has no chain, otherwise delegates to
   `VersionChain::visible_version(read_ts).is_some()`. Answers "would any
@@ -70,19 +87,20 @@ isn't wired up.
 - `VersionStore::chain_count(&self) -> usize` - the number of chains
   currently in the map, `#[cfg(any(test, feature = "test-util"))]` in the
   style of `LockManager::held_lock_count` (`lock_manager.MD`). Test-only:
-  it exists so a test can pin the store's growth rule (one chain per
-  distinct `Rid` ever recorded, growing forever since there is no GC -
-  see `abort_versions` above) rather than only inferring it indirectly
-  through visibility checks.
+  it exists so a test can pin the store's actual growth rule rather than
+  only inferring it indirectly through visibility checks.
 
-Scanning every chain in `commit_versions`/`abort_versions` rather than
-tracking each transaction's touched `Rid`s separately is a chosen
-simplicity/cost trade-off: a transaction typically dirties far fewer rows
-than the table holds live chains for, but the store has no other way yet
-to look up "every `Rid` this `txn_id` created a version for" without
-threading that set through the caller. Revisit if profiling shows commit
-latency scaling with total chain count rather than a transaction's own
-write set.
+The map grows with every row inserted since process start, not chiefly
+with aborted ones: `record_insert` adds a chain entry for every insert,
+committed or not, and neither `commit_versions` nor `abort_versions`
+removes one - the former only stamps `begin_ts`, the latter only empties
+the chain, for the reason given above. `commit_versions`/`abort_versions`
+now cost only as much as the committing or aborting transaction's own
+write set, via the `write_sets` index above, rather than scanning every
+chain the store has ever held - the growth this paragraph describes is
+therefore a memory question, no longer a per-commit latency one, and the
+watermark-gated prune `docs/adr/0013-version-identity-and-lifetime.md`
+describes is what puts a ceiling on it.
 
 ## Usage Example
 

@@ -50,8 +50,26 @@ regardless of what commits later.
   already-seen `Rid` and checks the count is unchanged - pinning the
   store's actual growth rule (one chain per distinct `Rid` ever recorded,
   regardless of how many versions or transactions touch it, and never
-  shrinking - there is no GC) so a future change to that rule fails this
-  test loudly instead of only being noticed as a memory-growth surprise.
+  shrinking on its own within this subtask - there is no GC yet) so a
+  future change to that rule fails this test loudly instead of only being
+  noticed as a memory-growth surprise.
+- `abort_leaves_the_emptied_chain_in_place_but_invisible` - after
+  `record_insert` and `abort_versions` on the same `Rid`, `chain_count()`
+  is exactly what it was right after the insert (the chain is not
+  removed) while `is_visible` and `is_visible_to` still answer `false` -
+  pinning the per-writer write-set rewrite's requirement that abort keeps
+  the emptied chain rather than dropping it, since a reader can still be
+  holding a copy of the row's bytes read before the undo ran.
+- `committing_one_writer_does_not_expose_a_concurrent_writers_chain` -
+  two transactions each record an insert against their own `Rid`;
+  committing the first must not affect the second's visibility, proving
+  `commit_versions` now visits only the committing transaction's write
+  set rather than every chain in the store.
+- `commit_and_abort_of_an_empty_write_set_leave_other_chains_untouched` -
+  `commit_versions`/`abort_versions` called for a `TxnId` that never
+  recorded anything must not touch an unrelated, already-committed chain
+  or change the store's `chain_count` - the write-set lookup returning
+  nothing is a no-op, not a scan of the map.
 
 ## Usage Example
 

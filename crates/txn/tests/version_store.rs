@@ -132,3 +132,53 @@ fn chain_count_tracks_one_chain_per_distinct_rid_recorded() {
          extends that Rid's existing chain"
     );
 }
+
+#[test]
+fn abort_leaves_the_emptied_chain_in_place_but_invisible() {
+    let store = VersionStore::new();
+    let r = rid(1);
+
+    store.record_insert(TxnId(1), r);
+    let count_after_insert = store.chain_count();
+
+    store.abort_versions(TxnId(1));
+
+    assert_eq!(
+        store.chain_count(),
+        count_after_insert,
+        "abort_versions must not remove the chain, only empty it - pruning it is subtask 3's job"
+    );
+    assert!(!store.is_visible(r, 100));
+    assert!(!store.is_visible_to(r, TxnId(1), 100));
+}
+
+#[test]
+fn committing_one_writer_does_not_expose_a_concurrent_writers_chain() {
+    let store = VersionStore::new();
+    let r1 = rid(1);
+    let r2 = rid(2);
+
+    store.record_insert(TxnId(1), r1);
+    store.record_insert(TxnId(2), r2);
+
+    store.commit_versions(TxnId(1), 5);
+
+    assert!(store.is_visible(r1, 5));
+    assert!(!store.is_visible(r2, 5));
+    assert!(store.is_visible_to(r2, TxnId(2), 5));
+}
+
+#[test]
+fn commit_and_abort_of_an_empty_write_set_leave_other_chains_untouched() {
+    let store = VersionStore::new();
+    let r = rid(1);
+
+    store.record_insert(TxnId(1), r);
+    store.commit_versions(TxnId(1), 5);
+
+    store.commit_versions(TxnId(2), 6);
+    store.abort_versions(TxnId(3));
+
+    assert!(store.is_visible(r, 5));
+    assert_eq!(store.chain_count(), 1);
+}
