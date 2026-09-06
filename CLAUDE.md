@@ -105,14 +105,18 @@ the tree to the Milestone Reviewer, not to invent work.
 "Schedulable" is decided by three tests, and the `Created by:` signature
 is not one of them:
 
-1. **`Thinking: 🔧 Low`.** The Task writer schedules low-thinking entries
-   only. A `🧠 High` entry is one whose answer is not known yet — a
-   decomposition, a boundary that has to move, options with no choice
-   made — and it does not become a subtask on any role's initiative. It
-   stays in the queue, the Task writer names it in its reply, and **the
-   human decides when to hand it to the Architect.** That hand-off is
-   manual on purpose: it is the point where the project spends real
-   reasoning, and it is worth a human looking at it first.
+1. **`Thinking:` present and `1`–`4`.** The Task writer schedules
+   low-thinking entries only. An entry rated `5`–`10` is one whose answer
+   is not known yet — a decomposition, a boundary that has to move,
+   options with no choice made — and it does not become a subtask on any
+   role's initiative. It stays in the queue, the Task writer names it in
+   its reply, and **the human decides when to hand it to the Architect.**
+   That hand-off is manual on purpose: it is the point where the project
+   spends real reasoning, and it is worth a human looking at it first. An
+   entry with **no `Thinking:` line at all** is not scheduled either —
+   only the Architect writes that line, so its absence means no one has
+   judged how hard the entry is, and guessing is exactly what the field
+   exists to stop.
 2. **`Decision: Will do`.** A triage the human approved settled whether
    the project spends time on it, whoever raised it — a `Created by:
    Architect` entry included. An entry with no `Decision:` line has not
@@ -121,15 +125,16 @@ is not one of them:
 3. **Coder-owned files.** An entry whose fix lies wholly in
    Architect-owned files — an ADR, `CLAUDE.md`, `README.md`, roadmap
    prose, a diagram, a role definition — is not a Coder subtask even at
-   `🔧 Low`, because the Coder may not write those files. It stays in the
-   queue and the Architect carries it out and deletes it. A mixed entry
-   is split: the code half becomes a subtask, the prose half goes to the
-   Architect, and the entry stays until both halves are done.
+   `Thinking: 1`, because the Coder may not write those files. It stays
+   in the queue and the Architect carries it out and deletes it. A mixed
+   entry is split: the code half becomes a subtask, the prose half goes
+   to the Architect, and the entry stays until both halves are done.
 
-The signature still says something, but it is advice to the filer rather
-than a gate: an Architect finding that needs a judgement call is
-`🧠 High` by its nature, and marking it so is what keeps it out of the
-Coder's hands. The full procedure is in `.claude/agents/task-writer.md`.
+Tests 1 and 2 are both written by the Architect in a triage, so in
+practice **nothing is schedulable until a triage has run over it.** That
+is deliberate: it is the point where a human sees the whole queue and
+what each entry will cost before any of it turns into work. The full
+procedure is in `.claude/agents/task-writer.md`.
 
 ## LLM roles and channels
 
@@ -167,10 +172,11 @@ Role: <role name>
    review the project as a whole (documentation, module structure,
    etc.). Records findings in that same file, as entries signed
    `Created by: Architect`, carrying their own evidence — file paths and
-   line numbers — and what to do next. A `🧠 High` entry is the
+   line numbers — and what to do next. It is also the only role that
+   rates an entry's `Thinking:`. An entry rated `5`–`10` is the
    Architect's, because it is a question rather than a job, and it
    reaches the Architect when the human hands it over rather than
-   automatically; a `🔧 Low` one that has been triaged `Will do` is
+   automatically; a `1`–`4` that has been triaged `Will do` is
    ordinary schedulable work like any other entry, and the Task writer
    turns it into a subtask unless its fix lands in Architect-owned files.
    The Architect is also the one role that may write `.claude/task.md`
@@ -249,13 +255,14 @@ with `Created by:`. That line is the whole difference between a defect a
 reviewer found, something the Coder noticed in passing, and an Architect
 finding that needs a decision — one queue, one numbering scheme, one
 place for the Task writer to look. Whoever files an entry also fills in
-`Importance:`, `Effort:` and `Thinking:`, on the scales
-`docs/backlog.md` defines, because the role holding the evidence is the
-cheapest place to get a first answer; what nobody but the Architect and
-the human writes is `Decision:`, since that is the call about whether the
-project spends time on it. `Thinking:` is the routing field: `🔧 Low`
-work reaches the Coder through the Task writer, `🧠 High` work reaches
-the Architect through the human, and nothing routes itself. An Architect entry carries its own
+`Importance:` and `Effort:`, on the scales `docs/backlog.md` defines,
+because the role holding the evidence is the cheapest place to get a
+first number. The two fields nobody but the Architect and the human
+writes are `Thinking:` and `Decision:` — how hard the entry is to think
+about, and whether the project spends time on it. `Thinking:` is the
+routing field: a `1`–`4` reaches the Coder through the Task writer, a
+`5`–`10` reaches the Architect through the human, and nothing routes
+itself. An Architect entry carries its own
 evidence and citations in the entry itself; there is no separate place
 for that reasoning to accumulate.
 
@@ -288,14 +295,15 @@ because it ends with entries leaving the queue. It runs as two Architect
 passes over entries that already carry their filer's estimate, with the
 human sitting between them:
 
-1. **Whoever files an entry estimates it.** `Importance:`, `Effort:` and
-   `Thinking:` are written by the role that opens the entry — Coder,
-   Milestone Reviewer, Architect, human — at the moment it is filed, not
-   later. The filer has the evidence in front of it and is the cheapest
-   place to get a first answer.
-2. **The Architect decides.** Every entry in `.claude/problems.md`,
-   including its own, gets a `Decision:` line, and any `Importance:`,
-   `Effort:` or `Thinking:` the filer got wrong is corrected in place.
+1. **Whoever files an entry estimates it.** `Importance:` and `Effort:`
+   are written by the role that opens the entry — Coder, Milestone
+   Reviewer, Architect, human — at the moment it is filed, not later. The
+   filer has the evidence in front of it and is the cheapest place to get
+   a first number. Those two fields are all a filer writes.
+2. **The Architect rates and decides.** Every entry in
+   `.claude/problems.md`, including its own, gets the two fields only the
+   Architect may write — `Thinking:` and `Decision:` — and any
+   `Importance:` or `Effort:` the filer got wrong is corrected in place.
    Nothing else in
    the file changes: nothing moved, nothing deleted, no entry reworded.
    Each field is its own line, separated by a blank line, in this order:
@@ -307,18 +315,19 @@ human sitting between them:
 
    Effort: 3 SP
 
-   Thinking: 🔧 Low
+   Thinking: 4
 
    Decision: Will do
    ```
 
    Importance is `🔴 High`, `🟡 Medium` or `🟢 Low` — icon and word
    together, so the line stays greppable; effort is story points on the
-   Fibonacci scale 1/2/3/5/8/13; thinking is `🔧 Low` or `🧠 High` and
-   decides who does the work; the decision is `Will do` or `Backlog`,
+   Fibonacci scale 1/2/3/5/8/13; thinking is a bare number from 1 to 10
+   saying how much reasoning the fix needs, where `1`–`4` is the Coder's
+   and `5`–`10` is the Architect's; the decision is `Will do` or
+   `Backlog`,
    and may carry a short clause of reason when importance and effort pull
-   against each other, wrapping onto the next line if it needs to. Only
-   the Architect and the human ever write `Decision:`.
+   against each other, wrapping onto the next line if it needs to.
    `docs/backlog.md` defines all four scales, and
    defines them once — this section does not restate them.
 3. **The human approves.** The estimates are read, edited by hand where
@@ -377,7 +386,7 @@ rule without anyone rewriting the queue's routing.
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
 | `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. Either one writes into an empty file: emptying it is the human's, and content still in it means no new task may be written. |
 | `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, the human sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it". |
-| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows who did the work: the Task writer deletes an entry it scheduled in full, and the Architect deletes its own settled entries plus any entry whose fix it carried out in its own files. The one deletion that follows neither is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:`, `Effort:` and `Thinking:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; the `Decision:` line is the Architect's and the human's alone. `Thinking:` decides who works the entry — `🔧 Low` to the Coder through the Task writer, `🧠 High` to the Architect through the human. |
+| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows who did the work: the Task writer deletes an entry it scheduled in full, and the Architect deletes its own settled entries plus any entry whose fix it carried out in its own files. The one deletion that follows neither is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:` and `Effort:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; the `Thinking:` and `Decision:` lines are the Architect's and the human's alone. `Thinking:` decides who works the entry — `1`–`4` to the Coder through the Task writer, `5`–`10` to the Architect through the human, and an entry without the line goes nowhere. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
 Milestone planning is the Task writer's, milestone review is the
@@ -477,21 +486,19 @@ Per entry:
 - Title: `P-<n>` + a short description.
 - `Created by:` who found it — Coder, Milestone Reviewer, Architect, or
   Human. It is not optional: it says whose reply the entry came out of
-  and who to ask about it. It no longer routes the entry — `Thinking:`
-  and file ownership do that — but an Architect finding that needs a
-  judgement call should be filed `🧠 High`, which is the same protection
-  the signature used to give it.
+  and who to ask about it. It does not route the entry — `Thinking:` and
+  file ownership do that.
 - `Importance:`, `Effort:`, `Thinking:` and `Decision:` — four lines, one
   field each,
   never joined into one, each separated from its neighbours by a blank
   line like every other paragraph in the entry. `Importance:` carries its
-  icon and its word together (`🔴 High`, `🟡 Medium`, `🟢 Low`),
-  `Effort:` its story points, and `Thinking:` is `🔧 Low` or `🧠 High`;
-  all three are written by whoever files the
-  entry, and corrected only by the Architect in a triage or by the human.
-  `Decision:` is written only by the Architect in a triage and edited
-  only by the human — a newly filed entry has no `Decision:` line at all,
-  and its absence is what the next triage looks for. See "Problem
+  icon and its word together (`🔴 High`, `🟡 Medium`, `🟢 Low`) and
+  `Effort:` its story points; both are written by whoever files the
+  entry and corrected only by the Architect in a triage or by the human.
+  `Thinking:` is a bare `1`–`10` and `Decision:` is `Will do` or
+  `Backlog`; **both are written only by the Architect** in a triage and
+  edited only by the human, so a newly filed entry has neither, and their
+  absence is what the next triage looks for. See "Problem
   triage".
 - Reason: why it is a problem, in one or two sentences.
 - Description: full detail, with file paths and line numbers. Assume the

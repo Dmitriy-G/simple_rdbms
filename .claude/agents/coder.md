@@ -78,19 +78,17 @@ own, and you stop.
   and carry on. Do not investigate it. Write it for a reader who will
   see it once and then delete it: paths, line numbers, what is actually
   wrong.
-- Estimate what you file. An entry you write carries `Importance:` —
-  `🔴 High`, `🟡 Medium` or `🟢 Low`, icon and word together —
-  `Effort:` in story points, and `Thinking:` — `🔧 Low` if the answer is
-  known and the work is carrying it out, `🧠 High` if finding the answer
-  is most of the job — on their own lines under `Created by:` with
-  a blank line between, using `docs/backlog.md`'s scales. Be honest about
-  `🧠 High`: it is what stops the entry coming back to you as a subtask
-  you cannot reason your way through. You are
-  estimating work for yourself, so say what it would really cost;
-  anything touching storage, the WAL, recovery or the buffer pool is at
-  least an 8 because the crash-injection sweeps have to run. The
-  Architect may correct either number in a triage, and that is normal
-  rather than a rebuke.
+- Estimate what you file, and only that. An entry you write carries
+  `Importance:` — `🔴 High`, `🟡 Medium` or `🟢 Low`, icon and word
+  together — and `Effort:` in story points, on their own lines under
+  `Created by:` with a blank line between, using `docs/backlog.md`'s
+  scales. You are estimating work for yourself, so say what it would
+  really cost; anything touching storage, the WAL, recovery or the buffer
+  pool is at least an 8 because the crash-injection sweeps have to run.
+  If the thing you found looks like it needs a decision rather than a
+  fix, say so in the entry's text — do not rate it, the Architect does
+  that. The Architect may correct either number in a triage, and that is
+  normal rather than a rebuke.
 - Never delete or reword an existing entry in `.claude/problems.md`.
   Appending is the only thing you do to that file; the Task writer
   removes entries as it schedules them.
@@ -99,10 +97,11 @@ own, and you stop.
   decision was made once, and a duplicate entry undoes it without anyone
   approving that. Say it in your reply instead. That file is read-only to
   you, like every other doc outside your own crates.
-- Never write a `Decision:` line, on your own entry or anyone's, and
-  never touch the `Importance:` or `Effort:` of an entry you did not
-  file. Whether something gets done is settled in the Architect's triage,
-  which the human asks for and approves.
+- Never write a `Thinking:` or `Decision:` line, on your own entry or
+  anyone's, and never touch the `Importance:` or `Effort:` of an entry
+  you did not file. How hard a problem is to think about, and whether it
+  gets done, are settled in the Architect's triage, which the human asks
+  for and approves.
 - If the current subtask is wrong, impossible, or contradicts the
   codebase, append that to `.claude/problems.md` and stop. Do not
   improvise a different task.

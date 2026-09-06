@@ -18,12 +18,13 @@ human asks for — normally when a task, a sub-milestone or a milestone is
 finished. The full protocol is `CLAUDE.md`'s "Problem triage"; in short:
 
 1. Whoever files an entry in `.claude/problems.md` fills its
-   `Importance:`, `Effort:` and `Thinking:` there and then, using the
-   scales below. Nobody but the Architect and the human writes its
-   `Decision:`.
-2. The Architect goes through **every** entry, corrects an `Importance:`,
-   `Effort:` or `Thinking:` the filer got wrong, adds the `Decision:`
-   line, and stops. Nothing is moved or deleted in that pass.
+   `Importance:` and `Effort:` there and then, using the scales below.
+   Those two are the only fields a filer writes.
+2. The Architect goes through **every** entry, corrects an `Importance:`
+   or `Effort:` the filer got wrong, and adds the two fields only it may
+   write — `Thinking:` and `Decision:` — then stops. Nothing is moved or
+   deleted in that pass. An entry with no `Thinking:` line has not been
+   through this pass, and nobody schedules it.
 3. The human reviews the estimates, edits any of them by hand, and
    approves.
 4. The Architect then moves every entry whose `Decision:` reads `Backlog`
@@ -61,35 +62,49 @@ Coder including its tests and `.MD` updates:
   sign that it is a roadmap milestone rather than a problem entry; say
   so instead of backlogging it.
 
-**Thinking** — how much reasoning the fix needs, which is what decides
-*who* gets it. Written by whoever files the entry, corrected by the
-Architect in a triage, and changed by the human at any time:
+**Thinking** — how much reasoning the fix needs, on a scale of **1 to
+10**, written as a bare number: `Thinking: 7`. It decides *who* gets the
+entry, and unlike importance and effort it is **written only by the
+Architect**, in a triage or when filing one of its own entries, and
+changed by the human. No other role writes it, and an entry without it is
+not scheduled by anyone.
 
-- `🔧 Low` — the answer is already known and the work is carrying it out:
-  writing code against a stated design, updating documentation, a small
-  localized fix, a renamed symbol, a stale sentence. This is Coder work,
-  and the Coder runs a smaller model at lower effort
-  (`.claude/agents/coder.md`'s front matter) precisely because these
-  entries do not need more.
-- `🧠 High` — the answer is not known yet and finding it is most of the
-  job: a module decomposition, a boundary that has to move, a choice
-  between designs with consequences, anything whose entry reads as
-  options rather than an instruction. This is Architect work at full
-  reasoning effort, and it reaches the Architect **through the human**,
-  never automatically.
+- `1` — one obvious edit. A typo, a stale sentence, a renamed symbol.
+- `2` — a localized change with the fix already stated in the entry.
+- `3` — several files, following a pattern that already exists in the
+  tree to copy from.
+- `4` — the design is given, but carrying it out means holding a
+  subsystem's invariants in mind: the WAL ordering rule, latch ordering,
+  a crash-injection sweep that has to keep passing.
+- `5` — the fix is known but its consequences cross crates, so where it
+  belongs is a judgement call.
+- `6` — a choice between options the entry has already enumerated.
+- `7` — a design question whose options are not enumerated yet; finding
+  them is part of the work.
+- `8` — a boundary has to move: a module decomposition, an ownership
+  change between crates, a data structure whose key or lifetime changes.
+- `9` — a decision that constrains later milestones and needs an ADR
+  before any code is written.
+- `10` — a change to the project's own model: an invariant in
+  `CLAUDE.md`, the durability contract, the role process itself.
 
-The two levels are about the *thinking*, not the size: a 1 SP entry can
-be `🧠 High` when the one line to change is obvious only after the
-decision is made, and an 8 SP entry can be `🔧 Low` when it is a long but
-settled piece of work. When an entry is genuinely both — a decision
-followed by mechanical work — file it `🧠 High`, because the decision
-comes first and produces its own task.
+**`1`–`4` is Coder work** and reaches the Coder through the Task writer.
+**`5`–`10` is Architect work** and reaches the Architect **through the
+human**, never automatically. The line between 4 and 5 is one question:
+*is the answer known before the work starts?* If yes it is at most a 4,
+however long the work is; if no it is at least a 5, however short.
+
+The level is about the thinking, not the size: a 1 SP entry is a `9` when
+the single line to change is obvious only once the decision is made, and
+an 8 SP entry is a `3` when it is long but entirely settled. An entry
+that is a decision *followed by* mechanical work takes the number of the
+decision, because that half comes first and produces its own task.
 
 **Decision** — `Will do` or `Backlog`, written only by the Architect in a
 triage or by the human, never by the role that filed the entry. It
 follows from importance and effort, not from either half, and not from
-the thinking level — a `🧠 High` entry is done or backlogged on the same
-grounds as any other:
+the thinking level — a `9` is done or backlogged on the same grounds as a
+`2`:
 
 - `High` importance → `Will do`, at any effort. Cost decides when, not
   whether.
@@ -102,8 +117,10 @@ grounds as any other:
   likely to overturn.
 
 An entry with no `Decision:` line has not been triaged — that, not a
-missing estimate, is what the next triage looks for, since `Importance:`,
-`Effort:` and `Thinking:` are there from the moment the entry is filed.
+missing estimate, is what the next triage looks for, since `Importance:`
+and `Effort:` are there from the moment the entry is filed. `Thinking:`
+is missing on exactly the same entries, for the same reason: both are the
+Architect's to write.
 
 Each field goes on its own line with a blank line between, in the queue
 and here alike, never joined into one. An entry in `.claude/problems.md`
@@ -175,7 +192,7 @@ Importance: 🟢 Low
 
 Effort: 8 SP
 
-Thinking: 🔧 Low
+Thinking: 3
 
 ---
 ```

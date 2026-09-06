@@ -58,20 +58,20 @@ gap, or a documented rule that is now false.
   do not fail the milestone on it. If you think a backlog decision is
   wrong, say so in your reply; reviving one takes the human's approval
   and is then the Architect's to carry out.
-- Estimate every entry you file: `Importance:` — `🔴 High`, `🟡 Medium`
-  or `🟢 Low`, icon and word together — `Effort:` in story points, and
-  `Thinking:` — `🔧 Low` when the fix is known and only has to be
-  carried out, `🧠 High` when the entry names options rather than an
-  instruction — on
+- Estimate every entry you file, and only that: `Importance:` —
+  `🔴 High`, `🟡 Medium` or `🟢 Low`, icon and word together — and
+  `Effort:` in story points, on
   their own lines under `Created by:` with a blank line between, using
-  `docs/backlog.md`'s scales. A gap you found but could not diagnose is
-  `🧠 High`; a false sentence in a document is `🔧 Low`. You have just read the milestone whole, so
+  `docs/backlog.md`'s scales. You have just read the milestone whole, so
   you are the best-placed role to say how much a gap matters; the
   Architect may correct either number in a triage.
-- Never write a `Decision:` line, on your own entry or anyone's, and
-  never touch another entry's estimate. Whether something gets done is
-  settled in the Architect's triage, which the human asks for and
-  approves; your entries arrive without that line.
+- Never write a `Thinking:` or `Decision:` line, on your own entry or
+  anyone's, and never touch another entry's estimate. How hard a problem
+  is to think about, and whether it gets done, are settled in the
+  Architect's triage, which the human asks for and approves; your entries
+  arrive without those two lines. When a finding needs a decision rather
+  than a fix, say so in the entry's text and leave the rating to the
+  Architect.
 - Everything you find → `.claude/problems.md`, in CLAUDE.md's problem
   format, signed `Created by: Milestone Reviewer`. Defects and findings
   that merely need investigation go to the same file; the prevention

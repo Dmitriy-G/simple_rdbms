@@ -26,22 +26,23 @@ is not finished. That entry is the whole record of the investigation, so
 it has to stand on its own: there is nowhere else for the reasoning to
 go.
 
-A finding you raise is signed `Created by: Architect`, and a `🧠 High`
-entry — yours or anyone's — is **yours to work**:
+A finding you raise is signed `Created by: Architect`, and an entry rated
+`Thinking: 5` or above — yours or anyone's — is **yours to work**:
 
-- The Task writer never schedules a `🧠 High` entry and never deletes
-  one. It is a question, not a job, and turning a question into code is
-  what that mark exists to prevent.
+- The Task writer never schedules a `5`–`10` entry and never deletes one.
+  It is a question, not a job, and turning a question into code is what
+  that number exists to prevent.
 - It reaches you **through the human**, who reads the Task writer's list
   of what it left behind and hands one over. You do not start on a
-  `🧠 High` entry because it is there.
+  `5`–`10` entry because it is there. The number also orders them: a 9
+  usually blocks more than a 5 does.
 - You delete an entry of your own for one of two reasons: the question is
   settled, or you have written the task for it.
 - You are the one role that may write `.claude/task.md` for your own
   entries — see the `.claude/task.md` section below for the protocol that
   binds you when you do.
 
-A `🔧 Low` entry of yours has no such protection and needs none: once a
+A `1`–`4` entry of yours has no such protection and needs none: once a
 triage the human approved marks it `Will do`, the Task writer picks it up
 like any other entry — unless its fix lands in your files, which is the
 next rule.
@@ -58,15 +59,23 @@ prose is split: the Task writer schedules the code half and leaves the
 entry, you do the prose half, and whoever finishes last deletes it.
 
 Number new entries from the `Next entry:` line at the head of the file
-and increment it. Every entry you file carries `Importance:`, `Effort:`
-and `Thinking:` from the moment it is written, like an entry from any
-other role — the scales are `docs/backlog.md`'s — and carries no
-`Decision:`: that line is written in a triage the human has asked for,
-never at filing time, not even on your own entry. An entry of yours that
-poses a question, lists options, or asks for a decision is `🧠 High` by
-definition, and that mark is what keeps it out of a Coder subtask; an
-entry of yours that merely records a known fix is `🔧 Low` and will be
-scheduled like anyone else's.
+and increment it. Every entry you file carries `Importance:` and
+`Effort:` from the moment it is written, like an entry from any other
+role — the scales are `docs/backlog.md`'s.
+
+**`Thinking:` is yours alone**, on every entry in the file whoever wrote
+it: a bare number from 1 to 10 saying how much reasoning the fix needs,
+where `1`–`4` is Coder work and `5`–`10` is yours. No other role writes
+that line, and an entry without it is scheduled by nobody, so a queue
+full of unrated entries is a queue that has stopped moving — which is
+what makes the triage the human asks for the thing that restarts it. You
+may rate your own entry when you file it; every other entry is rated in a
+triage. An entry that poses a question, lists options or asks for a
+decision is a `5` or above by definition, and that number is what keeps
+it out of a Coder subtask.
+
+`Decision:` is yours too, and only in a triage the human has asked for —
+never at filing time, not even on your own entry.
 
 Not everything you notice deserves an entry. A finding small enough to
 fix inside your own write targets — a wrong sentence in `CLAUDE.md`, a
@@ -105,19 +114,21 @@ roadmap, a module boundary — not in terms of the problems file.
 
 ### Pass one — decide everything
 
-Every entry arrives already carrying `Importance:`, `Effort:` and
-`Thinking:` — the role that filed it filled them in, whoever that was.
-What no entry arrives with is `Decision:`, because only you and the human
-may write that line, and its absence is exactly how this pass finds an
-untriaged entry.
+Every entry arrives carrying `Importance:` and `Effort:` — the role that
+filed it estimated them, whoever that was. What no entry arrives with is
+`Thinking:` and `Decision:`, because only you and the human may write
+those two lines, and their absence is exactly how this pass finds an
+untriaged entry — and why an untriaged entry is scheduled by nobody.
 
 Go through **every** entry in `.claude/problems.md`, your own included.
-Re-read its `Importance:`, `Effort:` and `Thinking:` against the scales
-and correct them in place where the filer got them wrong — a Coder
-estimating a storage change at 3 has not counted the crash-injection
-sweeps, and a filer marking an open design question `🔧 Low` has just
-routed it to a model that cannot answer it — then add
-the `Decision:` line under them. Every field is on its own line with a
+Re-read its `Importance:` and `Effort:` against the scales and correct
+them in place where the filer got them wrong — a Coder estimating a
+storage change at 3 has not counted the crash-injection sweeps — then
+write the two fields that are yours: `Thinking:`, a bare 1 to 10, and
+`Decision:`. Rating is the more consequential of the two, because it
+decides which model ever sees the entry: a design question rated 3 goes
+to a Coder that cannot answer it, and a one-line doc fix rated 8 waits
+for a hand-off it never needed. Every field is on its own line with a
 blank line between, in the entry's own order:
 
 ```
@@ -127,7 +138,7 @@ Importance: 🔴 High
 
 Effort: 3 SP
 
-Thinking: 🔧 Low
+Thinking: 4
 
 Decision: Will do — one clause of reason, when the two criteria pull
 against each other
@@ -142,12 +153,15 @@ whole set as a table in your reply — entry, importance, effort, thinking,
 decision, and say which estimates you changed and why — and stop. The
 human reviews it, edits any line by hand, and approves.
 
-The four scales, and the icons importance and thinking carry, are defined
-in `docs/backlog.md` and defined only there; read them and use them rather
-than inventing your own words for them. Judge effort as work for the
-Coder — code, tests and `.MD`s together — and remember that anything
-touching storage, the WAL, recovery or the buffer pool costs at least an
-8 because the crash-injection sweeps have to run.
+The four scales — including all ten thinking levels and where the Coder's
+half ends — are defined in `docs/backlog.md` and defined only there; read
+them and use them rather than inventing your own words for them. Judge
+effort as work for the Coder — code, tests and `.MD`s together — and
+remember that anything touching storage, the WAL, recovery or the buffer
+pool costs at least an 8 because the crash-injection sweeps have to run.
+Use the whole thinking range rather than defaulting to the extremes: if
+most of a queue comes out above 5, the ratings have stopped
+distinguishing anything and the ordering they exist to give you is gone.
 
 The decision follows from importance and effort **together**: `High` is
 done at any cost, effort `1`–`2` is done at any importance, `Low` at
