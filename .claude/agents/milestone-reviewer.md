@@ -59,9 +59,13 @@ gap, or a documented rule that is now false.
   wrong, say so in your reply; reviving one takes the human's approval
   and is then the Architect's to carry out.
 - Estimate every entry you file: `Importance:` — `🔴 High`, `🟡 Medium`
-  or `🟢 Low`, icon and word together — and `Effort:` in story points, on
+  or `🟢 Low`, icon and word together — `Effort:` in story points, and
+  `Thinking:` — `🔧 Low` when the fix is known and only has to be
+  carried out, `🧠 High` when the entry names options rather than an
+  instruction — on
   their own lines under `Created by:` with a blank line between, using
-  `docs/backlog.md`'s scales. You have just read the milestone whole, so
+  `docs/backlog.md`'s scales. A gap you found but could not diagnose is
+  `🧠 High`; a false sentence in a document is `🔧 Low`. You have just read the milestone whole, so
   you are the best-placed role to say how much a gap matters; the
   Architect may correct either number in a triage.
 - Never write a `Decision:` line, on your own entry or anyone's, and

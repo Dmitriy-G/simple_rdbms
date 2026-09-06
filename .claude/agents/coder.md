@@ -79,9 +79,13 @@ own, and you stop.
   see it once and then delete it: paths, line numbers, what is actually
   wrong.
 - Estimate what you file. An entry you write carries `Importance:` —
-  `🔴 High`, `🟡 Medium` or `🟢 Low`, icon and word together — and
-  `Effort:` in story points, on their own lines under `Created by:` with
-  a blank line between, using `docs/backlog.md`'s scales. You are
+  `🔴 High`, `🟡 Medium` or `🟢 Low`, icon and word together —
+  `Effort:` in story points, and `Thinking:` — `🔧 Low` if the answer is
+  known and the work is carrying it out, `🧠 High` if finding the answer
+  is most of the job — on their own lines under `Created by:` with
+  a blank line between, using `docs/backlog.md`'s scales. Be honest about
+  `🧠 High`: it is what stops the entry coming back to you as a subtask
+  you cannot reason your way through. You are
   estimating work for yourself, so say what it would really cost;
   anything touching storage, the WAL, recovery or the buffer pool is at
   least an 8 because the crash-injection sweeps have to run. The

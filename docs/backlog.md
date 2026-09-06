@@ -17,12 +17,13 @@ Only the Architect writes this file, and only through the triage the
 human asks for — normally when a task, a sub-milestone or a milestone is
 finished. The full protocol is `CLAUDE.md`'s "Problem triage"; in short:
 
-1. Whoever files an entry in `.claude/problems.md` estimates its
-   `Importance:` and `Effort:` there and then, using the scales below.
-   Nobody but the Architect and the human writes its `Decision:`.
-2. The Architect goes through **every** entry, corrects an `Importance:`
-   or `Effort:` the filer got wrong, adds the `Decision:` line, and
-   stops. Nothing is moved or deleted in that pass.
+1. Whoever files an entry in `.claude/problems.md` fills its
+   `Importance:`, `Effort:` and `Thinking:` there and then, using the
+   scales below. Nobody but the Architect and the human writes its
+   `Decision:`.
+2. The Architect goes through **every** entry, corrects an `Importance:`,
+   `Effort:` or `Thinking:` the filer got wrong, adds the `Decision:`
+   line, and stops. Nothing is moved or deleted in that pass.
 3. The human reviews the estimates, edits any of them by hand, and
    approves.
 4. The Architect then moves every entry whose `Decision:` reads `Backlog`
@@ -33,7 +34,7 @@ The human's edit wins at step 4. If the Architect disagrees with a
 changed decision it says so in its reply and moves the entries as the
 file stands.
 
-## The three criteria
+## The four criteria
 
 **Importance** — how much the problem matters. Each level carries an
 icon, and the icon is written with the word, never instead of it, so the
@@ -60,9 +61,35 @@ Coder including its tests and `.MD` updates:
   sign that it is a roadmap milestone rather than a problem entry; say
   so instead of backlogging it.
 
+**Thinking** — how much reasoning the fix needs, which is what decides
+*who* gets it. Written by whoever files the entry, corrected by the
+Architect in a triage, and changed by the human at any time:
+
+- `🔧 Low` — the answer is already known and the work is carrying it out:
+  writing code against a stated design, updating documentation, a small
+  localized fix, a renamed symbol, a stale sentence. This is Coder work,
+  and the Coder runs a smaller model at lower effort
+  (`.claude/agents/coder.md`'s front matter) precisely because these
+  entries do not need more.
+- `🧠 High` — the answer is not known yet and finding it is most of the
+  job: a module decomposition, a boundary that has to move, a choice
+  between designs with consequences, anything whose entry reads as
+  options rather than an instruction. This is Architect work at full
+  reasoning effort, and it reaches the Architect **through the human**,
+  never automatically.
+
+The two levels are about the *thinking*, not the size: a 1 SP entry can
+be `🧠 High` when the one line to change is obvious only after the
+decision is made, and an 8 SP entry can be `🔧 Low` when it is a long but
+settled piece of work. When an entry is genuinely both — a decision
+followed by mechanical work — file it `🧠 High`, because the decision
+comes first and produces its own task.
+
 **Decision** — `Will do` or `Backlog`, written only by the Architect in a
 triage or by the human, never by the role that filed the entry. It
-follows from the pair, not from either half:
+follows from importance and effort, not from either half, and not from
+the thinking level — a `🧠 High` entry is done or backlogged on the same
+grounds as any other:
 
 - `High` importance → `Will do`, at any effort. Cost decides when, not
   whether.
@@ -75,15 +102,16 @@ follows from the pair, not from either half:
   likely to overturn.
 
 An entry with no `Decision:` line has not been triaged — that, not a
-missing estimate, is what the next triage looks for, since `Importance:`
-and `Effort:` are there from the moment the entry is filed.
+missing estimate, is what the next triage looks for, since `Importance:`,
+`Effort:` and `Thinking:` are there from the moment the entry is filed.
 
 Each field goes on its own line with a blank line between, in the queue
 and here alike, never joined into one. An entry in `.claude/problems.md`
-carries all three — `Importance:`, `Effort:`, `Decision:`; an entry here
-carries `Created:`, `Importance:` and `Effort:`, its decision being the
-file it is in. A `Decision:` may carry a clause of reason and may wrap
-onto the next line; the other two are a single word or a single number.
+carries all four, in the order `Importance:`, `Effort:`, `Thinking:`,
+`Decision:`; an entry here carries `Created:`, `Importance:`, `Effort:`
+and `Thinking:`, its decision being the file it is in. A `Decision:` may
+carry a clause of reason and may wrap onto the next line; the others are
+a single word, a single number, or an icon and a word.
 
 ## What does not belong here
 
@@ -127,8 +155,8 @@ agent's own judgement:
 Each one is `## <short title>`, one or two sentences saying what is wrong
 and why it is not being done, then `Created:` — the date the triage put
 it here, `YYYY-MM-DD`, so a reader can tell a decision made last week
-from one made ten milestones ago — and the two criteria it came out with,
-one field per line, as in the queue. Entries are separated from each
+from one made ten milestones ago — and the three criteria it came out
+with, one field per line, as in the queue. Entries are separated from each
 other by a `---` rule, so nothing about where one ends is left to
 guesswork. No `P-` number: those belong to the queue, are never reused,
 and would only send a reader looking for an entry that is no longer
@@ -146,6 +174,8 @@ Created: 2026-09-06
 Importance: 🟢 Low
 
 Effort: 8 SP
+
+Thinking: 🔧 Low
 
 ---
 ```

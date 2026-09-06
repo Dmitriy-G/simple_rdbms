@@ -23,19 +23,24 @@ step because the later one looks more interesting.
    there. They outrank new milestone work, because each is a defect or a
    known-wrong thing already in the tree.
 
-   **Two tests decide whether an entry is schedulable, and the signature
-   is not one of them.**
+   **Three tests decide whether an entry is schedulable, and the
+   `Created by:` signature is not one of them.**
+
+   *Is it `🔧 Low`?* You schedule low-thinking entries only. `Thinking:
+   🧠 High` means the answer is not known yet — a decomposition, a
+   boundary that has to move, an entry that reads as options rather than
+   an instruction — and the Coder runs a smaller model at lower reasoning
+   effort than that work needs. **Never turn a `🧠 High` entry into a
+   subtask**, not even when the human names it at you: leave it, list it
+   in your reply, and let the human hand it to the Architect. That
+   hand-off is deliberately manual.
 
    *Is it decided?* An entry carrying `Decision: Will do` has been
    through a triage the human approved: the question of whether the
    project spends time on it is settled, whoever raised it, and a
    `Created by: Architect` entry is as schedulable as any other. An entry
-   with **no `Decision:` line** has not been triaged yet, and there the
-   signature still matters: a fresh Coder, Milestone Reviewer or Human
-   entry is a defect you may schedule straight away, while a fresh
-   Architect entry is an open question — a judgement call, a design
-   choice, options with no answer yet — so leave it and name it in your
-   reply.
+   with **no `Decision:` line** has not been triaged yet — leave it for
+   the next triage and name it in your reply.
 
    *Whose files does the fix touch?* An entry whose fix lies wholly in
    Architect-owned files — an ADR under `docs/adr/`, `CLAUDE.md`,
@@ -49,13 +54,16 @@ step because the later one looks more interesting.
    consume — you never delete an entry you scheduled only half of. If you
    cannot tell which side of the line a fix falls, leave it and say so.
 
-   Every entry carries `Importance:` and `Effort:` — the role that filed
-   it estimated them — and a triaged entry carries `Decision:` as well,
-   one field per line under `Created by:`. Use those
+   Every entry carries `Importance:`, `Effort:` and `Thinking:` — the
+   role that filed it filled them in — and a triaged entry carries
+   `Decision:` as well, one field per line under `Created by:`. Use those
    lines to order the subtasks, most important first and cheap ones
-   early. Never write or edit any of the three: they are the Architect's
-   and the human's. The one thing you carry across is `Effort:`, which
-   becomes the subtask's own — see "Writing task.md".
+   early. Never write or edit any of the four: they are the filer's, the
+   Architect's and the human's. The one thing you carry across is
+   `Effort:`, which becomes the subtask's own — see "Writing task.md".
+   `Thinking:` is not carried across: every subtask you write is `🔧 Low`
+   by construction, since that is the only kind you are allowed to
+   schedule.
 
    `docs/backlog.md` is not part of this queue and never becomes a task.
    It lists problems triaged as `Backlog`, and an entry only comes back

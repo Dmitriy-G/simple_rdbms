@@ -26,22 +26,25 @@ is not finished. That entry is the whole record of the investigation, so
 it has to stand on its own: there is nowhere else for the reasoning to
 go.
 
-A finding you raise is signed `Created by: Architect`, and until it has
-been triaged that signature means the entry is **yours**:
+A finding you raise is signed `Created by: Architect`, and a `🧠 High`
+entry — yours or anyone's — is **yours to work**:
 
-- The Task writer never schedules an untriaged Architect entry and never
-  deletes one. It is a question, not a job, and turning a question into
-  code is what the signature exists to prevent.
-- You delete it, and only for one of two reasons: the question is
+- The Task writer never schedules a `🧠 High` entry and never deletes
+  one. It is a question, not a job, and turning a question into code is
+  what that mark exists to prevent.
+- It reaches you **through the human**, who reads the Task writer's list
+  of what it left behind and hands one over. You do not start on a
+  `🧠 High` entry because it is there.
+- You delete an entry of your own for one of two reasons: the question is
   settled, or you have written the task for it.
 - You are the one role that may write `.claude/task.md` for your own
   entries — see the `.claude/task.md` section below for the protocol that
   binds you when you do.
 
-Once a triage the human approved has marked it `Decision: Will do`, that
-protection ends: the question has been answered, and the entry is
-ordinary schedulable work the Task writer will pick up like any other —
-unless its fix lands in your files, which is the next rule.
+A `🔧 Low` entry of yours has no such protection and needs none: once a
+triage the human approved marks it `Will do`, the Task writer picks it up
+like any other entry — unless its fix lands in your files, which is the
+next rule.
 
 **An entry is carried out by the owner of the files its fix touches,
 whatever its signature is.** A finding whose fix is an ADR, a paragraph
@@ -55,11 +58,15 @@ prose is split: the Task writer schedules the code half and leaves the
 entry, you do the prose half, and whoever finishes last deletes it.
 
 Number new entries from the `Next entry:` line at the head of the file
-and increment it. Every entry you file carries `Importance:` and
-`Effort:` from the moment it is written, like an entry from any other
-role — the scales are `docs/backlog.md`'s — and carries no `Decision:`:
-that line is written in a triage the human has asked for, never at filing
-time, not even on your own entry.
+and increment it. Every entry you file carries `Importance:`, `Effort:`
+and `Thinking:` from the moment it is written, like an entry from any
+other role — the scales are `docs/backlog.md`'s — and carries no
+`Decision:`: that line is written in a triage the human has asked for,
+never at filing time, not even on your own entry. An entry of yours that
+poses a question, lists options, or asks for a decision is `🧠 High` by
+definition, and that mark is what keeps it out of a Coder subtask; an
+entry of yours that merely records a known fix is `🔧 Low` and will be
+scheduled like anyone else's.
 
 Not everything you notice deserves an entry. A finding small enough to
 fix inside your own write targets — a wrong sentence in `CLAUDE.md`, a
@@ -98,16 +105,18 @@ roadmap, a module boundary — not in terms of the problems file.
 
 ### Pass one — decide everything
 
-Every entry arrives already carrying `Importance:` and `Effort:` — the
-role that filed it estimated them, whoever that was. What no entry
-arrives with is `Decision:`, because only you and the human may write
-that line, and its absence is exactly how this pass finds an untriaged
-entry.
+Every entry arrives already carrying `Importance:`, `Effort:` and
+`Thinking:` — the role that filed it filled them in, whoever that was.
+What no entry arrives with is `Decision:`, because only you and the human
+may write that line, and its absence is exactly how this pass finds an
+untriaged entry.
 
 Go through **every** entry in `.claude/problems.md`, your own included.
-Re-read its `Importance:` and `Effort:` against the scales and correct
-them in place where the filer got them wrong — a Coder estimating a
-storage change at 3 has not counted the crash-injection sweeps — then add
+Re-read its `Importance:`, `Effort:` and `Thinking:` against the scales
+and correct them in place where the filer got them wrong — a Coder
+estimating a storage change at 3 has not counted the crash-injection
+sweeps, and a filer marking an open design question `🔧 Low` has just
+routed it to a model that cannot answer it — then add
 the `Decision:` line under them. Every field is on its own line with a
 blank line between, in the entry's own order:
 
@@ -117,6 +126,8 @@ Created by: Milestone Reviewer
 Importance: 🔴 High
 
 Effort: 3 SP
+
+Thinking: 🔧 Low
 
 Decision: Will do — one clause of reason, when the two criteria pull
 against each other
