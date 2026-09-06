@@ -164,6 +164,49 @@ fn a_committed_writers_version_is_visible_only_to_readers_begun_at_or_after_its_
 }
 
 #[test]
+fn oldest_active_read_ts_tracks_the_active_set() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path())?;
+    let mut manager = TransactionManager::new(None);
+
+    let next_ts_before_any_txn = manager.oldest_active_read_ts();
+
+    let older = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let older_read_ts = manager.get(older)?.read_ts;
+    assert_eq!(
+        manager.oldest_active_read_ts(),
+        next_ts_before_any_txn,
+        "with only the older transaction active, the watermark is its own read_ts, which was \
+         the next timestamp to be issued before it began"
+    );
+
+    let younger = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let younger_read_ts = manager.get(younger)?.read_ts;
+    assert!(younger_read_ts > older_read_ts);
+    assert_eq!(
+        manager.oldest_active_read_ts(),
+        older_read_ts,
+        "with two transactions open, the watermark is the older one's read_ts"
+    );
+
+    manager.commit(older, &pool)?;
+    assert_eq!(
+        manager.oldest_active_read_ts(),
+        younger_read_ts,
+        "once the older transaction leaves the active set, the watermark is the survivor's \
+         read_ts"
+    );
+
+    manager.commit(younger, &pool)?;
+    assert!(
+        manager.oldest_active_read_ts() > younger_read_ts,
+        "with nothing active again, the watermark is the next timestamp to be issued, which \
+         must exceed every read_ts already handed out"
+    );
+    Ok(())
+}
+
+#[test]
 fn an_aborted_writers_version_never_resurfaces_for_a_later_committed_writer()
 -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;

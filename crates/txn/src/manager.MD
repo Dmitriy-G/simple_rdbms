@@ -97,6 +97,22 @@ transaction had already written.
   transaction's `Begin` onward, and this engine's buffer pool can flush an
   active transaction's early writes to disk well before it commits or
   aborts (`docs/adr/0011-segmented-write-ahead-log.md`).
+- `TransactionManager::oldest_active_read_ts(&self) -> u64` - the
+  smallest `Transaction::read_ts` among every currently active
+  transaction, or `self.next_ts` - the timestamp `next_timestamp` would
+  hand out next - when none are active. This is the MVCC analogue of
+  `earliest_active_begin_lsn` above: a version whose `commit_ts` is at or
+  below this watermark can be visible to every present *and future*
+  reader, since no snapshot older than the watermark still exists and no
+  snapshot taken after it can ever read as of an earlier time, which is
+  exactly the condition `VersionStore::prune`
+  (`version_store.MD`, `docs/adr/0013-version-identity-and-lifetime.md`
+  "Lifetime") drops a chain against. With no transaction active, the
+  watermark is `next_ts` rather than, say, the last-issued timestamp,
+  because a chain committed at any timestamp strictly below the *next*
+  one to be issued is provably safe: nothing still open could have an
+  older snapshot, and nothing begun afterward gets one. Nothing calls
+  this yet; `commit` and `abort` do once they call `prune`.
 
 ## Usage Example
 

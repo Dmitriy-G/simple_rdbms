@@ -42,6 +42,13 @@ construct (see `smoke.rs`).
   can - proving `commit` calls `version_store().commit_versions` with a
   `commit_ts` that lands after every reader that started earlier, and
   before every reader that starts later.
+- `oldest_active_read_ts_tracks_the_active_set` - with nothing active,
+  `oldest_active_read_ts` reports the next timestamp to be issued; with
+  two transactions open it reports the older one's `read_ts`; once the
+  older one commits it reports the survivor's `read_ts`; once the
+  survivor commits too it is back to a fresh next-timestamp value, which
+  must exceed every `read_ts` already handed out - pinning the watermark
+  `VersionStore::prune` (subtask 3) is driven by.
 - `an_aborted_writers_version_never_resurfaces_for_a_later_committed_writer` -
   a transaction records a version at a `Rid` and aborts, then a second
   transaction records and commits its own version at the *same* `Rid`; a

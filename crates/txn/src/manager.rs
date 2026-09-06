@@ -110,4 +110,8 @@ impl TransactionManager {
     pub fn earliest_active_begin_lsn(&self) -> Option<Lsn> {
         self.active.values().map(|txn| txn.begin_lsn).min()
     }
+
+    pub fn oldest_active_read_ts(&self) -> u64 {
+        self.active.values().map(|txn| txn.read_ts).min().unwrap_or(self.next_ts)
+    }
 }
