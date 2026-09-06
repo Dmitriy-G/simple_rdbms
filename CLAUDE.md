@@ -12,12 +12,19 @@ recovery with fuzzy checkpointing, a double-write buffer protecting
 against torn page writes, `BEGIN`/`COMMIT`/`ROLLBACK` transactions, a
 B+tree index the optimizer picks over a sequential scan automatically
 (`planner::optimizer::IndexScanRule`), `EXPLAIN` for both logical and
-physical plans, a Prometheus metrics and liveness/readiness server, and a
-`Send + Sync` storage layer built for a future multi-connection frontend.
+physical plans, and a Prometheus metrics and liveness/readiness server.
+Statements from different sessions **run concurrently** on a fixed
+eight-thread worker pool (`engine::runtime`), isolated by snapshot reads
+over two-phase-locked writes: a reader takes no locks and sees the
+snapshot its transaction began with, while a writer holds an exclusive
+table lock until it commits. `docs/adr/0004-acid-scope.md` states exactly
+what that does and does not guarantee, and it is the file to read before
+believing anything about isolation here.
 What does not exist yet: `DELETE`/`UPDATE`, multi-table joins, column
 constraints (`NOT NULL`/`UNIQUE`/`FOREIGN KEY`), a network wire protocol,
-and concurrent statement execution. See `docs/ROADMAP.md` for exactly
-what closes each of those gaps and in what order.
+serializable isolation, and any SQL for choosing an isolation level. See
+`docs/ROADMAP.md` for exactly what closes each of those gaps and in what
+order.
 
 ## Contents
 
@@ -609,8 +616,9 @@ fresh session reads first:
 - `common::SqlState::NOT_NULL_VIOLATION` — defined, never raised (M15).
 - `common::SqlState::UNIQUE_VIOLATION` — defined, never raised (M16); the
   B+tree still permits duplicate keys.
-- `storage::btree::BTreeIndex::delete` — the method exists; its body is
-  `todo!()` (M14).
+- `storage::btree::BTreeIndex::delete` — the method exists
+  (`crates/storage/src/btree.rs:663`); its body is `todo!()`, and M14
+  changes its signature to `(txn_id, key, rid)` as well as filling it in.
 - `catalog::Catalog::drop_table` — the method exists
   (`crates/catalog/src/catalog.rs:125`); its body is `todo!()` and nothing
   in the tree calls it, since no grammar produces `DROP TABLE` (M26).
@@ -619,11 +627,19 @@ fresh session reads first:
   `planner::LogicalPlan::Join`/`PhysicalPlan::NestedLoopJoin` already
   exist as the node kinds it would run, but nothing in `sql`'s grammar
   can produce them yet — `FROM` accepts exactly one table (M23.1).
-- `txn::LockManager` — implemented and unit-tested as of M10.2's first
-  subtask, but nothing above it calls `lock`/`lock_table`/`release_all`
-  yet; the executors and `TransactionManager` wire it up later in the
-  same sub-milestone.
-- `txn::VersionChain::visible_version` — `todo!()`; MVCC is M10.3.
+- `txn::VersionEntry::end_ts` — the field exists and
+  `VersionChain::is_globally_visible` reads it
+  (`crates/txn/src/mvcc.rs:36-37`), but no caller ever sets it: every
+  entry is created with `end_ts: None`
+  (`crates/txn/src/version_store.rs:24`) and the store has no mutator
+  that changes it, because nothing supersedes a version until `UPDATE`
+  and `DELETE` exist (M14).
+- `txn::VersionStore::is_visible` and the
+  `VersionChain::visible_version` it calls — implemented, but reachable
+  only from `crates/txn/tests/`. The live path every executor uses is
+  `is_visible_to`/`visible_version_for`, which also treats a row's own
+  writer as able to see them. M14 deletes the pair unless the ADR 0004
+  revisit finds a reader with no transaction id.
 - `common::DbConfig::lock_wait_timeout_ms` and `common::Error::LockTimeout`
   — the knob is read by nothing and the variant is raised by nothing,
   because `txn::LockManager::acquire` waits on a `Condvar` with no

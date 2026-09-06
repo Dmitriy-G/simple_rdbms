@@ -40,7 +40,15 @@ gap, or a documented rule that is now false.
 3. **Documentation truth.** Every `.MD` the change touched still
    describes the code. Every ADR referenced anywhere exists. Decisions
    the milestone made are recorded somewhere durable, not only in a
-   commit message.
+   commit message. Four passages are re-read against the milestone's diff
+   every time, whether or not it touched them, because they are what a
+   fresh session believes before it reads anything else and nothing in a
+   subtask's scope ever points at them: `CLAUDE.md`'s **"What this is"**
+   (both the "works today" and the "does not exist yet" halves), its
+   **"Known scaffolding"** list — every bullet, since a milestone's whole
+   job is often to make one of them false — and `README.md`'s **opening
+   paragraph**. A capability that shipped and is still listed as missing
+   is a review failure, not a nitpick.
 4. **Status.** Milestone markers in `docs/ROADMAP.md` match reality.
    Sub-milestone identifiers referenced from code and `.MD` files
    resolve to real headings.

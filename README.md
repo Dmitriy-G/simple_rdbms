@@ -10,10 +10,14 @@ This is a learning project. `CREATE TABLE`/`CREATE INDEX`/`INSERT`/
 restart — on top of a write-ahead log, ARIES-style crash recovery with
 fuzzy checkpointing, a double-write buffer against torn pages,
 `BEGIN`/`COMMIT`/`ROLLBACK`, and a B+tree index the optimizer picks over a
-sequential scan on its own. What is missing is most of SQL and all of
-concurrency: no `UPDATE`/`DELETE`, no joins, no constraints, no network
-protocol, and one statement at a time on a single engine thread. See
-`docs/ROADMAP.md` for the order the rest gets built in.
+sequential scan on its own. Several sessions can hold transactions at
+once and their statements run in parallel on a worker pool, isolated by
+snapshot reads over two-phase-locked writes: readers never block, and two
+writers against one table take turns. What is missing is most of SQL and
+the rest of concurrency: no `UPDATE`/`DELETE`, no joins, no constraints,
+no network protocol, no serializable isolation, and no way to ask for an
+isolation level in SQL. See `docs/ROADMAP.md` for the order the rest gets
+built in.
 
 ## Build & run
 
