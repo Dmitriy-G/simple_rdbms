@@ -236,9 +236,10 @@ accepted, and content still in it means there is no room for a new task,
 so you say so and stop rather than clearing or overwriting it — move the
 sub-milestone markers if the task is milestone work (the finished one
 🚧 → ✅, the one you are starting 🆕 → 🚧, never a parent), and keep the
-task short. Every subtask carries an `Effort:` line beside its `Status:`
-— copied from the problem entry it consumes, or your own estimate when it
-comes from the roadmap. The Coder does not need your reasoning, only the work and its
+task short. Every Order Plan line carries story points beside its status
+marker — taken from the problem entry the subtask consumes, or your own
+estimate when it comes from the roadmap — and the subtask body carries no
+effort at all. The Coder does not need your reasoning, only the work and its
 acceptance test. Copy across everything a deleted problem entry held,
 because the subtask becomes its only copy, and promote to an ADR, the
 roadmap or `CLAUDE.md` anything that has to outlive the task — nothing in

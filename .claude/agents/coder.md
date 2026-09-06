@@ -50,7 +50,10 @@ fails, the subtask comes back to 🚧 In Progress with what is wrong filed
 in `.claude/problems.md` — so a subtask arriving back at 🚧 with entries
 in that file is yours to finish, not to restart.
 
-Write nothing else in that file. Do not reword a subtask, reorder the
+Write nothing else in that file. The Order Plan line carries story points
+beside its marker: change the marker and leave the number alone, however
+far the work turned out to be from it — an estimate that was wrong is a
+sentence in your reply, not an edit. Do not reword a subtask, reorder the
 Order Plan, delete a finished section, or "correct" a description you
 disagree with: the Task writer owns that prose. A subtask you believe is
 wrong goes to `.claude/problems.md`, and you stop.

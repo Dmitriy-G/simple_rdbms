@@ -97,8 +97,8 @@ problems and nothing more.
 
 This makes the subtask the only surviving copy, so copy across everything
 the fix needs — the failing behaviour, the paths and line numbers, the
-entry's `Effort:` as the subtask's own, and the entry's "How to prevent
-in future" as part of the work. A Coder
+entry's `Effort:` onto the subtask's Order Plan line, and the entry's
+"How to prevent in future" as part of the work. A Coder
 reading the subtask must never need the deleted entry. Keep the `P-<n>`
 in the subtask heading as provenance, and take the next free number for a
 new entry from the `Next entry:` line at the head of
@@ -114,22 +114,31 @@ Format:
 - Title: milestone number plus a short description, or `Problems` plus a
   short description when the task is a batch of `P-` entries.
 - Order Plan: a numbered list, 1 to N, giving subtask order. Every line
-  carries a status marker, and every one you write starts at 🆕 New.
-- One section per subtask: what to do, how to test it, a `Status:` line
-  starting at 🆕 New, and an `Effort:` line in story points on the line
-  after it.
+  carries a status marker and an effort in story points, and every marker
+  you write starts at 🆕 New:
+
+  ```
+  1. 🆕 New — 3 SP — P-6 latch-couple the leaf sibling chain
+  2. 🆕 New — 5 SP — index-scan the sibling chain end to end
+  ```
+- One section per subtask: what to do, how to test it, and a `Status:`
+  line starting at 🆕 New. No effort in the body — it is on the Order
+  Plan line and nowhere else, because the same number written twice is a
+  number that will end up disagreeing with itself.
 
 Every subtask carries an effort, and where the number comes from depends
-on where the subtask came from. A subtask consuming a `P-` entry copies
+on where the subtask came from. A subtask consuming a `P-` entry takes
 that entry's `Effort:` verbatim — the entry is about to be deleted, so
-this is the only place its estimate survives, and re-deriving it would
-quietly overrule a number the human approved. A subtask that comes from
-`docs/ROADMAP.md` gets your own estimate on `docs/backlog.md`'s Fibonacci
-scale, judged as work for the Coder including tests and `.MD`s: a
-sub-milestone decomposed into five subtasks is five separate estimates,
-not one divided up. If a copied estimate looks plainly wrong, keep it and
-say so in your reply; changing it is the Architect's in a triage, not
-yours here.
+the Order Plan is the only place its estimate survives, and re-deriving
+it would quietly overrule a number the human approved. A subtask that
+comes from `docs/ROADMAP.md` gets your own estimate on
+`docs/backlog.md`'s Fibonacci scale, judged as work for the Coder
+including tests and `.MD`s: a sub-milestone decomposed into five subtasks
+is five separate estimates, not one divided up. If a copied estimate
+looks plainly wrong, keep it and say so in your reply; changing it is the
+Architect's in a triage, not yours here. If one problem entry becomes two
+subtasks, split its points across them and say so — the plan's numbers
+should still add up to what was approved.
 
 🆕 New is the only subtask status you set. The subtask then climbs the ladder
 without you: the Coder sets 🚧 In Progress when it starts and 👀 Review

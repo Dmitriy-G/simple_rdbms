@@ -347,17 +347,22 @@ to review and commit.
 - Title: milestone number + a short description, or `Problems` when the
   task is a batch of `P-` entries.
 - Order Plan: a numbered list (1 to N) giving the subtask order, each
-  line carrying its own status marker.
+  line carrying its own status marker and its effort in story points:
+  `1. 🆕 New — 3 SP — P-6 latch-couple the leaf sibling chain`. The
+  effort is on that line and nowhere else, so the plan reads as the whole
+  shape of the task — order, progress and cost in one place.
 - A description for every subtask in the Order Plan, including how to
-  test it, then a `Status:` line and an `Effort:` line. A subtask that
-  exists to fix a problem names its `P-<n>` in its heading and copies
-  that entry's `Effort:` verbatim, since the entry is deleted in the same
-  edit and the subtask becomes the only copy; a subtask decomposed out of
-  a roadmap sub-milestone gets the Task writer's own estimate on
-  `docs/backlog.md`'s scale. `Effort:` is written once, by whoever writes
-  the task, and is not a status: nobody revises it as the work proceeds,
-  and a subtask that turns out to cost far more than its estimate is
-  worth a sentence in the Coder's reply rather than an edit to the file.
+  test it, and a `Status:` line. The body carries no effort: a number in
+  two places is a number that will disagree with itself. A subtask that
+  exists to fix a problem names its `P-<n>` in its heading and takes that
+  entry's `Effort:` verbatim onto its Order Plan line, since the entry is
+  deleted in the same edit and the plan becomes the only copy; a subtask
+  decomposed out of a roadmap sub-milestone gets the Task writer's own
+  estimate on `docs/backlog.md`'s scale. The effort is written once, by
+  whoever writes the task, and is not a status: nobody revises it as the
+  work proceeds, and a subtask that turns out to cost far more than its
+  estimate is worth a sentence in the Coder's reply rather than an edit
+  to the file.
 
 ### Status, and who may set it
 
@@ -381,7 +386,8 @@ the defect being scheduled as new work.
 
 **A status change is a marker and nothing else.** Whoever moves a subtask
 changes the emoji on its Order Plan line and on its `Status:` line, and
-touches no other character in the file — no clause explaining the move,
+touches no other character in the file — not the story points beside the
+marker, no clause explaining the move,
 no "see P-n", no correction to the description. The task's prose belongs
 to the Task writer, and a description carrying edits from three roles
 stops being a specification anyone can trust. What a role wants to say

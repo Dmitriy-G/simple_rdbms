@@ -36,7 +36,7 @@ flowchart TD
     ANYOPEN{"Anything schedulable left?"}
     MILESTONE(["Next milestone instead<br/>— see agent-flow-milestone-planning.mmd"]):::stop
 
-    TASK["Write .claude/task.md: one subtask per<br/>problem, heading keeping the P-n,<br/>Effort: copied from the entry,<br/>restating everything the fix needs<br/>including the prevention"]
+    TASK["Write .claude/task.md: one subtask per<br/>problem, heading keeping the P-n,<br/>the entry's SP on the Order Plan line,<br/>restating everything the fix needs<br/>including the prevention"]
     CONSUME["Delete the entry from problems.md<br/>in the same edit. It has moved, not gone:<br/>the subtask is where it lives now.<br/>No roadmap status changes — repair<br/>is not milestone progress"]
 
     CODER(["Coder works one subtask<br/>— see agent-flow-task-implementation.mmd"]):::role

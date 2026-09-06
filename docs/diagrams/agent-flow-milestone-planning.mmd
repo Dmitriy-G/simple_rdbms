@@ -25,8 +25,8 @@ flowchart TD
 
     READ["Reads the docs/ROADMAP.md entry:<br/>Problem, Solution, Done-when,<br/>plus any ADR it names"]
     SPLIT["Decompose into subtasks:<br/>each independently completable<br/>and independently reviewable"]
-    ORDER["Order Plan, 1..N —<br/>if a subtask cannot finish without a<br/>later one, it is two subtasks misordered"]
-    WRITE["Write .claude/task.md:<br/>title, Order Plan, one section per subtask<br/>with how to test it, a Status: at 🆕 New<br/>and an Effort: — the Task writer's own<br/>estimate for milestone work.<br/>No rationale — a decision worth explaining<br/>is an ADR, not a task"]
+    ORDER["Order Plan, 1..N, each line<br/>carrying its status marker and its SP —<br/>if a subtask cannot finish without a<br/>later one, it is two subtasks misordered"]
+    WRITE["Write .claude/task.md: title, Order Plan<br/>— 🆕 New and the SP on every line, the Task<br/>writer's own estimate for milestone work —<br/>then one section per subtask with how to<br/>test it and a Status: line, no SP in the body.<br/>No rationale — a decision worth explaining<br/>is an ADR, not a task"]
     TASK[".claude/task.md"]:::channel
     STATUS["Set that sub-milestone 🆕 → 🚧 In Progress<br/>in docs/ROADMAP.md, in the same edit as<br/>the ✅ above. At most one at a time"]
     ROADMAP["docs/ROADMAP.md"]:::channel
