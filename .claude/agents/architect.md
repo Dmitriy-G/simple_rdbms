@@ -297,9 +297,10 @@ sub-milestone markers if the task is milestone work (the finished one
 🚧 → ✅, the one you are starting 🆕 → 🚧, never a parent), and keep the
 task short. Put a `For:` line under the title — `For: Coder` or
 `For: Architect`, decided by the `Thinking:` of the entries it schedules
-— and story points on every Order Plan line beside its status marker,
-taken from the problem entry the subtask consumes or estimated by you
-when it comes from the roadmap. The subtask body carries no effort.
+— and on every Order Plan line, beside its status marker, both story
+points and the thinking level, taken from the problem entry the subtask
+consumes or estimated by you when it comes from the roadmap. The subtask
+body carries neither.
 Whoever works a subtask does not need your reasoning, only the work and
 its acceptance test. Copy
 across everything a deleted problem entry held, because the subtask

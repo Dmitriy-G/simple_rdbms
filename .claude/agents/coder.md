@@ -58,8 +58,9 @@ in that file is yours to finish, not to restart.
 
 Write nothing else in that file — the `For:` line least of all: changing
 it to `Coder` so you can work the task is the one edit that breaks the
-ownership table outright. The Order Plan line carries story points beside
-its marker: change the marker and leave the number alone, however
+ownership table outright. The Order Plan line carries story points and a
+thinking level beside its marker: change the marker and leave both
+numbers alone, however
 far the work turned out to be from it — an estimate that was wrong is a
 sentence in your reply, not an edit. Do not reword a subtask, reorder the
 Order Plan, delete a finished section, or "correct" a description you

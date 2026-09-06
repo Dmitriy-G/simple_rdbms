@@ -130,13 +130,20 @@ Format:
   schedules — `1`–`7` Coder, `8`–`10` Architect. A milestone task is
   always `For: Coder`. One role per file, never both.
 - Order Plan: a numbered list, 1 to N, giving subtask order. Every line
-  carries a status marker and an effort in story points, and every marker
-  you write starts at 🆕 New:
+  carries a status marker, an effort in story points and the thinking
+  level, in that order, and every marker you write starts at 🆕 New:
 
   ```
-  1. 🆕 New — 3 SP — P-6 latch-couple the leaf sibling chain
-  2. 🆕 New — 5 SP — index-scan the sibling chain end to end
+  1. 🆕 New — 3 SP — Thinking 4 — P-6 latch-couple the leaf sibling chain
+  2. 🆕 New — 5 SP — Thinking 3 — index-scan the sibling chain end to end
   ```
+
+  The thinking level is copied from the problem entry the subtask
+  consumes, or estimated by you on `docs/backlog.md`'s scale for a subtask
+  decomposed out of the roadmap. It is there to be checked: every level on
+  a `For: Coder` task must be `1`–`7` and every level on a `For:
+  Architect` task `8`–`10`, so a line that disagrees with the `For:` line
+  is a routing mistake visible at a glance.
 - One section per subtask: what to do, how to test it, and a `Status:`
   line starting at 🆕 New. No effort in the body — it is on the Order
   Plan line and nowhere else, because the same number written twice is a

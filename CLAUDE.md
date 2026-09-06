@@ -398,10 +398,16 @@ to review and commit.
 - `For:` line, directly under the title: `For: Coder` or
   `For: Architect`. One role per task file.
 - Order Plan: a numbered list (1 to N) giving the subtask order, each
-  line carrying its own status marker and its effort in story points:
-  `1. 🆕 New — 3 SP — P-6 latch-couple the leaf sibling chain`. The
-  effort is on that line and nowhere else, so the plan reads as the whole
-  shape of the task — order, progress and cost in one place.
+  line carrying its own status marker, its effort in story points and the
+  thinking level behind it:
+  `1. 🆕 New — 3 SP — Thinking 4 — P-6 latch-couple the leaf sibling chain`.
+  Both numbers are on that line and nowhere else, so the plan reads as
+  the whole shape of the task — order, progress, cost and reasoning depth
+  in one place. The thinking level comes from the problem entry the
+  subtask consumes, and it must agree with the `For:` line: `1`–`7` on a
+  Coder task, `8`–`10` on an Architect one. A line that disagrees is a
+  misrouted subtask, and having the number written down is how anyone
+  reading the file can see it.
 - A description for every subtask in the Order Plan, including how to
   test it, and a `Status:` line. The body carries no effort: a number in
   two places is a number that will disagree with itself. A subtask that
