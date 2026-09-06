@@ -87,8 +87,15 @@ one lock at a time). `TransactionManager::commit`/`abort` both call
 (`crates/txn/src/manager.rs`), `InsertExecutor` records every inserted
 row's version, and `SeqScanExecutor`/`IndexScanExecutor` consult
 `VersionStore::is_visible_to` under `SnapshotIsolation` instead of locking
-(`docs/ROADMAP.md`'s M10.3). See `docs/ROADMAP.md` and
-`docs/adr/0004-acid-scope.md`.
+(`docs/ROADMAP.md`'s M10.3). `commit`/`abort` touch only the committing or
+aborting transaction's own write set rather than every chain in the store,
+and both call `VersionStore::prune` against
+`TransactionManager::oldest_active_read_ts` right afterward
+(`docs/ROADMAP.md`'s M10.4, `docs/adr/0013-version-identity-and-lifetime.md`),
+so the map's steady-state size is bounded by *live, contended* rows - the
+ones a still-open transaction's snapshot might still need - rather than by
+every row ever inserted since the process started. See `docs/ROADMAP.md`
+and `docs/adr/0004-acid-scope.md`.
 
 ## Dependencies
 

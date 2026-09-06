@@ -502,6 +502,7 @@ struct EngineShared {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EngineStats {
     pub checkpoints_written: u64,
+    pub version_chains: usize,
 }
 
 impl EngineShared {
@@ -565,7 +566,11 @@ impl EngineShared {
     #[cfg(feature = "test-util")]
     fn stats(&self) -> EngineStats {
         let checkpoint = recover_lock(self.checkpoint.lock(), "EngineShared.checkpoint");
-        EngineStats { checkpoints_written: checkpoint.checkpoints_written }
+        let txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+        EngineStats {
+            checkpoints_written: checkpoint.checkpoints_written,
+            version_chains: txn_manager.version_store().chain_count(),
+        }
     }
 
     #[cfg(feature = "test-util")]

@@ -90,10 +90,12 @@ as they always have, with no idea an engine thread exists underneath.
   instead of hanging.
 - `Database::stats(&self) -> Result<runtime::EngineStats>` - `#[cfg(any(test,
   feature = "test-util"))]`. Forwards to `SessionHandle::stats`, reading
-  engine-wide counters (currently just `checkpoints_written`) straight off
-  `EngineState` rather than through a tracing capture buffer, so a test
-  asserting a behavioral invariant like "checkpoints don't multiply with
-  sessions" (`crates/engine/tests/sessions.rs`) does not depend on log
+  engine-wide counters (`checkpoints_written` and `version_chains`)
+  straight off `EngineState` rather than through a tracing capture
+  buffer, so a test asserting a behavioral invariant like "checkpoints
+  don't multiply with sessions" (`crates/engine/tests/sessions.rs`) or
+  "the version store doesn't grow without bound"
+  (`crates/engine/tests/version_store_growth.rs`) does not depend on log
   wording or on tracing's thread-local dispatcher and process-wide
   callsite-interest cache both cooperating under concurrent test threads.
 - `Database::current_txn_id(&self) -> Result<Option<common::TxnId>>` -

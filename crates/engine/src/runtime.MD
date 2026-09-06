@@ -363,7 +363,12 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   increments `checkpoints_written` and
   `metrics::counter!("checkpoints_written_total")` together.
   `stats(&self) -> EngineStats` - `#[cfg(feature = "test-util")]`. Copies
-  the current counter. `lock_count_for(&self, txn_id) -> usize` -
+  the current checkpoint counter and reads
+  `txn_manager.version_store().chain_count()` under a brief `txn_manager`
+  lock into `EngineStats::version_chains` - test-only visibility into
+  `txn::VersionStore`'s live size, so a test can assert the store actually
+  prunes down to (or stays near) zero rather than only inferring it
+  indirectly through visibility checks. `lock_count_for(&self, txn_id) -> usize` -
   `#[cfg(feature = "test-util")]`. Locks `txn_manager` just long enough to
   call `txn::TransactionManager::lock_manager().held_lock_count(txn_id)` -
   test-only introspection into how many locks a transaction (commonly one
