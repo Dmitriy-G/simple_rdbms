@@ -77,6 +77,7 @@ impl TransactionManager {
         self.version_store.commit_versions(txn_id, commit_ts);
         pool.append_log(txn_id, LogRecordKind::End)?;
         self.active.remove(&txn_id);
+        self.version_store.prune(self.oldest_active_read_ts());
         self.lock_manager.release_all(txn_id);
         metrics::counter!("transactions_committed_total").increment(1);
         Ok(())
@@ -90,7 +91,8 @@ impl TransactionManager {
             recovery::undo_transaction(pool, txn_id, last_lsn)?;
         }
         self.active.remove(&txn_id);
-        self.version_store.abort_versions(txn_id);
+        self.version_store.abort_versions(txn_id, self.next_ts);
+        self.version_store.prune(self.oldest_active_read_ts());
         self.lock_manager.release_all(txn_id);
         metrics::counter!("transactions_aborted_total").increment(1);
         Ok(())

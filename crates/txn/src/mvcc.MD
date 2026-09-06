@@ -54,11 +54,26 @@ row.
   writes to this row. Called by
   `version_store::VersionStore::abort_versions`.
 - `VersionChain::is_empty(&self) -> bool` - true when the chain holds no
-  versions. Not currently called by `VersionStore`, which keeps a chain in
-  its map whether or not `remove_creator` has left it empty - see
-  `version_store.MD`'s `abort_versions` entry for why an empty chain must
-  stay in the map rather than be dropped. Kept as a general-purpose query
-  on the chain's state.
+  versions. Called by `VersionStore::abort_versions` to decide which
+  `Rid`s an abort emptied and must therefore enrol as prune candidates -
+  see `version_store.MD`'s `abort_versions` entry. Kept as a
+  general-purpose query on the chain's state as well.
+- `VersionChain::is_prunable(&self, watermark) -> bool` - the predicate
+  `docs/adr/0013-version-identity-and-lifetime.md` ("Lifetime") defines:
+  `true` when the chain is empty, or when its newest version (`versions[0]`,
+  since `push` prepends) is committed (`begin_ts` is `Some(ts)`) at or
+  before `watermark` and has no `end_ts`. A chain whose newest version has
+  `begin_ts == None` (uncommitted) or `end_ts` set is never prunable -
+  the latter is M14's territory, once a version can be superseded by a
+  `DELETE`/`UPDATE` rather than only by another transaction's abort.
+  Deliberately looks only at the newest version: an older, already-
+  superseded entry's own `begin_ts`/`end_ts` never matters once a newer
+  one exists, since no reader can still resolve to it. Called by
+  `VersionStore::prune`, which re-checks it against the current watermark
+  for every candidate rather than trusting whatever fact caused a `Rid` to
+  be enrolled as a candidate in the first place - a later transaction may
+  have pushed a new version onto the same `Rid` since then
+  (`crates/txn/tests/lifecycle.rs`'s prune tests cover this).
 - `is_globally_visible(entry, read_ts) -> bool` - private. The shared
   "would any reader with this snapshot see this version" predicate:
   `begin_ts` at or before `read_ts` and (`end_ts` absent or after

@@ -26,7 +26,10 @@ regardless of what commits later.
   else recorded there, both `is_visible` and `is_visible_to` (even with
   the aborting transaction's own id) return `false` - proving the emptied
   chain `abort_versions` leaves behind in the map is not confused with "no
-  chain for this `Rid`," which would read as visible to everyone.
+  chain for this `Rid`," which would read as visible to everyone. Passes
+  an arbitrary timestamp as `abort_versions`' second argument - the
+  candidate timestamp a real `TransactionManager` would file the
+  emptied chain under - since nothing here ever calls `prune`.
 - `aborted_insert_does_not_resurface_once_another_transaction_commits_a_new_version` -
   after `abort_versions` discards the first transaction's entry, a second
   transaction recording and committing its own version of the same `Rid`
@@ -70,6 +73,24 @@ regardless of what commits later.
   recorded anything must not touch an unrelated, already-committed chain
   or change the store's `chain_count` - the write-set lookup returning
   nothing is a no-op, not a scan of the map.
+- `prune_drops_a_committed_chain_at_or_below_the_watermark` - a chain
+  committed at `ts` 5 is gone from `chain_count()` after `prune(5)`, and
+  the `Rid` reads visible to everyone afterward (no chain at all) -
+  pinning the basic case `docs/adr/0013-version-identity-and-lifetime.md`
+  ("Lifetime") describes.
+- `prune_leaves_a_committed_chain_above_the_watermark` - a chain committed
+  at `ts` 10 survives `prune(5)` untouched, since the watermark has not
+  yet reached its commit timestamp.
+- `prune_rechecks_a_candidate_that_gained_a_new_version_since_it_was_enrolled` -
+  an abort enrolls a `Rid` as a candidate under one timestamp, then a
+  second transaction pushes and commits a new version onto that same
+  `Rid` before `prune` ever runs; `prune` at the abort's enrollment
+  timestamp must not drop the chain (it now holds a live, not-yet-
+  prunable version), and `prune` at the second commit's own timestamp
+  does drop it - proving `VersionStore::prune` re-evaluates
+  `VersionChain::is_prunable` against the chain's *current* state rather
+  than trusting whatever fact caused a `Rid` to be enrolled as a
+  candidate.
 
 ## Usage Example
 

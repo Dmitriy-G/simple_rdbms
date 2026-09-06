@@ -44,7 +44,7 @@ fn aborted_insert_does_not_resurface_once_another_transaction_commits_a_new_vers
     let r = rid(1);
 
     store.record_insert(TxnId(1), r);
-    store.abort_versions(TxnId(1));
+    store.abort_versions(TxnId(1), 0);
 
     store.record_insert(TxnId(2), r);
     assert!(!store.is_visible(r, 9));
@@ -60,7 +60,7 @@ fn aborted_insert_stays_invisible_immediately_after_the_abort() {
     let r = rid(1);
 
     store.record_insert(TxnId(1), r);
-    store.abort_versions(TxnId(1));
+    store.abort_versions(TxnId(1), 0);
 
     assert!(!store.is_visible(r, 100));
     assert!(!store.is_visible_to(r, TxnId(1), 100));
@@ -141,7 +141,7 @@ fn abort_leaves_the_emptied_chain_in_place_but_invisible() {
     store.record_insert(TxnId(1), r);
     let count_after_insert = store.chain_count();
 
-    store.abort_versions(TxnId(1));
+    store.abort_versions(TxnId(1), 0);
 
     assert_eq!(
         store.chain_count(),
@@ -177,8 +177,67 @@ fn commit_and_abort_of_an_empty_write_set_leave_other_chains_untouched() {
     store.commit_versions(TxnId(1), 5);
 
     store.commit_versions(TxnId(2), 6);
-    store.abort_versions(TxnId(3));
+    store.abort_versions(TxnId(3), 100);
 
     assert!(store.is_visible(r, 5));
     assert_eq!(store.chain_count(), 1);
+}
+
+#[test]
+fn prune_drops_a_committed_chain_at_or_below_the_watermark() {
+    let store = VersionStore::new();
+    let r = rid(1);
+
+    store.record_insert(TxnId(1), r);
+    store.commit_versions(TxnId(1), 5);
+    assert_eq!(store.chain_count(), 1);
+
+    store.prune(5);
+
+    assert_eq!(store.chain_count(), 0);
+    assert!(store.is_visible(r, 100), "no chain at all means visible to everyone");
+}
+
+#[test]
+fn prune_leaves_a_committed_chain_above_the_watermark() {
+    let store = VersionStore::new();
+    let r = rid(1);
+
+    store.record_insert(TxnId(1), r);
+    store.commit_versions(TxnId(1), 10);
+
+    store.prune(5);
+
+    assert_eq!(store.chain_count(), 1);
+    assert!(store.is_visible(r, 10));
+}
+
+#[test]
+fn prune_rechecks_a_candidate_that_gained_a_new_version_since_it_was_enrolled() {
+    let store = VersionStore::new();
+    let r = rid(1);
+
+    store.record_insert(TxnId(1), r);
+    store.abort_versions(TxnId(1), 5);
+
+    store.record_insert(TxnId(2), r);
+    store.commit_versions(TxnId(2), 7);
+
+    store.prune(5);
+    assert_eq!(
+        store.chain_count(),
+        1,
+        "the chain gained a new, not-yet-prunable version after the abort enrolled it - the \
+         stale candidate entry must not drop it"
+    );
+    assert!(!store.is_visible(r, 5));
+
+    store.prune(7);
+    assert_eq!(
+        store.chain_count(),
+        0,
+        "once the watermark reaches the second writer's own commit_ts, the chain is prunable \
+         on its own account"
+    );
+    assert!(store.is_visible(r, 100));
 }

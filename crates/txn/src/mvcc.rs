@@ -56,4 +56,14 @@ impl VersionChain {
     pub fn is_empty(&self) -> bool {
         self.versions.is_empty()
     }
+
+    pub fn is_prunable(&self, watermark: u64) -> bool {
+        match self.versions.first() {
+            None => true,
+            Some(newest) => match (newest.begin_ts, newest.end_ts) {
+                (Some(begin_ts), None) => begin_ts <= watermark,
+                _ => false,
+            },
+        }
+    }
 }

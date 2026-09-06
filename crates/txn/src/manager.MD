@@ -62,10 +62,12 @@ transaction had already written.
   `commit_ts` from `next_timestamp` and calls
   `version_store.commit_versions(txn_id, commit_ts)` — after the flush, so
   a version can never become visible before its commit record is durable
-  — logs `End`, removes it from the active set, then releases every lock
-  it held via `lock_manager.release_all` (strict two-phase locking: the
-  whole set releases at once, never before), then increments
-  `transactions_committed_total` (a `metrics` counter - see
+  — logs `End`, removes it from the active set, then calls
+  `version_store.prune(self.oldest_active_read_ts())` now that the active
+  set (and therefore the watermark) reflects `txn_id` having left it, then
+  releases every lock it held via `lock_manager.release_all` (strict
+  two-phase locking: the whole set releases at once, never before), then
+  increments `transactions_committed_total` (a `metrics` counter - see
   `docs/ROADMAP.md`'s M13 entry).
 - `TransactionManager::abort(&mut self, txn_id, pool) -> Result<(), TxnError>` -
   `#[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]`, and emits
@@ -74,15 +76,20 @@ transaction had already written.
   definition (see CLAUDE.md's logging section). Aborts `txn_id`: undoes
   every write it made (via `storage::recovery::undo_transaction`, the
   same routine crash recovery's own Undo pass uses), removes it from the
-  active set, calls `version_store.abort_versions(txn_id)` so none of its
-  uncommitted versions can ever become visible, then releases every lock
-  it held via `lock_manager.release_all`, same as `commit`. The undo chain
-  starts from `pool.last_lsn(txn_id)` — the log's own record of this
-  transaction's most recent append — rather than any value cached at
-  `begin` time, since writes made through `PageGuard::write` append
-  directly to the log without going back through this manager. Increments
-  `transactions_aborted_total` once the undo chain (and the log records it
-  wrote) is complete.
+  active set, calls `version_store.abort_versions(txn_id, self.next_ts)`
+  so none of its uncommitted versions can ever become visible - passing
+  `next_ts` **before** it is ever consumed by `next_timestamp`, since that
+  is the earliest timestamp every transaction that could still be holding
+  the undone row's bytes (all of them active at this moment, therefore
+  with a `read_ts` below it) is guaranteed to have finished by - then
+  calls `version_store.prune(self.oldest_active_read_ts())`, same as
+  `commit`, then releases every lock it held via `lock_manager.release_all`.
+  The undo chain starts from `pool.last_lsn(txn_id)` — the log's own
+  record of this transaction's most recent append — rather than any value
+  cached at `begin` time, since writes made through `PageGuard::write`
+  append directly to the log without going back through this manager.
+  Increments `transactions_aborted_total` once the undo chain (and the log
+  records it wrote) is complete.
 - `TransactionManager::get(&self, txn_id) -> Result<&Transaction, TxnError>` -
   looks up the current state of an active transaction.
 - `TransactionManager::active_snapshot(&self, pool) -> Vec<(TxnId, Lsn)>` -
@@ -111,8 +118,8 @@ transaction had already written.
   watermark is `next_ts` rather than, say, the last-issued timestamp,
   because a chain committed at any timestamp strictly below the *next*
   one to be issued is provably safe: nothing still open could have an
-  older snapshot, and nothing begun afterward gets one. Nothing calls
-  this yet; `commit` and `abort` do once they call `prune`.
+  older snapshot, and nothing begun afterward gets one. Called by
+  `commit` and `abort` above, each time right before they call `prune`.
 
 ## Usage Example
 

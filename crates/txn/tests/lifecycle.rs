@@ -235,3 +235,129 @@ fn an_aborted_writers_version_never_resurfaces_for_a_later_committed_writer()
     );
     Ok(())
 }
+
+#[test]
+fn commit_with_no_other_transaction_active_prunes_the_chain_immediately()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path())?;
+    let mut manager = TransactionManager::new(None);
+    let rid = Rid::new(PageId(0), 0);
+
+    let writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    manager.version_store().record_insert(writer, rid);
+    manager.commit(writer, &pool)?;
+
+    assert_eq!(
+        manager.version_store().chain_count(),
+        0,
+        "with nothing else active, the watermark already covers the commit_ts"
+    );
+    Ok(())
+}
+
+#[test]
+fn committed_chain_survives_an_older_reader_and_is_pruned_once_that_reader_ends()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path())?;
+    let mut manager = TransactionManager::new(None);
+    let rid = Rid::new(PageId(0), 0);
+
+    let reader = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    manager.version_store().record_insert(writer, rid);
+    manager.commit(writer, &pool)?;
+
+    assert_eq!(
+        manager.version_store().chain_count(),
+        1,
+        "the older reader's snapshot predates the commit, so the watermark cannot reach it yet"
+    );
+
+    manager.commit(reader, &pool)?;
+    assert_eq!(
+        manager.version_store().chain_count(),
+        0,
+        "once the older reader leaves the active set, the watermark reaches commit_ts and the \
+         chain is prunable"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_row_committed_before_a_reader_began_stays_visible_after_its_chain_is_pruned()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path())?;
+    let mut manager = TransactionManager::new(None);
+    let rid = Rid::new(PageId(0), 0);
+
+    let writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    manager.version_store().record_insert(writer, rid);
+    manager.commit(writer, &pool)?;
+    assert_eq!(
+        manager.version_store().chain_count(),
+        0,
+        "nothing else was active, so the chain is pruned as part of this commit"
+    );
+
+    let reader = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let read_ts = manager.get(reader)?.read_ts;
+    assert!(
+        manager.version_store().is_visible(rid, read_ts),
+        "no chain at all means visible to everyone, which is exactly right for a row committed \
+         before this reader ever began"
+    );
+    Ok(())
+}
+
+#[test]
+fn abort_with_no_other_transaction_active_prunes_the_emptied_chain_immediately()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path())?;
+    let mut manager = TransactionManager::new(None);
+    let rid = Rid::new(PageId(0), 0);
+
+    let writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    manager.version_store().record_insert(writer, rid);
+    manager.abort(writer, &pool)?;
+
+    assert_eq!(
+        manager.version_store().chain_count(),
+        0,
+        "with nothing else active, the watermark already covers the abort's own stamp"
+    );
+    Ok(())
+}
+
+#[test]
+fn emptied_chain_survives_an_older_reader_and_is_pruned_once_that_reader_ends()
+-> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let pool = open_pool(dir.path())?;
+    let mut manager = TransactionManager::new(None);
+    let rid = Rid::new(PageId(0), 0);
+
+    let reader = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    let writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
+    manager.version_store().record_insert(writer, rid);
+    manager.abort(writer, &pool)?;
+
+    assert_eq!(
+        manager.version_store().chain_count(),
+        1,
+        "the older reader was active when the abort ran, so the emptied chain must survive - a \
+         reader that read the row's bytes before the undo ran may still be resolving them"
+    );
+
+    manager.commit(reader, &pool)?;
+    assert_eq!(
+        manager.version_store().chain_count(),
+        0,
+        "once the older reader leaves the active set, the watermark reaches the abort's stamp \
+         and the emptied chain is prunable"
+    );
+    Ok(())
+}

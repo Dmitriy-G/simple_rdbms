@@ -61,6 +61,28 @@ construct (see `smoke.rs`).
   as "no chain for this `Rid`", so `VersionStore::is_visible` does not
   read it as visible to everyone. See `crates/txn/src/version_store.MD`'s
   note on `abort_versions`.
+- `commit_with_no_other_transaction_active_prunes_the_chain_immediately` -
+  a writer commits with nothing else active; `chain_count()` is `0`
+  immediately afterward, since `TransactionManager::commit` calls
+  `VersionStore::prune` against a watermark that already covers the fresh
+  `commit_ts`.
+- `committed_chain_survives_an_older_reader_and_is_pruned_once_that_reader_ends` -
+  an older reader is active when the writer commits, so the watermark sits
+  below `commit_ts` and the chain survives (`chain_count() == 1`); once
+  that reader itself commits, the watermark reaches `commit_ts` and the
+  next `prune` (run as part of the reader's own commit) drops it.
+- `a_row_committed_before_a_reader_began_stays_visible_after_its_chain_is_pruned` -
+  after a chain is pruned to nothing (nothing else was active at commit
+  time), a transaction begun afterward still sees the row as visible via
+  `VersionStore::is_visible` - proving pruning does not change any answer
+  a reader is entitled to, only how the store represents it internally.
+- `abort_with_no_other_transaction_active_prunes_the_emptied_chain_immediately` -
+  the abort half of the first test above: a writer inserts and aborts with
+  nothing else active, and `chain_count()` is `0` immediately afterward.
+- `emptied_chain_survives_an_older_reader_and_is_pruned_once_that_reader_ends` -
+  the abort half of the second test above: an older reader keeps the
+  emptied chain alive across the abort, and it is only pruned once that
+  reader itself leaves the active set.
 
 ## Usage Example
 
