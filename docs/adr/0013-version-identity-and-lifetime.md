@@ -110,13 +110,23 @@ format and constraining recovery; not worth it.
 
 ### Lifetime: write-set-scoped bookkeeping, pruned against a watermark
 
-**Commit and abort touch only their own chains.** Each transaction tracks
-the set of `RowId`s it has written — `txn::Transaction` is where that
-belongs, beside the `read_ts` and `begin_lsn` it already carries — and
-`commit_versions`/`abort_versions` take that set instead of iterating the
-map. Commit cost then scales with the transaction's write set, which is
-the only thing it should ever have scaled with, and a large database stops
-making every commit slower for everyone.
+**Commit and abort touch only their own chains.** The store itself tracks,
+per writing `TxnId`, the set of rows that transaction has written, under
+the same mutex as the chains, and `commit_versions`/`abort_versions` visit
+that set instead of iterating the map. Commit cost then scales with the
+transaction's write set, which is the only thing it should ever have
+scaled with, and a large database stops making every commit slower for
+everyone.
+
+The write set belongs to the store and **not** to `txn::Transaction`,
+beside the `read_ts` and `begin_lsn` it already carries, even though that
+is the more natural home: `EngineShared::run`
+(`crates/engine/src/runtime.rs:983-989`) hands the executors a *clone* of
+the `Transaction`, so anything `InsertExecutor`
+(`crates/executor/src/operators/insert.rs:69-71`) recorded on
+`ExecutorContext::txn` (`crates/executor/src/context.rs:8`) would be
+dropped with that clone and the manager's copy would see an empty write
+set for every real statement.
 
 **The prune rule is one watermark.** `TransactionManager` exposes the
 oldest `read_ts` among active transactions — the exact analogue of the
@@ -134,6 +144,23 @@ prunes everything prunable. Against that watermark:
   dropped **only together with the heap tuple it describes** — because
   "no chain" means visible, so a chain dropped while a tombstoned tuple
   is still readable resurrects a deleted row.
+- A chain **emptied by an abort** stays in the map at abort time and is
+  dropped later, against the same watermark. `abort_versions` may not
+  remove it on the spot, however empty it is: a scan copies a tuple's
+  bytes out from under the page latch and only *then* asks `is_visible_to`
+  (`crates/executor/src/operators/seq_scan.rs:38-51`; the index scan
+  checks visibility *before* reading the heap, `index_scan.rs:66-85`, so
+  there the same window surfaces as a `CorruptTuple` error over a row the
+  undo has already removed), while `TransactionManager::abort` undoes the
+  pages first and empties the chains after
+  (`crates/txn/src/manager.rs:86-97`), so a reader can be holding the
+  bytes of a row whose undo has already run. The empty chain is what makes
+  that reader drop the row; "no chain" would make it yield a rolled-back
+  one. The chain becomes prunable once the watermark reaches the timestamp
+  the store stamps on it at abort — the next timestamp to be issued at
+  that moment — because every transaction that could still be holding
+  those bytes was active then, therefore has a `read_ts` below that stamp,
+  and the watermark cannot reach it until all of them have finished.
 - Everything else stays.
 
 **That second clause is this ADR's constraint on M14, and the reason the
