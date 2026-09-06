@@ -624,6 +624,13 @@ fresh session reads first:
   yet; the executors and `TransactionManager` wire it up later in the
   same sub-milestone.
 - `txn::VersionChain::visible_version` — `todo!()`; MVCC is M10.3.
+- `common::DbConfig::lock_wait_timeout_ms` and `common::Error::LockTimeout`
+  — the knob is read by nothing and the variant is raised by nothing,
+  because `txn::LockManager::acquire` waits on a `Condvar` with no
+  deadline. `docs/adr/0012-bounded-lock-waits.md` decided both become
+  live; unlike the entries above, what finishes this one is a problem
+  entry rather than a milestone, and until it lands, configuring the knob
+  has no effect.
 
 Milestone numbers here are the roadmap's, and a roadmap number is a
 priority in natural numeric order: an unstarted milestone is renumbered

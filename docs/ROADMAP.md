@@ -289,6 +289,18 @@ simple query flow all have to work before any real client can connect.
 `SET`/`SHOW`/`RESET` accepted as no-ops (pgjdbc sends `SET
 extra_float_digits` during handshake and the connection dies without it).
 Target: `psql` works end to end.
+**Inherited from M10.2:** this listener puts many concurrent clients in
+front of the same fixed eight-thread worker pool
+(`engine::runtime::WORKER_POOL_SIZE`), so a client that holds a lock and
+stops talking is an ordinary event here rather than a contrived one.
+`docs/adr/0012-bounded-lock-waits.md` bounds what that costs — every
+waiter fails with `55P03 lock_not_available` after
+`lock_wait_timeout_ms` and releases its worker, and the error is
+retryable — but it does not raise the ceiling: a blocked statement still
+occupies a worker for the whole of its wait, so this milestone must
+either accept a documented concurrency limit of eight simultaneously
+blocked statements or stop a blocked statement from holding a worker.
+Decide which, and say so in this entry, before the listener ships.
 
 ### M13.3 — Extended query protocol 🆕 New
 **Problem:** simple query (M13.2) inlines literals into full SQL text on
