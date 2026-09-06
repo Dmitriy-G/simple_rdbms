@@ -100,10 +100,23 @@ first; if there are none, the sub-milestone carrying 🚧 in
 sub-milestone under the same parent starts, becoming the task; and if
 that parent has no 🆕 New sub-milestone left, no task at all — the answer
 is to say the milestone looks complete and ask the human whether to hand
-the tree to the Milestone Reviewer, not to invent work. "Schedulable"
-excludes anything signed `Created by: Architect`: those are the
-Architect's own, and only the Architect turns one into a task or resolves
-it. The full procedure is in `.claude/agents/task-writer.md`.
+the tree to the Milestone Reviewer, not to invent work.
+
+"Schedulable" is decided by two tests, and the signature is not one of
+them. An entry carrying `Decision: Will do` has been triaged and
+approved, so it is schedulable whoever raised it — a `Created by:
+Architect` entry included. An entry with no `Decision:` line has not been
+triaged, and there the signature still counts: a fresh Coder, Milestone
+Reviewer or Human entry is a defect that may be scheduled at once, while
+a fresh Architect entry is an open question and waits for the triage.
+Then, either way: an entry whose fix lies wholly in Architect-owned files
+— an ADR, `CLAUDE.md`, `README.md`, roadmap prose, a diagram, a role
+definition — is not a Coder subtask at all, because the Coder may not
+write those files. It stays in the queue, the Task writer names it in its
+reply, and the Architect carries it out and deletes it. A mixed entry is
+split: the code half becomes a subtask, the prose half goes to the
+Architect, and the entry stays until both halves are done. The full
+procedure is in `.claude/agents/task-writer.md`.
 
 ## LLM roles and channels
 
@@ -141,15 +154,20 @@ Role: <role name>
    review the project as a whole (documentation, module structure,
    etc.). Records findings in that same file, as entries signed
    `Created by: Architect`, carrying their own evidence — file paths and
-   line numbers — and what to do next. Those entries are the Architect's
-   alone: nobody else schedules them and nobody else deletes them, and
-   the Architect is the one role that may write `.claude/task.md` for its
-   own entries. A conclusion that must outlive the working tree becomes
-   an ADR, a roadmap entry or a paragraph here. Also runs the problem
-   triage on request — deciding every entry and correcting the estimate
-   its filer gave it, then, once the human has
-   approved, moving the backlogged ones to `docs/backlog.md`, which is
-   the one move that lets the Architect delete another role's entry.
+   line numbers — and what to do next. An untriaged Architect entry is
+   the Architect's alone, because it is a question rather than a job;
+   once a triage the human approved has marked it `Will do` it is
+   ordinary schedulable work like any other entry, and the Task writer
+   turns it into a subtask unless its fix lands in Architect-owned files.
+   The Architect is also the one role that may write `.claude/task.md`
+   for its own entries. A conclusion that must outlive the working tree
+   becomes an ADR, a roadmap entry or a paragraph here. Also runs the
+   problem triage on request — deciding every entry and correcting the
+   estimate its filer gave it, then, once the human has
+   approved, moving the backlogged ones to `docs/backlog.md`. It deletes
+   another role's entry in exactly two cases: that backlog move, and an
+   entry of any signature whose fix it carried out itself because the
+   files were its own.
    Owns the project's
    cross-cutting prose and its process: `docs/adr/**`, the roadmap's
    entry text (never its status markers), this file, and
@@ -318,6 +336,13 @@ Every path in the repository has exactly one role that may change it.
 "Owns" means: that role makes the change, and any other role that wants
 it changed asks through a channel above.
 
+This table also decides who *carries out* a problem entry: **the fix is
+made by the owner of the files it touches, whatever role found it.** A
+Milestone Reviewer's finding about a false statement in an ADR is the
+Architect's to fix and delete; a Coder's note about a stale sentence in
+`CLAUDE.md` is the same. A role added to this table later inherits that
+rule without anyone rewriting the queue's routing.
+
 | Area | Owner | Notes |
 | --- | --- | --- |
 | `crates/**/*.rs` — source and tests | Coder | The only role that writes Rust. Tests are not a separate area: a subtask's tests ship with its code. |
@@ -332,7 +357,7 @@ it changed asks through a channel above.
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
 | `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. Either one writes into an empty file: emptying it is the human's, and content still in it means no new task may be written. |
 | `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, the human sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it". |
-| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows the signature: the Task writer deletes what it schedules and never an Architect entry, the Architect deletes its own. The one exception to the signature rule is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:` and `Effort:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; the `Decision:` line is the Architect's and the human's alone. |
+| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows who did the work: the Task writer deletes an entry it scheduled in full, and the Architect deletes its own settled entries plus any entry whose fix it carried out in its own files. The one deletion that follows neither is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:` and `Effort:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; the `Decision:` line is the Architect's and the human's alone. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
 Milestone planning is the Task writer's, milestone review is the
@@ -431,13 +456,14 @@ guide once entries start leaving it.
 Per entry:
 - Title: `P-<n>` + a short description.
 - `Created by:` who found it — Coder, Milestone Reviewer, Architect, or
-  Human. This line decides who acts on the entry, so it
-  is not optional. **`Created by: Architect` means the entry belongs to
-  the Architect**: something noticed that wants a judgement call, a design
-  decision, or an investigation before anyone writes code. The Task writer
-  neither schedules nor deletes one; the Architect resolves it, or writes
-  the task for it itself, and reports it to the human either way. Every
-  other signature is schedulable work.
+  Human. It is not optional, and what it decides is what happens to the
+  entry **before** it is triaged. **`Created by: Architect` on an
+  untriaged entry means the entry belongs to the Architect**: something
+  noticed that wants a judgement call, a design decision, or an
+  investigation before anyone writes code, so nobody schedules it and
+  nobody deletes it. Once a triage has marked it `Will do`, the question
+  it raised has been answered and it is schedulable like anything else.
+  Every other signature is schedulable from the moment it is filed.
 - `Importance:`, `Effort:` and `Decision:` — three lines, one field each,
   never joined into one, each separated from its neighbours by a blank
   line like every other paragraph in the entry. `Importance:` carries its
@@ -462,16 +488,20 @@ Per entry:
 
 The file holds open problems only. There is no resolved state and no
 `Status:` line: an entry that has been dealt with is deleted, not
-annotated. Two roles delete, and the signature decides which. The Task
-writer deletes an entry when the corresponding subtask exists in
-`.claude/task.md`, and never touches an Architect one. The Architect
-deletes its own: when the question is settled — and then whatever was
-decided has already graduated to an ADR, a roadmap entry or this file,
-because otherwise deleting the entry loses it — or when it has written
-the task for it. There is a third deletion, and it is the only one that
-crosses the signature: an approved triage, where the Architect moves
-every `decision Backlog` entry — whoever raised it — to `docs/backlog.md`
-in the same edit. Reading the file top to bottom should show exactly the
+annotated. Two roles delete, and **what decides is who did the work, not
+who signed the entry.** The Task writer deletes an entry once the
+corresponding subtask exists in `.claude/task.md` — the whole entry, not
+half of one: an entry it split keeps its place until the Architect has
+done the other half. The Architect deletes its own entries when the
+question is settled — and then whatever was decided has already graduated
+to an ADR, a roadmap entry or this file, because otherwise deleting the
+entry loses it — or when it has written the task for one. It deletes
+anyone's entry whose fix it carried out itself, which is the case for
+every finding that lands in an ADR, this file, `README.md`, roadmap prose
+or a role definition, and says in its reply which entries it consumed.
+The last deletion is an approved triage, where the Architect moves every
+`Decision: Backlog` entry — whoever raised it — to `docs/backlog.md` in
+the same edit. Reading the file top to bottom should show exactly the
 outstanding work and nothing else.
 
 ## Invariants that must not be broken

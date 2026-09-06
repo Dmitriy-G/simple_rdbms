@@ -18,25 +18,40 @@ When asked for the next task, work this queue in order. Do not skip a
 step because the later one looks more interesting.
 
 1. **Read `.claude/problems.md` first.** Every entry in it is open — the
-   file holds nothing else. Take every entry except the ones signed
-   `Created by: Architect` — Coder, Milestone Reviewer and Human entries
-   alike: those are the next task. Write one subtask per problem, in the order you
-   judge best, and stop there. They outrank new milestone work, because
-   each is a defect or a known-wrong thing already in the tree.
+   file holds nothing else, and every schedulable one is the next task.
+   Write one subtask per problem, in the order you judge best, and stop
+   there. They outrank new milestone work, because each is a defect or a
+   known-wrong thing already in the tree.
 
-   **Skip every entry signed `Created by: Architect`.** Those belong to
-   the Architect: a design question, a judgement call, a thing that needs
-   deciding before anyone writes code. The Architect schedules them
-   itself, and resolves them itself. Turning one into a subtask is
-   exactly what the signature exists to prevent, and that holds even if
-   the human names one at you — say it is the Architect's and hand it
-   over rather than writing it. Mention any you skipped in your reply so
-   the human knows what is waiting on a decision.
+   **Two tests decide whether an entry is schedulable, and the signature
+   is not one of them.**
+
+   *Is it decided?* An entry carrying `Decision: Will do` has been
+   through a triage the human approved: the question of whether the
+   project spends time on it is settled, whoever raised it, and a
+   `Created by: Architect` entry is as schedulable as any other. An entry
+   with **no `Decision:` line** has not been triaged yet, and there the
+   signature still matters: a fresh Coder, Milestone Reviewer or Human
+   entry is a defect you may schedule straight away, while a fresh
+   Architect entry is an open question — a judgement call, a design
+   choice, options with no answer yet — so leave it and name it in your
+   reply.
+
+   *Whose files does the fix touch?* An entry whose fix lies wholly in
+   Architect-owned files — an ADR under `docs/adr/`, `CLAUDE.md`,
+   `README.md`, `docs/ROADMAP.md` prose, `docs/diagrams/**`,
+   `.claude/agents/**` — is not a subtask, because the Coder may not
+   write those files. Leave it in the queue and name it in your reply so
+   the human hands it to the Architect, whatever its signature is. An
+   entry that is part code and part Architect prose is **split**: write
+   the code half as a subtask, say in your reply that the prose half is
+   the Architect's, and leave the entry in place for the Architect to
+   consume — you never delete an entry you scheduled only half of. If you
+   cannot tell which side of the line a fix falls, leave it and say so.
 
    Every entry carries `Importance:` and `Effort:` — the role that filed
-   it estimated them — and an entry that has been through a triage the
-   human approved carries `Decision:` as well, one field per line under
-   `Created by:`. Everything still in the file is `Will do`; use those
+   it estimated them — and a triaged entry carries `Decision:` as well,
+   one field per line under `Created by:`. Use those
    lines to order the subtasks, most important first and cheap ones
    early. Never write or edit any of the three: they are the Architect's
    and the human's. The one thing you carry across is `Effort:`, which
@@ -83,8 +98,10 @@ step because the later one looks more interesting.
    gap is the failure.
 
 A human request naming specific work overrides the queue. The one thing
-it does not override is the Architect signature: that entry is scheduled
-by the Architect or not at all.
+it does not override is file ownership: an entry whose fix lands in
+Architect-owned files does not become a Coder subtask because someone
+asked for it, since the Coder would not be allowed to carry it out. Say
+so and hand it over.
 
 ## Consuming a problem
 
@@ -105,8 +122,9 @@ new entry from the `Next entry:` line at the head of
 `.claude/problems.md`, incrementing it: numbers are never reused, and the
 highest one still present is not a reliable guide once entries have left.
 
-Never delete an entry you did not schedule, and never delete one signed
-`Created by: Architect`.
+Never delete an entry you did not schedule, and never delete one you
+scheduled only half of — a split entry stays until the Architect has
+carried out its prose half.
 
 ## Writing task.md
 
