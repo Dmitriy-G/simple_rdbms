@@ -5,17 +5,29 @@ Proves `SeqScanExecutor`/`IndexScanExecutor` actually honor
 table or row locks and instead consults `ctx.version_store` to skip a row
 its own snapshot cannot see, while a scan under any other isolation level
 is unaffected - still locking exactly as `seq_scan.MD`/`index_scan.MD`
-describe. Drives a real `txn::TransactionManager` rather than
-hand-rolled `Transaction`s, since the whole point is to exercise real
-`read_ts`/`commit_ts` allocation and `VersionStore` wiring end to end,
-which the ephemeral, per-call `LockManager`/`VersionStore`
-`tests/support/mod.rs`'s `run_to_completion` builds cannot provide (this
-file does not declare `mod support;` for that reason - it needs one
-`LockManager`/`VersionStore` shared across every `ExecutorContext` it
-builds within a test, not a fresh pair per call).
+describe. Also proves the narrower guarantee `InsertExecutor` depends on
+for that to be safe under real concurrency: that a row's heap bytes and
+its `VersionStore` chain become observable together, never one before the
+other (`executor::operators::insert.MD`'s "MVCC version stamping",
+`storage::heap.MD`'s `TableHeap::insert_tuple_with`). Drives a real
+`txn::TransactionManager` rather than hand-rolled `Transaction`s, since
+the whole point is to exercise real `read_ts`/`commit_ts` allocation and
+`VersionStore` wiring end to end, which the ephemeral, per-call
+`LockManager`/`VersionStore` `tests/support/mod.rs`'s `run_to_completion`
+builds cannot provide (this file does not declare `mod support;` for
+that reason - it needs one `LockManager`/`VersionStore` shared across
+every `ExecutorContext` it builds within a test, not a fresh pair per
+call).
 
 ## Key Components
 
+- `RACE_INSERT_COUNT` - `300`: how many rows the writer thread in
+  `seq_scan_under_snapshot_isolation_never_observes_a_row_before_its_version_chain_exists`
+  inserts, giving the reader thread that many chances to race the write.
+- `RACE_TEST_TIMEOUT` - `30` seconds; the bound the same test's
+  `finished_rx.recv_timeout` uses so a reintroduced race that hangs
+  (rather than merely returns a wrong row) fails the test instead of the
+  suite.
 - `open_pool(pool_size) -> (BufferPool, TempDir)` - private, `#[cfg(test)]`.
   The same temp-dir-backed `BufferPool` construction `tests/seq_scan.rs`
   uses, copied rather than shared via `tests/support/mod.rs` for the
@@ -62,6 +74,37 @@ builds within a test, not a fresh pair per call).
   same shape as the first test but through `IndexScanExecutor` over a
   real B+tree index: a row committed before the reader begins is visible,
   one committed after is not.
+- `insert_registers_a_version_chain_before_the_rid_is_returned` -
+  deterministic, single-threaded check of the postcondition
+  `storage::heap::TableHeap::insert_tuple_with`'s callback contract
+  (`storage::heap.MD`) is meant to guarantee: begins a `SnapshotIsolation`
+  observer *before* a separate writer runs `InsertExecutor`, then,
+  immediately after `InsertExecutor::next` returns, looks up the inserted
+  row's `Rid` via `TableHeap::iter` and asserts `VersionStore::is_visible_to`
+  is already `false` for the observer (whose snapshot predates the
+  insert) and already `true` for the writer itself. This alone cannot
+  distinguish the fixed call order from the old, racy one - by the time
+  `InsertExecutor::next` returns, both orders have already called
+  `record_insert` - so it is a sanity check that a version chain always
+  ends up recorded, not a reproduction of the race; the next test is what
+  actually exercises the ordering.
+- `seq_scan_under_snapshot_isolation_never_observes_a_row_before_its_version_chain_exists` -
+  the concurrent regression test for the same invariant: a writer thread
+  runs `InsertExecutor` for `RACE_INSERT_COUNT` rows back to back inside
+  one transaction that is never committed, while a reader thread
+  concurrently builds a fresh `SeqScanExecutor` in a tight loop under
+  `IsolationLevel::SnapshotIsolation` and records the value of any row it
+  ever sees over an `mpsc` channel. Both threads share the `pool` and
+  `catalog` behind `Arc` (rather than `thread::scope`, since the shared
+  `TransactionManager` state - `txn_manager.lock_manager()`/
+  `version_store()` - already hands out `Arc` clones) so they can run
+  truly concurrently instead of one waiting on the other. The main thread
+  bounds the whole test with `RACE_TEST_TIMEOUT` via
+  `finished_rx.recv_timeout`, then asserts the violations channel is
+  empty: reverting `executor::InsertExecutor::next` to call
+  `heap.insert_tuple` followed by a separate `record_insert` (the bug
+  this regression test guards against) reproducibly fails this assertion
+  with rows the reader should never have been able to see.
 
 ## Usage Example
 

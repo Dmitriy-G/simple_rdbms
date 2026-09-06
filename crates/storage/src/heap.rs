@@ -231,6 +231,18 @@ impl<'pool> TableHeap<'pool> {
     }
 
     pub fn insert_tuple(&mut self, txn_id: TxnId, tuple_bytes: &[u8]) -> Result<Rid, StorageError> {
+        self.insert_tuple_with(txn_id, tuple_bytes, |_rid| {})
+    }
+
+    pub fn insert_tuple_with<F>(
+        &mut self,
+        txn_id: TxnId,
+        tuple_bytes: &[u8],
+        on_insert: F,
+    ) -> Result<Rid, StorageError>
+    where
+        F: FnOnce(Rid),
+    {
         if tuple_bytes.len() > MAX_TUPLE_SIZE {
             return Err(StorageError::TupleTooLarge {
                 size: tuple_bytes.len(),
@@ -243,7 +255,9 @@ impl<'pool> TableHeap<'pool> {
             let mut guard = self.buffer_pool.fetch_page(current)?;
             let mut slotted = SlottedPage::new(&mut guard, txn_id);
             if let Some(slot) = slotted.insert(tuple_bytes)? {
-                return Ok(Rid::new(current, slot));
+                let rid = Rid::new(current, slot);
+                on_insert(rid);
+                return Ok(rid);
             }
             let next = slotted.next_page_id();
             drop(guard);

@@ -7,27 +7,41 @@ for `INSERT ... SELECT` in this grammar, so unlike the other operators
 this is a leaf: `rows` are literal value expressions from the `VALUES`
 clause, not pulled from a child executor.
 
+**MVCC version stamping.** `next` calls
+`heap.insert_tuple_with(ctx.txn.txn_id, &bytes, |rid| { ... })`
+(`storage::heap.MD`) rather than the plain `insert_tuple`: the closure
+calls `ctx.version_store.record_insert(ctx.txn.txn_id, rid, version_bytes)`
+(a clone of the same encoded bytes just written to the heap) while
+`insert_tuple_with` still holds the new tuple's page latch, so the row's
+heap bytes and its MVCC version entry become visible to a concurrent
+reader as a single, indivisible step. Recording the version any later -
+after the page latch is released, as a separate call following
+`insert_tuple` - leaves a window where the row is readable in the heap
+but has no version chain yet, and `txn::VersionStore::is_visible_to`
+treats "no chain" as "visible to everyone," so a concurrent
+`SeqScanExecutor` under `txn::IsolationLevel::SnapshotIsolation` could
+return another transaction's uncommitted row (`txn::version_store.MD`,
+`seq_scan.MD`). The closure only takes the `VersionStore`'s own mutex, no
+other lock, keeping the latch order one-way: a page latch may be held
+while taking the `VersionStore` mutex, but nothing holding that mutex may
+then wait on a page latch or the `LockManager`.
+
 **Locking.** `init` takes `ctx.lock_manager.lock_table(ctx.txn.txn_id,
 table_id, LockMode::Exclusive)` before resolving `first_page_id`, and
 `next` takes `ctx.lock_manager.lock(ctx.txn.txn_id, rid,
 LockMode::Exclusive)` on each row's `Rid` immediately after
-`heap.insert_tuple` returns it, before any index maintenance for that row
-- see `txn::lock_manager.MD`. Locking a row this executor itself just
-inserted can never block (no other transaction can know its `Rid` yet),
-but it still registers the row in this transaction's held-lock set so
-`TransactionManager::release_all` (`txn::manager.MD`) accounts for it at
-commit or abort. `InsertExecutor` always takes this row lock, regardless
-of isolation level: it is what resolves a write-write conflict against
-another writer, which snapshot isolation still needs even though its
-readers stop taking locks (`txn::version_store.MD`).
-
-**MVCC version stamping.** Right after the row lock, `next` calls
-`ctx.version_store.record_insert(ctx.txn.txn_id, rid, bytes)`, handing
-over the same encoded `bytes` just written to the heap. This registers
-the row as an uncommitted version so a `SeqScanExecutor`/`IndexScanExecutor`
-running under `txn::IsolationLevel::SnapshotIsolation` will not return it
-to another transaction until `ctx.txn.txn_id` commits (see
-`txn::version_store.MD` and `seq_scan.MD`).
+`heap.insert_tuple_with` returns it - deliberately outside the version-
+stamping closure, since taking a row lock can block and nothing may wait
+on the `LockManager` while a page latch is held - and before any index
+maintenance for that row (see `txn::lock_manager.MD`). Locking a row this
+executor itself just inserted can never block (no other transaction can
+know its `Rid` yet), but it still registers the row in this
+transaction's held-lock set so `TransactionManager::release_all`
+(`txn::manager.MD`) accounts for it at commit or abort. `InsertExecutor`
+always takes this row lock, regardless of isolation level: it is what
+resolves a write-write conflict against another writer, which snapshot
+isolation still needs even though its readers stop taking locks
+(`txn::version_store.MD`).
 
 **Index maintenance.** Before the row loop, `next` resolves
 `ctx.catalog.indexes_for_table(self.table_id)` once into a `Vec<IndexTarget>`

@@ -139,7 +139,21 @@ pages that stores a table's tuples before (or in place of) any index.
   heap's first page. `insert_tuple(&mut self, txn_id, tuple_bytes) ->
   Result<Rid, StorageError>` inserts `tuple_bytes`, returning the `Rid`
   it now lives at. Tries the last-known page first, allocating and
-  linking a new one if it doesn't fit there. `append_page_after(&mut
+  linking a new one if it doesn't fit there. Implemented as
+  `insert_tuple_with(txn_id, tuple_bytes, |_rid| {})` - a no-op callback.
+  `insert_tuple_with<F: FnOnce(Rid)>(&mut self, txn_id, tuple_bytes,
+  on_insert) -> Result<Rid, StorageError>` does the same insert but calls
+  `on_insert(rid)` with the tuple's new `Rid` while the page's
+  `PageWriteGuard` is still held, before returning - closing the window a
+  caller would otherwise have between "row readable in the heap" and
+  "row's bookkeeping recorded elsewhere" (see `executor::InsertExecutor`,
+  which passes a closure recording the row's MVCC version so a concurrent
+  `SeqScanExecutor` can never observe the row with no version chain at
+  all, `executor::operators::insert.MD`). `on_insert` must not block: it
+  runs with the page's write latch held, so it may take another mutex
+  (e.g. `txn::VersionStore`'s) but must never wait on the `LockManager` or
+  fetch another page, or it risks the latch-ordering rule
+  (`CLAUDE.md`'s "Invariants that must not be broken"). `append_page_after(&mut
   self, txn_id, after) -> Result<PageId, StorageError>` (private)
   allocates a new, empty page and links it after `after` in the chain.
   `get_tuple(&self, rid) -> Result<Option<Vec<u8>>, StorageError>` reads
@@ -187,8 +201,9 @@ for entry in heap.iter() {
 storage (see `catalog::persist`); `executor::SeqScanExecutor` drives
 `TableHeap::scan_page` one step at a time rather than `iter()`, so it
 never holds a page pinned across the executor's own pull-based iteration
-boundary; `executor::InsertExecutor` calls `insert_tuple` for each
-evaluated row. `catalog::Catalog::update_index_root_page` calls
+boundary; `executor::InsertExecutor` calls `insert_tuple_with` for each
+evaluated row, passing a closure that records the row's MVCC version
+before the page latch is released. `catalog::Catalog::update_index_root_page` calls
 `update_tuple_in_place` to rewrite an index catalog row's root page id
 after a B+tree root split, in place rather than via `delete_tuple` +
 `insert_tuple` - the index-catalog heap would otherwise grow a dead slot

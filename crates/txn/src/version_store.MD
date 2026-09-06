@@ -22,9 +22,12 @@ isn't wired up.
 - `VersionStore::record_insert(&self, txn_id, rid, tuple_bytes)` - pushes
   a new, uncommitted `VersionEntry` (`begin_ts: None`, `end_ts: None`)
   onto `rid`'s chain, creating the chain if this is the row's first
-  recorded version. Called by the insert executor right after the heap
-  assigns the `Rid`, so the row exists on disk but stays invisible to
-  every other transaction until its creator commits.
+  recorded version. Called by the insert executor from the closure it
+  passes to `storage::heap::TableHeap::insert_tuple_with`
+  (`storage::heap.MD`, `executor::operators::insert.MD`), which runs
+  while the row's page latch is still held - so the row's bytes become
+  readable in the heap and this version entry exist as one indivisible
+  step, and no reader can ever observe the row with no chain at all.
 - `VersionStore::commit_versions(&self, txn_id, commit_ts)` - calls
   `VersionChain::mark_committed(txn_id, commit_ts)` on every chain in the
   store, making `txn_id`'s versions visible to readers with a snapshot at
@@ -87,8 +90,9 @@ assert!(store.is_visible(rid, 10));
 ```
 
 `executor::ExecutorContext` carries a `version_store: &'a VersionStore`
-field: `InsertExecutor` calls `record_insert` right after the heap
-assigns a new row's `Rid`, and `SeqScanExecutor`/`IndexScanExecutor` call
+field: `InsertExecutor` calls `record_insert` from the callback it hands
+to `TableHeap::insert_tuple_with`, while the new row's page latch is
+still held, and `SeqScanExecutor`/`IndexScanExecutor` call
 `is_visible_to` under `txn::IsolationLevel::SnapshotIsolation` instead of
 taking a shared row lock (`executor::operators::insert.MD`/
 `seq_scan.MD`/`index_scan.MD`).
