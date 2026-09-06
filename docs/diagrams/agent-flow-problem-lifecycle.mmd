@@ -13,14 +13,14 @@ flowchart TD
     SRC3["Milestone Reviewer — what per-subtask<br/>review structurally could not see"]:::role
     SRC4["Architect — a judgement call, a design<br/>question, a finding from a project review,<br/>with its evidence in the entry"]:::role
 
-    PROB[".claude/problems.md — the open queue:<br/>P-n title, Created by: role,<br/>Importance: and Effort: from the filer,<br/>Reason, Description,<br/>How to prevent in future.<br/>Number taken from the 'Next entry:' line"]:::channel
+    PROB[".claude/problems.md — the open queue:<br/>P-n title, Created by: role,<br/>Importance:, Effort:, Thinking: from the filer,<br/>Reason, Description,<br/>How to prevent in future.<br/>Number taken from the 'Next entry:' line"]:::channel
 
     NEXT(["Human asks for the next task"]):::human
     TW["Task writer reads problems.md<br/>before docs/ROADMAP.md"]:::role
-    WHO{"Triaged Will do?<br/>If not, Created by?"}
+    WHO{"Thinking: 🔧 Low<br/>and Decision: Will do?"}
     WHOSE{"Whose files does the fix touch?"}
 
-    SKIP["Left in the queue, not deleted.<br/>Mention it in the reply so the human<br/>knows what is waiting on a decision"]:::stop
+    SKIP["🧠 High, or not yet triaged:<br/>left in the queue, not deleted.<br/>Listed in the reply so the human<br/>knows what is waiting on a decision"]:::stop
     ARCHFIX["Architect-owned files — an ADR,<br/>CLAUDE.md, README.md, roadmap prose,<br/>a diagram, a role definition.<br/>The Architect fixes it and deletes the<br/>entry, whoever signed it, and says<br/>in its reply which it consumed.<br/>A mixed entry is split, and stays<br/>until both halves are done"]:::role
     HUMANCALL{"Human decides"}:::human
     ARCHINV["Architect takes it back<br/>— see agent-flow-investigation.mmd"]:::role
@@ -28,9 +28,9 @@ flowchart TD
     DELINV["Settled instead: the conclusion graduates<br/>to an ADR, a roadmap entry or CLAUDE.md,<br/>and only then is the entry deleted"]:::stop
 
     REVIEW(["Human asks for a triage —<br/>a task, a sub-milestone or a<br/>milestone has just finished"]):::human
-    ARCHREV["Architect adds Decision: to every entry,<br/>whoever signed it, and corrects an<br/>Importance: or Effort: the filer got wrong.<br/>Nothing moved, nothing deleted.<br/>Reports the table and stops"]:::role
+    ARCHREV["Architect adds Decision: to every entry,<br/>whoever signed it, and corrects an<br/>Importance:, Effort: or Thinking:<br/>the filer got wrong.<br/>Nothing moved, nothing deleted.<br/>Reports the table and stops"]:::role
     APPROVE{"Human reviews the estimates,<br/>edits any by hand, approves"}:::human
-    ACCEPT["Backlog: moved to docs/backlog.md<br/>— heading, one or two sentences,<br/>Created: date, Importance:, Effort:,<br/>each on its own line, entries split by ---<br/>— and deleted from problems.md in<br/>the same edit. The one deletion that<br/>crosses the signature.<br/>Nobody schedules from that file"]:::stop
+    ACCEPT["Backlog: moved to docs/backlog.md<br/>— heading, one or two sentences,<br/>Created: date, Importance:, Effort:,<br/>Thinking:, each on its own line,<br/>entries split by ---<br/>— and deleted from problems.md in<br/>the same edit. The one deletion that<br/>crosses the signature.<br/>Nobody schedules from that file"]:::stop
     REVIVE{"Architect proposes a revive:<br/>says which entry and what changed,<br/>then stops. The human decides"}:::human
     REVIVED["Approved: the Architect deletes the<br/>backlog entry and files a fresh P- entry<br/>citing it, in the same edit. A problem<br/>whose code is gone is deleted outright<br/>instead, and nothing re-enters the queue"]:::role
     WILLDO["Will do: stays in the queue with its<br/>three triage lines, which the Task writer<br/>orders the subtasks by"]:::channel
@@ -58,12 +58,12 @@ flowchart TD
     REVIVE -- "human approves" --> REVIVED --> PROB
 
     NEXT --> TW --> WHO
-    WHO -- "untriaged and Architect-signed —<br/>a question, not a job; not scheduled<br/>even if the human names it" --> SKIP --> HUMANCALL
-    HUMANCALL -- "act on it, or look into it —<br/>either way it goes to the Architect" --> ARCHINV
+    WHO -- "no — 🧠 High is a question,<br/>not a job; never scheduled,<br/>even if the human names it" --> SKIP --> HUMANCALL
+    HUMANCALL -- "hands it to the Architect —<br/>the one route a 🧠 High entry has" --> ARCHINV
     ARCHINV -- "decided: it needs code" --> ARCHTASK --> CODER
     ARCHINV -- "decided: no code needed" --> DELINV
     ARCHINV -- "decided: minor and expensive —<br/>put it up for the next triage" --> ARCHREV
-    WHO -- "triaged Will do, whoever signed it,<br/>or untriaged from Coder,<br/>Milestone Reviewer, Human" --> WHOSE
+    WHO -- "yes — 🔧 Low and decided,<br/>whoever signed it" --> WHOSE
     WHOSE -- "Architect's" --> ARCHFIX
     WHOSE -- "Coder's" --> ANYOPEN
     ANYOPEN -- no --> MILESTONE

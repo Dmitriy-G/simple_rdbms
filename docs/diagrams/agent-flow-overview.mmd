@@ -30,7 +30,7 @@ flowchart LR
     ARCH -- "CLAUDE.md, entry prose, agent files" --> ROADMAP
     ARCH -- "writes the task for its own entries" --> TASK
 
-    PROB -- "read first: open entries outrank<br/>new milestone work, except untriaged<br/>Architect-signed ones and any fix that<br/>lands in Architect-owned files" --> TW
+    PROB -- "read first: 🔧 Low entries outrank<br/>new milestone work. 🧠 High ones, and any<br/>fix landing in Architect-owned files,<br/>are left for the human to route" --> TW
     TW -- "deletes each entry it schedules" --> PROB
     ROADMAP -- "read second" --> TW
     TW -- "writes, into an empty file only" --> TASK

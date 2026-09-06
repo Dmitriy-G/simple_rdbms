@@ -137,13 +137,13 @@ A `Decision:` clause too long for the line wraps onto the next one, like
 any other prose in the entry. Change nothing else in the file. No entry
 is moved, deleted, reworded or renumbered in this pass; an entry that
 already carries a `Decision:` from an earlier round is re-read and all
-three lines updated in place if the estimate has changed. Then report the
-whole set as a table in your reply — entry, importance, effort, decision,
-and say which estimates you changed and why — and stop. The human reviews
-it, edits any line by hand, and approves.
+four lines updated in place if the estimate has changed. Then report the
+whole set as a table in your reply — entry, importance, effort, thinking,
+decision, and say which estimates you changed and why — and stop. The
+human reviews it, edits any line by hand, and approves.
 
-The three scales, and the icon each importance carries, are defined in
-`docs/backlog.md` and defined only there; read them and use them rather
+The four scales, and the icons importance and thinking carry, are defined
+in `docs/backlog.md` and defined only there; read them and use them rather
 than inventing your own words for them. Judge effort as work for the
 Coder — code, tests and `.MD`s together — and remember that anything
 touching storage, the WAL, recovery or the buffer pool costs at least an
@@ -163,12 +163,12 @@ backlogging it.
 Only after the human approves. Every entry whose `Decision:` line reads
 `Backlog` becomes a `docs/backlog.md` entry — a heading, one or two
 sentences saying what is wrong and why it is not being done, then
-`Created:` with today's date in `YYYY-MM-DD`, `Importance:` and
-`Effort:`, each on its own line with a blank line between, the same shape
-the queue uses — and is deleted from `.claude/problems.md` in the same
-edit. Entries there are separated from each other by a `---` rule, so a
-reader can never mistake one entry's sentences for the next one's.
-Everything marked `Will do` stays exactly where it is, its three triage
+`Created:` with today's date in `YYYY-MM-DD`, `Importance:`, `Effort:`
+and `Thinking:`, each on its own line with a blank line between, the same
+shape the queue uses — and is deleted from `.claude/problems.md` in the
+same edit. Entries there are separated from each other by a `---` rule,
+so a reader can never mistake one entry's sentences for the next one's.
+Everything marked `Will do` stays exactly where it is, its four triage
 lines included, so the Task writer can order subtasks by them.
 
 This is the single case where you may delete an entry you did not sign,

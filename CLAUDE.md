@@ -248,12 +248,14 @@ Every finding goes to `.claude/problems.md`, whoever found it, signed
 with `Created by:`. That line is the whole difference between a defect a
 reviewer found, something the Coder noticed in passing, and an Architect
 finding that needs a decision — one queue, one numbering scheme, one
-place for the Task writer to look. Whoever files an entry also estimates
-it — `Importance:` and `Effort:`, on the scales `docs/backlog.md`
-defines — because the role holding the evidence is the cheapest place to
-get a first number; what nobody but the Architect and the human writes is
-`Decision:`, since that is the call about whether the project spends time
-on it. An Architect entry carries its own
+place for the Task writer to look. Whoever files an entry also fills in
+`Importance:`, `Effort:` and `Thinking:`, on the scales
+`docs/backlog.md` defines, because the role holding the evidence is the
+cheapest place to get a first answer; what nobody but the Architect and
+the human writes is `Decision:`, since that is the call about whether the
+project spends time on it. `Thinking:` is the routing field: `🔧 Low`
+work reaches the Coder through the Task writer, `🧠 High` work reaches
+the Architect through the human, and nothing routes itself. An Architect entry carries its own
 evidence and citations in the entry itself; there is no separate place
 for that reasoning to accumulate.
 
@@ -326,7 +328,7 @@ human sitting between them:
 4. **The Architect moves the backlog.** Every entry whose `Decision:`
    reads `Backlog` is summarized into `docs/backlog.md` and deleted
    from `.claude/problems.md` in the same edit. What remains in the queue
-   is the will-do list, each entry keeping its three triage lines so the
+   is the will-do list, each entry keeping its four triage lines so the
    Task writer can order subtasks by them.
 
 The decision follows from the two criteria together: `High` is always
@@ -375,7 +377,7 @@ rule without anyone rewriting the queue's routing.
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
 | `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `.claude/agents/task-writer.md` exactly either way. Either one writes into an empty file: emptying it is the human's, and content still in it means no new task may be written. |
 | `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, the human sets ✅ | Each role moves the status only to its own rung, and only for the subtask it is working. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it". |
-| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows who did the work: the Task writer deletes an entry it scheduled in full, and the Architect deletes its own settled entries plus any entry whose fix it carried out in its own files. The one deletion that follows neither is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:` and `Effort:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; the `Decision:` line is the Architect's and the human's alone. |
+| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows who did the work: the Task writer deletes an entry it scheduled in full, and the Architect deletes its own settled entries plus any entry whose fix it carried out in its own files. The one deletion that follows neither is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:`, `Effort:` and `Thinking:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; the `Decision:` line is the Architect's and the human's alone. `Thinking:` decides who works the entry — `🔧 Low` to the Coder through the Task writer, `🧠 High` to the Architect through the human. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
 Milestone planning is the Task writer's, milestone review is the
