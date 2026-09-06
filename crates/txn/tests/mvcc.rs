@@ -2,7 +2,7 @@ use common::TxnId;
 use txn::{VersionChain, VersionEntry};
 
 fn entry(creator: u64, begin_ts: Option<u64>, end_ts: Option<u64>) -> VersionEntry {
-    VersionEntry { creator_txn_id: TxnId(creator), begin_ts, end_ts, tuple_bytes: vec![] }
+    VersionEntry { creator_txn_id: TxnId(creator), begin_ts, end_ts }
 }
 
 #[test]

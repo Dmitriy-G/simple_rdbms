@@ -145,7 +145,7 @@ fn a_committed_writers_version_is_visible_only_to_readers_begun_at_or_after_its_
     let read_ts_before = manager.get(reader_before)?.read_ts;
 
     let writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
-    manager.version_store().record_insert(writer, rid, b"row".to_vec());
+    manager.version_store().record_insert(writer, rid);
     assert!(!manager.version_store().is_visible(rid, read_ts_before));
 
     manager.commit(writer, &pool)?;
@@ -172,11 +172,11 @@ fn an_aborted_writers_version_never_resurfaces_for_a_later_committed_writer()
     let rid = Rid::new(PageId(0), 0);
 
     let aborted_writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
-    manager.version_store().record_insert(aborted_writer, rid, b"row".to_vec());
+    manager.version_store().record_insert(aborted_writer, rid);
     manager.abort(aborted_writer, &pool)?;
 
     let later_writer = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
-    manager.version_store().record_insert(later_writer, rid, b"real row".to_vec());
+    manager.version_store().record_insert(later_writer, rid);
 
     let reader_before_commit = manager.begin(&pool, IsolationLevel::ReadCommitted)?;
     let read_ts_before_commit = manager.get(reader_before_commit)?.read_ts;

@@ -19,10 +19,14 @@ isn't wired up.
   only rows a running process has itself inserted, committed or aborted
   carry a chain.
 - `VersionStore::new() -> Self` - an empty store.
-- `VersionStore::record_insert(&self, txn_id, rid, tuple_bytes)` - pushes
-  a new, uncommitted `VersionEntry` (`begin_ts: None`, `end_ts: None`)
-  onto `rid`'s chain, creating the chain if this is the row's first
-  recorded version. Called by the insert executor from the closure it
+- `VersionStore::record_insert(&self, txn_id, rid)` - pushes a new,
+  uncommitted `VersionEntry` (`begin_ts: None`, `end_ts: None`) onto
+  `rid`'s chain, creating the chain if this is the row's first recorded
+  version. Carries no copy of the row's bytes - visibility is a boolean,
+  and the scan executors already read the row's bytes back from the heap,
+  so a second copy here would just be a second copy of the whole database
+  living in memory for the life of the process. Called by the insert
+  executor from the closure it
   passes to `storage::heap::TableHeap::insert_tuple_with`
   (`storage::heap.MD`, `executor::operators::insert.MD`), which runs
   while the row's page latch is still held - so the row's bytes become
@@ -63,6 +67,13 @@ isn't wired up.
   `is_visible`, since a transaction that cannot see its own uncommitted
   `INSERT` inside `BEGIN; INSERT ...; SELECT ...` would be a correctness
   bug, not merely a stricter isolation level.
+- `VersionStore::chain_count(&self) -> usize` - the number of chains
+  currently in the map, `#[cfg(any(test, feature = "test-util"))]` in the
+  style of `LockManager::held_lock_count` (`lock_manager.MD`). Test-only:
+  it exists so a test can pin the store's growth rule (one chain per
+  distinct `Rid` ever recorded, growing forever since there is no GC -
+  see `abort_versions` above) rather than only inferring it indirectly
+  through visibility checks.
 
 Scanning every chain in `commit_versions`/`abort_versions` rather than
 tracking each transaction's touched `Rid`s separately is a chosen
@@ -82,7 +93,7 @@ use txn::VersionStore;
 let store = VersionStore::new();
 let rid = Rid::new(PageId(3), 0);
 
-store.record_insert(TxnId(1), rid, b"row bytes".to_vec());
+store.record_insert(TxnId(1), rid);
 assert!(!store.is_visible(rid, 10));
 
 store.commit_versions(TxnId(1), 10);

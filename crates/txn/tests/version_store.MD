@@ -44,6 +44,14 @@ regardless of what commits later.
   committed, `is_visible_to` for a *different* transaction's id agrees
   exactly with plain `is_visible`: invisible one tick before the commit
   timestamp, visible at it.
+- `chain_count_tracks_one_chain_per_distinct_rid_recorded` - records and
+  commits a version for 20 distinct `Rid`s and checks `chain_count()`
+  equals 20, then records and commits one more version against an
+  already-seen `Rid` and checks the count is unchanged - pinning the
+  store's actual growth rule (one chain per distinct `Rid` ever recorded,
+  regardless of how many versions or transactions touch it, and never
+  shrinking - there is no GC) so a future change to that rule fails this
+  test loudly instead of only being noticed as a memory-growth surprise.
 
 ## Usage Example
 
@@ -54,7 +62,7 @@ use txn::VersionStore;
 let store = VersionStore::new();
 let rid = Rid::new(PageId(0), 1);
 
-store.record_insert(TxnId(1), rid, b"row".to_vec());
+store.record_insert(TxnId(1), rid);
 assert!(!store.is_visible(rid, 0));
 
 store.commit_versions(TxnId(1), 5);
@@ -67,3 +75,10 @@ Run as part of `cargo test --workspace`; this is the crate's proof that
 (`../src/manager.MD`) actually allocating the timestamps `commit_versions`,
 `is_visible`, and `is_visible_to` are driven with in a running
 transaction - `tests/lifecycle.rs` covers that integration.
+`chain_count_tracks_one_chain_per_distinct_rid_recorded` needs
+`VersionStore::chain_count`, gated `#[cfg(any(test, feature =
+"test-util"))]`: this file links against the crate's normal (non-`--cfg
+test`) build like any integration test, so `../Cargo.toml`'s
+self-referencing `txn` dev-dependency with `test-util` enabled is what
+makes it visible here, the same way `crates/storage/Cargo.toml` does for
+`storage`'s own `tests/`.

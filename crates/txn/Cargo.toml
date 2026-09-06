@@ -9,9 +9,12 @@ publish.workspace = true
 workspace = true
 
 [features]
-# Exposes `LockManager::held_lock_count`, for a caller outside this crate's
-# own `#[cfg(test)]` binary (`engine`'s integration tests) to assert every
-# lock a transaction held was actually released.
+# Exposes `LockManager::held_lock_count` and `VersionStore::chain_count`,
+# for a caller outside this crate's own `#[cfg(test)]` binary (`engine`'s
+# integration tests, and this crate's own `tests/` - see the
+# self-referencing dev-dependency below) to assert every lock a
+# transaction held was actually released, or how many version chains the
+# store currently holds.
 test-util = []
 
 [dependencies]
@@ -22,5 +25,10 @@ tracing = { workspace = true }
 metrics = { workspace = true }
 
 [dev-dependencies]
+# Self-referenced with `test-util` enabled so this crate's own integration
+# tests (under `tests/`) can see `VersionStore::chain_count`: they link
+# against a normal (non-`--cfg test`) build of this library, the same as
+# any other crate's tests would.
+txn = { workspace = true, features = ["test-util"] }
 test-support = { workspace = true }
 tempfile = { workspace = true }

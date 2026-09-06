@@ -66,9 +66,8 @@ impl Executor for InsertExecutor {
             let tuple = Tuple::new(values);
             let mut bytes = Vec::new();
             tuple.encode(&mut bytes);
-            let version_bytes = bytes.clone();
             let rid = heap.insert_tuple_with(ctx.txn.txn_id, &bytes, |rid| {
-                ctx.version_store.record_insert(ctx.txn.txn_id, rid, version_bytes);
+                ctx.version_store.record_insert(ctx.txn.txn_id, rid);
             })?;
             ctx.lock_manager.lock(ctx.txn.txn_id, rid, LockMode::Exclusive)?;
 

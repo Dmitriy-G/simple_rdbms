@@ -5,7 +5,6 @@ pub struct VersionEntry {
     pub creator_txn_id: TxnId,
     pub begin_ts: Option<u64>,
     pub end_ts: Option<u64>,
-    pub tuple_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Default)]

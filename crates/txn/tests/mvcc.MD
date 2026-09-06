@@ -10,8 +10,7 @@ version becomes visible at its `begin_ts` and stops being visible at its
 ## Key Components
 
 - `entry(creator, begin_ts, end_ts) -> VersionEntry` - private. Builds a
-  `VersionEntry` with empty `tuple_bytes` for tests that only care about
-  the visibility fields.
+  `VersionEntry` from just the visibility fields, which are all it has.
 - `uncommitted_entry_is_never_visible` - a `VersionEntry` with
   `begin_ts: None` is invisible at every `read_ts` tried, including one
   far in the future.
@@ -53,7 +52,6 @@ chain.push(VersionEntry {
     creator_txn_id: TxnId(1),
     begin_ts: Some(5),
     end_ts: None,
-    tuple_bytes: vec![],
 });
 assert!(chain.visible_version(4).is_none());
 assert!(chain.visible_version(5).is_some());

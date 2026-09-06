@@ -16,13 +16,12 @@ impl VersionStore {
         Self::default()
     }
 
-    pub fn record_insert(&self, txn_id: TxnId, rid: Rid, tuple_bytes: Vec<u8>) {
+    pub fn record_insert(&self, txn_id: TxnId, rid: Rid) {
         let mut chains = recover_lock(self.chains.lock(), "VersionStore.chains");
         chains.entry(rid).or_default().push(VersionEntry {
             creator_txn_id: txn_id,
             begin_ts: None,
             end_ts: None,
-            tuple_bytes,
         });
     }
 
@@ -54,5 +53,11 @@ impl VersionStore {
             Some(chain) => chain.visible_version_for(reader_txn_id, read_ts).is_some(),
             None => true,
         }
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn chain_count(&self) -> usize {
+        let chains = recover_lock(self.chains.lock(), "VersionStore.chains");
+        chains.len()
     }
 }

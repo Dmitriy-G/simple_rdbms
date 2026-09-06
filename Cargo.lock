@@ -1132,6 +1132,7 @@ dependencies = [
  "test-support",
  "thiserror",
  "tracing",
+ "txn",
 ]
 
 [[package]]

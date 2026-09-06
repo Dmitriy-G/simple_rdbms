@@ -10,11 +10,13 @@ clause, not pulled from a child executor.
 **MVCC version stamping.** `next` calls
 `heap.insert_tuple_with(ctx.txn.txn_id, &bytes, |rid| { ... })`
 (`storage::heap.MD`) rather than the plain `insert_tuple`: the closure
-calls `ctx.version_store.record_insert(ctx.txn.txn_id, rid, version_bytes)`
-(a clone of the same encoded bytes just written to the heap) while
+calls `ctx.version_store.record_insert(ctx.txn.txn_id, rid)` while
 `insert_tuple_with` still holds the new tuple's page latch, so the row's
 heap bytes and its MVCC version entry become visible to a concurrent
-reader as a single, indivisible step. Recording the version any later -
+reader as a single, indivisible step. `record_insert` takes no copy of
+`bytes` - visibility is a boolean, and a reader that needs the row's
+actual bytes reads them back from the heap the ordinary way, not from
+the version store (`txn::mvcc.MD`'s `VersionEntry`). Recording the version any later -
 after the page latch is released, as a separate call following
 `insert_tuple` - leaves a window where the row is readable in the heap
 but has no version chain yet, and `txn::VersionStore::is_visible_to`
