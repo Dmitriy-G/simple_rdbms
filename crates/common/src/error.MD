@@ -151,14 +151,14 @@ had to change, from stringifying to matching.
     arrive. `detail` is an internal diagnostic string, never
     user-supplied, so `redacted()` includes it verbatim like every other
     non-literal-carrying variant.
-  - `LockTimeout` -> `LOCK_NOT_AVAILABLE` (55P03), Error. A `BEGIN` or
-    autocommit statement parked behind another session's open explicit
-    transaction (`engine::runtime.MD`'s waiter queue) and the holder
-    neither committed nor rolled back before `DbConfig::lock_wait_timeout_ms`
-    elapsed. Same SQLSTATE as `DatabaseLocked` since both mean "this
-    resource is held elsewhere," but `Error` rather than `Fatal`: the
-    connection that timed out waiting is still fine, only the statement
-    failed.
+  - `LockTimeout` -> `LOCK_NOT_AVAILABLE` (55P03), Error. Defined and
+    mapped, but raised by no code path today: `txn::LockManager::acquire`
+    waits on its condvar with no deadline and relies solely on deadlock
+    detection, so a lock wait can end in a granted lock or a
+    `DeadlockDetected` victim, never a timeout. Same SQLSTATE as
+    `DatabaseLocked` since both would mean "this resource is held
+    elsewhere," but `Error` rather than `Fatal`, since a statement that
+    timed out waiting would leave the connection itself still fine.
   - `IdleInTransactionTimeout` -> `IDLE_IN_TRANSACTION_SESSION_TIMEOUT`
     (25P03), Error. The engine aborted this session's own explicit
     transaction because no statement arrived within

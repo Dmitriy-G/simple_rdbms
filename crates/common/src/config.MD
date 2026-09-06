@@ -21,9 +21,10 @@ resolved rather than reaching back up to ask for them.
   into more than one. `slow_query_warn_threshold_ms` is how long a
   statement may run before `Database::execute` logs it at `warn` instead
   of the ordinary `debug` per-statement line - see CLAUDE.md's logging
-  section. `lock_wait_timeout_ms` bounds how long a `BEGIN` or autocommit
-  statement parks waiting for another session's open explicit transaction
-  to finish before failing with `55P03`. `idle_in_transaction_timeout_ms`
+  section. `lock_wait_timeout_ms` is configurable but read by no code path
+  today - `txn::LockManager::acquire` waits on its condvar with no
+  deadline and relies solely on deadlock detection, so setting this field
+  has no effect. `idle_in_transaction_timeout_ms`
   bounds how long an explicit transaction may sit with no statement
   arriving before the engine aborts it on its own.
 - `DbConfig::DEFAULT_PAGE_SIZE` - 4 KiB, matching common OS page sizes.
