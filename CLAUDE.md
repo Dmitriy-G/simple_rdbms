@@ -63,7 +63,8 @@ name a branch:
    reading first: 0003 (index after the log), 0004 (what ACID means
    here today), 0005 (the durability boundary after the double-write
    buffer), 0008 (write-guard reentrancy), 0009 (buffer pool frame
-   ownership), 0010 (waiting for a frame instead of failing).
+   ownership), 0010 (waiting for a frame instead of failing), 0014 (no
+   catalog lock spans a statement).
 3. `docs/backlog.md` — the problems this project knows about and has
    decided not to do. Something listed there is not a finding to report
    again; it is a decision already made.
@@ -705,6 +706,18 @@ mistake at review time.
   it goes through `PageWriteGuard::write` like any other page, so it is
   redone and undone exactly like the rest of the database rather than
   racing ahead of it as an unlogged direct write.
+- **No catalog lock spans a statement.** There is one live `Catalog` for a
+  `Database`'s lifetime, it is never replaced, and it synchronizes itself:
+  a caller holds a `&Catalog` and no lock, each call taking an internal
+  lock and releasing it before it returns. A reload reads from disk and
+  installs into that same object, excluding only other *mutators* — never
+  readers — through the catalog's own mutation lock, which is ordered
+  above every buffer pool latch. Holding a catalog lock across an
+  executor's row loop is what made one slow `SELECT` stall every other
+  session (`docs/adr/0014-catalog-is-a-live-shared-object.md`), and
+  `crates/engine/tests/catalog_reload_race.rs` and
+  `crates/engine/tests/dispatch_never_blocks.rs` are the two suites that
+  hold the two halves of this in place.
 - **Errors are logged once, at the engine boundary.** See the "Error
   handling" section below rather than duplicating it here.
 
