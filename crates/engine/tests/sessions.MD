@@ -92,6 +92,25 @@ everything else exercises exactly one connection.
   reading (`txn::lock_manager.MD`) rather than an inference from the
   session no longer reporting an active transaction, which would pass
   even if `release_all` were never called.
+- `blocked_waiters_time_out_and_free_their_workers_so_the_holders_commit_completes` -
+  the regression test for `docs/adr/0012-bounded-lock-waits.md`'s pool-
+  exhaustion hazard: a 200ms `lock_wait_timeout_ms`, a holder session that
+  `BEGIN`s and `INSERT`s without committing (so it keeps the table's
+  `Exclusive` lock), and eight more sessions - one per worker in
+  `runtime.rs`'s `WORKER_POOL_SIZE` - each sending a conflicting `INSERT`
+  at the same time, occupying every worker in the pool with a blocked
+  lock wait. The holder's own `COMMIT` is dispatched to the same pool
+  concurrently and is asserted to complete within
+  `CONCURRENT_TEST_TIMEOUT`, which is far shorter than the 60s
+  `idle_in_transaction_timeout_ms` default that used to be the only way
+  such a wedge ever cleared: before `LockManager::acquire` had a bound, a
+  `COMMIT` queued behind eight permanently blocked waiters had no way to
+  be dispatched at all. The eight waiter threads are joined afterward
+  without asserting which of `LockTimeout` or a late success each got,
+  since once the holder's `COMMIT` releases the lock a waiter still
+  within its own deadline is legitimately granted it instead of timing
+  out - the only thing this test pins down is that no worker stays wedged
+  forever.
 - `open_file(path)`/`wal_base_path(dir) -> PathBuf` - private helpers for
   the one test below that opens `Database::open_with_devices` directly
   (`database.MD`) against real files it can also inspect independently

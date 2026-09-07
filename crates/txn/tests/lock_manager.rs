@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{PageId, Rid, TableId, TxnId};
 use txn::{LockManager, LockMode, TxnError};
@@ -177,6 +177,25 @@ fn opposite_order_locking_produces_a_deadlock_victim_for_exactly_one_side() {
             panic!("the surviving side must be granted once the victim releases, got {other:?}")
         }
     }
+}
+
+#[test]
+fn acquire_returns_lock_timeout_within_the_configured_bound_instead_of_blocking_forever() {
+    let bound = Duration::from_millis(50);
+    let locks = LockManager::with_timeout(bound);
+    let r = rid(1);
+    assert!(locks.lock(TxnId(1), r, LockMode::Exclusive).is_ok());
+
+    let started = Instant::now();
+    match locks.lock(TxnId(2), r, LockMode::Exclusive) {
+        Err(TxnError::LockTimeout(2)) => {}
+        other => panic!("expected a bounded wait to return LockTimeout, got {other:?}"),
+    }
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < TIMEOUT,
+        "a wait bounded at {bound:?} must return well within {TIMEOUT:?}, took {elapsed:?}"
+    );
 }
 
 #[test]

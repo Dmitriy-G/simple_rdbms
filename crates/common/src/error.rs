@@ -221,6 +221,7 @@ impl Error {
             SqlState::SERIALIZATION_FAILURE
                 | SqlState::DEADLOCK_DETECTED
                 | SqlState::STATEMENT_COMPLETION_UNKNOWN
+                | SqlState::LOCK_NOT_AVAILABLE
         )
     }
 

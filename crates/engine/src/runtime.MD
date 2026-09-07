@@ -353,8 +353,12 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   lock rather than requiring `&mut self` the way the pre-M10.2 `EngineState`
   did. `EngineShared::open(config, disk_manager, dwb, log_manager) ->
   Result<Self>` - repairs a torn page from the double-write buffer, stands
-  up the buffer pool, runs ARIES recovery, bootstraps or loads the catalog
-  under its own committed transaction (begun under
+  up the buffer pool, runs ARIES recovery, builds the `TransactionManager`
+  via `TransactionManager::with_lock_wait_timeout(highest_txn_id,
+  config.lock_wait_timeout_ms)` so every lock wait is bounded by the
+  configured value rather than the crate default
+  (`docs/adr/0012-bounded-lock-waits.md`, `txn::manager.MD`), bootstraps or
+  loads the catalog under its own committed transaction (begun under
   `txn::IsolationLevel::SnapshotIsolation`, like every transaction this
   file begins - see the M10.3 note below), and emits the `info!`
   "database opened" event, identical in behavior to the pre-split

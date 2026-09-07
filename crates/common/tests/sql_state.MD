@@ -17,13 +17,14 @@ gap nobody notices.
   accident just because production code was updated and the test wasn't.
 - `every_error_variant_maps_to_its_sql_state` - asserts `err.sql_state()`
   equals `expected_sql_state(&err)` for every sample.
-- `is_retryable_is_true_only_for_class_40_codes` - asserts
+- `is_retryable_is_true_only_for_the_documented_transient_codes` - asserts
   `err.is_retryable()` equals "this sample's SQLSTATE is
-  `SERIALIZATION_FAILURE`, `DEADLOCK_DETECTED`, or
-  `STATEMENT_COMPLETION_UNKNOWN`" for every sample - since only two samples
-  (`SerializationFailure`, `DeadlockDetected`) are currently class-40
-  codes, this also pins down that `is_retryable` is `false` for the other
-  twenty-six.
+  `SERIALIZATION_FAILURE`, `DEADLOCK_DETECTED`, `STATEMENT_COMPLETION_UNKNOWN`,
+  or `LOCK_NOT_AVAILABLE`" for every sample - `LOCK_NOT_AVAILABLE` joined
+  the set in `docs/adr/0012-bounded-lock-waits.md`, and since it is also
+  `DatabaseLocked`'s SQLSTATE, this test is what pins down that
+  `DatabaseLocked` became retryable too as a consequence, rather than that
+  being a regression nobody noticed.
 
 ## Usage Example
 

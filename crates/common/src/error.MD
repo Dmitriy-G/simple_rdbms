@@ -151,14 +151,20 @@ had to change, from stringifying to matching.
     arrive. `detail` is an internal diagnostic string, never
     user-supplied, so `redacted()` includes it verbatim like every other
     non-literal-carrying variant.
-  - `LockTimeout` -> `LOCK_NOT_AVAILABLE` (55P03), Error. Defined and
-    mapped, but raised by no code path today: `txn::LockManager::acquire`
-    waits on its condvar with no deadline and relies solely on deadlock
-    detection, so a lock wait can end in a granted lock or a
-    `DeadlockDetected` victim, never a timeout. Same SQLSTATE as
-    `DatabaseLocked` since both would mean "this resource is held
+  - `LockTimeout` -> `LOCK_NOT_AVAILABLE` (55P03), Error, **retryable**.
+    From `txn::TxnError::LockTimeout`: `txn::LockManager::acquire` waits on
+    its condvar with an absolute deadline computed once on entry
+    (`DbConfig::lock_wait_timeout_ms`, default 5s, `0` meaning wait
+    forever) and returns this once that deadline passes without the lock
+    becoming available, per `docs/adr/0012-bounded-lock-waits.md`. Same
+    SQLSTATE as `DatabaseLocked` since both mean "this resource is held
     elsewhere," but `Error` rather than `Fatal`, since a statement that
-    timed out waiting would leave the connection itself still fine.
+    timed out waiting leaves the connection itself still fine. Sharing a
+    SQLSTATE with `DatabaseLocked` means `is_retryable` below, which
+    matches by SQLSTATE rather than by variant, reports `DatabaseLocked`
+    as retryable too - reconnecting later can succeed once the other
+    process closes the file, so that is accurate rather than a side
+    effect to work around.
   - `IdleInTransactionTimeout` -> `IDLE_IN_TRANSACTION_SESSION_TIMEOUT`
     (25P03), Error. The engine aborted this session's own explicit
     transaction because no statement arrived within
@@ -181,10 +187,14 @@ had to change, from stringifying to matching.
 - `Error::severity(&self) -> Severity` - `Error` or `Fatal` per variant,
   per the table above; matches the wire-protocol severities so a future
   server layer knows whether the *connection* survives a given failure.
-- `Error::is_retryable(&self) -> bool` - `true` only when `sql_state()` is
-  `SqlState::SERIALIZATION_FAILURE` or `SqlState::STATEMENT_COMPLETION_UNKNOWN` -
-  the two class-40 codes the standard defines specifically so a client
-  knows to retry the whole transaction rather than surface the failure.
+- `Error::is_retryable(&self) -> bool` - `true` when `sql_state()` is
+  `SqlState::SERIALIZATION_FAILURE`, `SqlState::DEADLOCK_DETECTED`,
+  `SqlState::STATEMENT_COMPLETION_UNKNOWN`, or `SqlState::LOCK_NOT_AVAILABLE` -
+  the class-40 codes the standard defines specifically so a client knows to
+  retry the whole transaction rather than surface the failure, plus
+  `LOCK_NOT_AVAILABLE` per `docs/adr/0012-bounded-lock-waits.md`: a lock
+  held by another transaction is by definition transient, so a bounded
+  wait that expired should not be reported as unretryable.
 - `Error::redacted(&self) -> String` - the same message `Display` would
   produce, except every field that can hold a user-supplied value is
   replaced with `?`; schema identifiers (table names, column names, data

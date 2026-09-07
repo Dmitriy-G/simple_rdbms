@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use common::{Lsn, TxnId};
+use common::{DbConfig, Lsn, TxnId};
 use storage::buffer::BufferPool;
 use storage::recovery;
 use storage::wal::LogRecordKind;
@@ -23,11 +24,17 @@ pub struct TransactionManager {
 
 impl TransactionManager {
     pub fn new(highest_seen: Option<TxnId>) -> Self {
+        Self::with_lock_wait_timeout(highest_seen, DbConfig::DEFAULT_LOCK_WAIT_TIMEOUT_MS)
+    }
+
+    pub fn with_lock_wait_timeout(highest_seen: Option<TxnId>, lock_wait_timeout_ms: u64) -> Self {
         let next_txn_id = highest_seen.map_or(0, |TxnId(id)| id + 1);
         Self {
             active: HashMap::new(),
             next_txn_id,
-            lock_manager: Arc::new(LockManager::new()),
+            lock_manager: Arc::new(LockManager::with_timeout(Duration::from_millis(
+                lock_wait_timeout_ms,
+            ))),
             version_store: Arc::new(VersionStore::new()),
             next_ts: 0,
         }

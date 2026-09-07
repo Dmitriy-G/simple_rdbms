@@ -8,7 +8,11 @@ Errors raised by the transaction subsystem.
   `LockManager::lock`/`lock_table` finds that granting the request would
   close a cycle in the wait-for graph; the detector broke the cycle by
   choosing this transaction (named by its raw id) as the victim before it
-  ever blocks. `LockAfterUnlock(u64)` is raised when a transaction calls
+  ever blocks. `LockTimeout(u64)` is raised when a transaction
+  (named by its raw id) was still blocked on a conflicting lock once its
+  `LockManager`'s configured wait bound passed
+  (`docs/adr/0012-bounded-lock-waits.md`, `lock_manager.MD`).
+  `LockAfterUnlock(u64)` is raised when a transaction calls
   `LockManager::lock`/`lock_table` after `LockManager::release_all` was
   already called for it - under strict two-phase locking a transaction's
   shrinking phase is instantaneous (everything releases at once, at
@@ -23,6 +27,9 @@ Errors raised by the transaction subsystem.
   `common::Error::DeadlockDetected` (SQLSTATE `40P01`, distinct from the
   `SERIALIZATION_FAILURE` `40001` a future MVCC snapshot conflict would
   raise, even though both are class 40 and equally retryable);
+  `LockTimeout` becomes `common::Error::LockTimeout` (SQLSTATE
+  `LOCK_NOT_AVAILABLE` `55P03`, retryable - a lock held by another
+  transaction is by definition transient);
   `LockAfterUnlock`/`UnknownTransaction` become `common::Error::Internal`,
   since both mean this crate's own bookkeeping was violated rather than
   anything a client's SQL caused; `Storage` delegates to

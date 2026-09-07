@@ -8,7 +8,12 @@ partial, mid-transaction unlock exists, since strict 2PL forbids one.
 across every worker thread running a statement against the same database
 (`docs/ROADMAP.md`'s M10.2), so it protects its own state with a `Mutex`
 and blocks waiters on a `Condvar` rather than requiring a caller to
-serialize access itself. Two independent resource spaces share one
+serialize access itself. The wait is bounded rather than indefinite
+(`docs/adr/0012-bounded-lock-waits.md`): a waiter that outlasts its
+configured `timeout` gives up with `TxnError::LockTimeout` instead of
+blocking forever, which is what stops a fixed-size worker pool wedging
+when every worker is blocked on a lock the one session that could
+release it never gets to run. Two independent resource spaces share one
 instance - row locks, keyed by `Rid`, and table locks, keyed by
 `TableId` - so a table-level lock and a row-level lock on a row inside
 that table are unrelated as far as this module is concerned; the executor
@@ -43,9 +48,16 @@ and deadlocks directly against this module instead.
 - `LockManager` - the lock manager. `state: Mutex<State>` holds every
   resource's current holders and every blocked transaction's pending
   request; `released: Condvar` wakes every blocked call after any
-  `release_all`.
+  `release_all`; `timeout: Duration` bounds how long `acquire` blocks
+  before giving up, per `docs/adr/0012-bounded-lock-waits.md`.
 - `LockManager::new() -> Self` - creates a lock manager with no locks
-  held.
+  held, using `common::DbConfig::DEFAULT_LOCK_WAIT_TIMEOUT_MS` (5s) as its
+  wait bound.
+- `LockManager::with_timeout(timeout) -> Self` - the same, with the wait
+  bound set explicitly. `timeout == Duration::ZERO` means wait forever,
+  matching Postgres's `lock_timeout = 0`; this is how
+  `txn::TransactionManager::with_lock_wait_timeout` threads
+  `DbConfig::lock_wait_timeout_ms` down from `engine::Database::open`.
 - `LockManager::lock(&self, txn_id, rid, mode) -> Result<(), TxnError>` -
   acquires a lock on `rid` in `mode` on behalf of `txn_id`. Returns
   immediately if `txn_id` already holds `mode` or a stronger mode on
@@ -54,6 +66,14 @@ and deadlocks directly against this module instead.
   until the conflicting lock(s) are released, unless granting would first
   require blocking behind a cycle in the wait-for graph, in which case it
   returns `TxnError::DeadlockVictim` immediately without blocking at all.
+  The wait is bounded by `timeout`, computed once as an absolute deadline
+  when the call first has to block rather than re-derived from
+  `Instant::now()` on every wakeup - `Condvar::wait_timeout` returns on
+  every notification and every spurious wakeup, and the retry loop
+  re-evaluates conflicts each time, so re-deriving the timeout inside the
+  loop would restart the clock on every unrelated `release_all` and would
+  not be a bound at all. Returns `TxnError::LockTimeout` once that
+  deadline passes without the lock becoming available.
   Returns `TxnError::LockAfterUnlock` if `release_all` has already run for
   `txn_id`.
 - `LockManager::lock_table(&self, txn_id, table_id, mode) -> Result<(), TxnError>` -

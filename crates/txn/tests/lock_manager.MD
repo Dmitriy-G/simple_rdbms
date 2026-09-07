@@ -31,6 +31,12 @@ the CI job.
 - `release_all_wakes_every_waiter` - two transactions both blocked behind
   one `Exclusive` holder are both granted `Shared` once `release_all` runs
   for the holder, proving the wakeup isn't limited to one waiter.
+- `acquire_returns_lock_timeout_within_the_configured_bound_instead_of_blocking_forever` -
+  a `LockManager::with_timeout(50ms)` whose one lock is held by another
+  transaction returns `TxnError::LockTimeout` to a conflicting request
+  well within `TIMEOUT`, instead of blocking indefinitely the way
+  `LockManager::new`'s default-length wait would -
+  `docs/adr/0012-bounded-lock-waits.md`'s proof that the deadline is real.
 - `opposite_order_locking_produces_a_deadlock_victim_for_exactly_one_side` -
   two transactions each hold one `Rid` and then request the other's, in
   opposite order; exactly one request fails with

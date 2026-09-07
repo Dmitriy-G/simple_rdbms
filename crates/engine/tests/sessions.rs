@@ -190,6 +190,57 @@ fn locks_are_released_after_commit_and_after_abort() -> Result<(), Box<dyn Error
     Ok(())
 }
 
+#[test]
+fn blocked_waiters_time_out_and_free_their_workers_so_the_holders_commit_completes()
+-> Result<(), Box<dyn Error>> {
+    const WAITERS: usize = 8;
+
+    let dir = tempfile::tempdir()?;
+    let config =
+        DbConfig { lock_wait_timeout_ms: 200, ..DbConfig::new(dir.path().join("test.db")) };
+    let mut holder = Database::open(config)?;
+    holder.execute("CREATE TABLE t (a INTEGER)")?;
+    holder.execute("BEGIN")?;
+    holder.execute("INSERT INTO t VALUES (0)")?;
+
+    let waiter_sessions: Vec<_> =
+        (0..WAITERS).map(|_| holder.connect().expect("connect must succeed")).collect();
+
+    let (waiter_tx, waiter_rx) = mpsc::channel();
+    let waiter_handles: Vec<_> = waiter_sessions
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut session)| {
+            let waiter_tx = waiter_tx.clone();
+            thread::spawn(move || {
+                let result = session.execute(&format!("INSERT INTO t VALUES ({})", i + 1));
+                let _ = waiter_tx.send(());
+                result
+            })
+        })
+        .collect();
+    drop(waiter_tx);
+
+    thread::sleep(Duration::from_millis(50));
+
+    let (commit_tx, commit_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = holder.execute("COMMIT");
+        let _ = commit_tx.send(result);
+    });
+
+    recv_within(&commit_rx, CONCURRENT_TEST_TIMEOUT, "the holder's COMMIT to complete")?;
+
+    for _ in 0..WAITERS {
+        recv_within(&waiter_rx, CONCURRENT_TEST_TIMEOUT, "a blocked waiter to finish");
+    }
+    for handle in waiter_handles {
+        let _ = handle.join().expect("waiter thread must not panic");
+    }
+
+    Ok(())
+}
+
 fn wal_base_path(dir: &Path) -> PathBuf {
     let mut path = dir.join("test.db").into_os_string();
     path.push(".wal");

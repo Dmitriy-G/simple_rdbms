@@ -100,14 +100,15 @@ fn every_error_variant_maps_to_its_sql_state() {
 }
 
 #[test]
-fn is_retryable_is_true_only_for_class_40_codes() {
+fn is_retryable_is_true_only_for_the_documented_transient_codes() {
     for err in sample_errors() {
-        let is_class_40 = matches!(
+        let is_transient = matches!(
             err.sql_state(),
             SqlState::SERIALIZATION_FAILURE
                 | SqlState::DEADLOCK_DETECTED
                 | SqlState::STATEMENT_COMPLETION_UNKNOWN
+                | SqlState::LOCK_NOT_AVAILABLE
         );
-        assert_eq!(err.is_retryable(), is_class_40, "wrong is_retryable for {err:?}");
+        assert_eq!(err.is_retryable(), is_transient, "wrong is_retryable for {err:?}");
     }
 }

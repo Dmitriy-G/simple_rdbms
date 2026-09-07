@@ -19,7 +19,8 @@ transaction had already written.
   snapshot isolation, shared the same way, and `next_ts`, the counter
   behind `next_timestamp` below.
 - `TransactionManager::new(highest_seen) -> Self` - creates a manager with
-  no active transactions, a fresh, empty `LockManager`, a fresh, empty
+  no active transactions, a fresh, empty `LockManager` bounded by
+  `common::DbConfig::DEFAULT_LOCK_WAIT_TIMEOUT_MS`, a fresh, empty
   `VersionStore`, and its timestamp counter at `0`, handing out ids
   starting past `highest_seen` — the highest `TxnId` `recovery::recover`
   observed anywhere in the log, or `None` for a log that has never
@@ -30,6 +31,17 @@ transaction had already written.
   records, and — if that old id was a "phantom winner" left by a crash
   between a `Commit` and its `End` — could even make a brand new,
   never-committed transaction look already committed.
+- `TransactionManager::with_lock_wait_timeout(highest_seen, lock_wait_timeout_ms) -> Self` -
+  the same as `new`, except the `LockManager` it builds is bounded by
+  `lock_wait_timeout_ms` instead of the default
+  (`LockManager::with_timeout`, `lock_manager.MD`), `0` meaning wait
+  forever. `engine::runtime::EngineShared::open` calls this with
+  `DbConfig::lock_wait_timeout_ms` so the configured bound actually
+  reaches the lock manager, the same way it threads
+  `idle_in_transaction_timeout_ms` into `EngineShared` itself
+  (`docs/adr/0012-bounded-lock-waits.md`). `new` is kept, calling this
+  with the default, so every existing caller that doesn't care about the
+  bound keeps building unchanged.
 - `TransactionManager::lock_manager(&self) -> &Arc<LockManager>` - the
   shared lock manager every transaction this `TransactionManager` tracks
   locks and unlocks through. `executor::ExecutorContext` carries a clone

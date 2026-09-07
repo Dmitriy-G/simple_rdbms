@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use common::sync::recover_lock;
-use common::{Rid, TableId, TxnId};
+use common::{DbConfig, Rid, TableId, TxnId};
 
 use crate::error::TxnError;
 
@@ -65,15 +66,26 @@ fn would_deadlock(state: &State, start: TxnId, blockers: &[TxnId]) -> bool {
     false
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct LockManager {
     state: Mutex<State>,
     released: Condvar,
+    timeout: Duration,
+}
+
+impl Default for LockManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LockManager {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_timeout(Duration::from_millis(DbConfig::DEFAULT_LOCK_WAIT_TIMEOUT_MS))
+    }
+
+    pub fn with_timeout(timeout: Duration) -> Self {
+        Self { state: Mutex::new(State::default()), released: Condvar::new(), timeout }
     }
 
     pub fn lock(&self, txn_id: TxnId, rid: Rid, mode: LockMode) -> Result<(), TxnError> {
@@ -117,6 +129,8 @@ impl LockManager {
         if state.finished.contains(&txn_id) {
             return Err(TxnError::LockAfterUnlock(txn_id.0));
         }
+        let deadline =
+            if self.timeout.is_zero() { None } else { Some(Instant::now() + self.timeout) };
         loop {
             state.waiting_for.remove(&txn_id);
 
@@ -145,7 +159,21 @@ impl LockManager {
             }
 
             state.waiting_for.insert(txn_id, (resource, mode));
-            state = recover_lock(self.released.wait(state), "LockManager.state");
+            state = match deadline {
+                None => recover_lock(self.released.wait(state), "LockManager.state"),
+                Some(deadline) => {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        state.waiting_for.remove(&txn_id);
+                        return Err(TxnError::LockTimeout(txn_id.0));
+                    }
+                    let (guard, _) = recover_lock(
+                        self.released.wait_timeout(state, remaining),
+                        "LockManager.state",
+                    );
+                    guard
+                }
+            };
         }
     }
 }

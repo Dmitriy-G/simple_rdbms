@@ -525,7 +525,8 @@ impl EngineShared {
 
         let highest_txn_id = recovery::recover(&buffer_pool)?;
 
-        let mut txn_manager = TransactionManager::new(highest_txn_id);
+        let mut txn_manager =
+            TransactionManager::with_lock_wait_timeout(highest_txn_id, config.lock_wait_timeout_ms);
         let bootstrap_txn = txn_manager.begin(&buffer_pool, IsolationLevel::SnapshotIsolation)?;
         let catalog = Catalog::open(&buffer_pool, bootstrap_txn)?;
         txn_manager.commit(bootstrap_txn, &buffer_pool)?;

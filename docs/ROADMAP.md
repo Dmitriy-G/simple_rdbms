@@ -208,7 +208,7 @@ which a snapshot-isolated database does not require.
 consistent snapshot without taking row locks, letting readers and writers
 stop blocking each other.
 
-### M10.4 — Bounded, prunable version storage 🚧 In Progress
+### M10.4 — Bounded, prunable version storage ✅ Done
 **Problem:** M10.3's `txn::VersionStore` is only ever appended to. It
 gains a chain for every row inserted since process start and loses one
 never, so a long-running engine holds version state proportional to
