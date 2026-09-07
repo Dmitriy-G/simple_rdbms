@@ -77,11 +77,22 @@ step because the later one looks more interesting.
 
    If no sub-milestone carries 🚧 at all, there is nothing to close, and
    what you do next depends on the parent above the last finished one. If
-   it is ✅ Done, the Milestone Reviewer has passed it: take the first 🆕
-   New sub-milestone of the next parent, set it and its parent to 🚧, and
-   write its task. If it is still 🚧 with everything under it ✅ Done,
+   it is ✅ Done, the Milestone Reviewer has passed it: **the next
+   milestone is the lowest-numbered one that is not ✅ Done**, whether it
+   stands at 🆕 New or at ⏸️ Hold. Take its first 🆕 New sub-milestone,
+   set that sub-milestone and its parent to 🚧, and write its task. A
+   parent coming off ⏸️ Hold is resumed, not restarted: its entry says
+   which part already shipped, and the sub-milestones already ✅ Done
+   under it stay Done. If it is still 🚧 with everything under it ✅ Done,
    that is case 3 below and not an invitation to start the next
    parent — the review has not happened yet.
+
+   **Only one parent carries 🚧 at a time.** If setting a parent to 🚧
+   would make it the second, the first is finished or it is not: a parent
+   left incomplete because the work moved elsewhere goes to ⏸️ Hold in
+   the same edit that starts the new one. You never have two milestones
+   in progress, and you never leave a partly delivered one looking
+   untouched at 🆕.
 3. **If that was the last sub-milestone** — the parent's final 🚧 has
    reached ✅ Done, whether you moved it just now or on an earlier turn,
    and nothing under it is left at 🆕 New — write no task at all. Leave the parent at 🚧 In Progress, say the
@@ -230,16 +241,20 @@ burying it in a subtask.
 
 ## Roadmap status
 
-Two transitions are yours, both on *sub*-milestones:
+Three transitions are yours:
 
-- 🆕 New to 🚧 In Progress, when you write that sub-milestone's first
-  task. At most one sub-milestone carries 🚧 at a time, the one being
-  written right now. A parent carries 🚧 whenever it is partly delivered,
-  so several parents can hold it at once, and you set a parent to 🚧 when
-  you start the first sub-milestone under it.
+- 🆕 New or ⏸️ Hold to 🚧 In Progress, when you write that
+  sub-milestone's first task. At most one sub-milestone carries 🚧 at a
+  time, the one being written right now, and you set its parent to 🚧 in
+  the same edit.
 - 🚧 In Progress to ✅ Done, when its task is fully accepted and
   `.claude/problems.md` holds nothing schedulable — step 2 of the queue
   above, in the same edit that starts the next sub-milestone.
+- 🚧 In Progress to ⏸️ Hold, on a parent you are moving away from while
+  it is still incomplete. **Exactly one parent carries 🚧**, so starting
+  a different milestone means the one you leave takes Hold in that same
+  edit — never two 🚧, never a partly delivered milestone dropped back to
+  🆕 as though nothing had shipped.
 
 You never set ✅ Done on a parent milestone. That is the Milestone
 Reviewer's, and it means the milestone's functionality was reviewed as a

@@ -256,7 +256,10 @@ Allowed, without asking:
   one back out needs the human to approve it first, every time: see
   "Reviving a backlog entry" below.
 - `docs/adr/**` — new ADRs and corrections to existing ones.
-- `docs/ROADMAP.md` — entry prose only, never a status marker.
+- `docs/ROADMAP.md` — entry prose, and on an entry you are writing for
+  the first time its opening status: 🆕 New, or ⏸️ Hold when part of the
+  work has already shipped ahead of order, which the entry then has to
+  say. No other status marker, ever.
 - `README.md` and `CLAUDE.md`.
 - `docs/diagrams/**`.
 - `.claude/agents/*.md` and `.claude/settings*.json`.
@@ -270,8 +273,9 @@ Forbidden:
 - `crates/*/README.md` — the Coder's, like the code it describes.
 - `scripts/**`, `.github/workflows/**`, `Cargo.toml`, `Dockerfile`,
   `.gitignore` — executable configuration is code.
-- `docs/ROADMAP.md` status markers past 🆕: 🚧 and a sub-milestone's ✅
-  are the Task writer's, a parent's ✅ is the Milestone Reviewer's.
+- `docs/ROADMAP.md` status markers past a new entry's own 🆕 or ⏸️: 🚧,
+  a later ⏸️ and a sub-milestone's ✅ are the Task writer's, a parent's ✅
+  is the Milestone Reviewer's.
   Recommending a status change is fine; making it is not — except when
   you are writing `.claude/task.md` under the section below, where the
   Task writer's own markers come with the job.
@@ -300,7 +304,7 @@ empty `.claude/task.md` — the human empties it once the previous task is
 accepted, and content still in it means there is no room for a new task,
 so you say so and stop rather than clearing or overwriting it — move the
 sub-milestone markers if the task is milestone work (the finished one
-🚧 → ✅, the one you are starting 🆕 → 🚧, never a parent), and keep the
+🚧 → ✅, the one you are starting 🆕 or ⏸️ → 🚧, never a parent), and keep the
 task short. Put a `For:` line under the title — `For: Coder` or
 `For: Architect`, decided by the `Thinking:` of the entries it schedules
 — and on every Order Plan line, beside its status marker, both story

@@ -127,7 +127,9 @@ gap, or a documented rule that is now false.
   reply is gone by the next session. One entry per finding, each naming
   the Done-when line or invariant it violates. Do not invent a status
   between 🚧 and ✅, and do not move a sub-milestone back off ✅ Done —
-  the entries are what reopens the work.
+  the entries are what reopens the work. ⏸️ Hold is not that status
+  either: it means work stopped with nobody on it, and a milestone under
+  review with entries against it is exactly the milestone being worked.
 
 Those entries are also what restarts the loop: they outrank new milestone
 work, so the Task writer's next task is the repair, and the milestone

@@ -122,7 +122,11 @@ by hand:
    `For: Coder` task. If that parent has no 🆕 New sub-milestone left,
    write no task — say the milestone looks complete and ask the human
    whether to hand the tree to the Milestone Reviewer, rather than
-   inventing work.
+   inventing work. Once it is Done, the next milestone is the
+   lowest-numbered one still unfinished, 🆕 New or ⏸️ Hold alike: it
+   becomes the single 🚧 parent, and a milestone taken off Hold is
+   resumed rather than restarted, since the entry says which part of it
+   already shipped.
 
 An entry is schedulable when it carries `Thinking:` and
 `Decision: Will do`. Both lines come from a triage, so **nothing is
@@ -470,7 +474,7 @@ needs one field and not two.
 | `README.md`, `CLAUDE.md` | Architect | Repository-level prose. "What works today" claims here are checked by the Milestone Reviewer at the end of each milestone. |
 | `docs/adr/**` | Architect | A decision worth an ADR is recorded by the role that investigated it. |
 | `docs/ROADMAP.md` — entry prose | Architect | Including retiring or splitting an entry. |
-| `docs/ROADMAP.md` — status markers | Architect sets 🆕 on a new entry, Task writer sets 🚧 and ✅ on a sub-milestone, Milestone Reviewer sets ✅ on a parent | Nobody else. ✅ on a parent means the milestone's functionality was reviewed as a whole and works, which is the gate that makes "Done" mean something. |
+| `docs/ROADMAP.md` — status markers | Architect sets 🆕 on a new entry, and ⏸️ Hold on a new entry whose work has already partly shipped; Task writer sets 🚧, ⏸️ and ✅ on a sub-milestone and 🚧/⏸️ on its parent; Milestone Reviewer sets ✅ on a parent | Nobody else. Exactly one parent carries 🚧 at a time; everything else partly delivered is ⏸️ Hold. ✅ on a parent means the milestone's functionality was reviewed as a whole and works, which is the gate that makes "Done" mean something. |
 | `docs/backlog.md` | Architect | The checked-in list of problems the project has decided not to do. An entry gets there only through an approved triage, and leaves only when the human approves a revive — the Architect then deletes it and files a fresh `P-` entry in the same edit — or when the problem it describes is gone. |
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
@@ -565,17 +569,30 @@ stops being a specification anyone can trust. What a role wants to say
 goes in `.claude/problems.md` and in its reply.
 
 A **milestone or sub-milestone** in `docs/ROADMAP.md` carries one of
-three:
+four:
 
 | Status | Meaning | Set by |
 | --- | --- | --- |
 | 🆕 New | not started | Architect, when it writes the entry |
-| 🚧 In Progress | started | Task writer, when it writes the sub-milestone's first task |
+| 🚧 In Progress | being worked right now | Task writer, when it writes the sub-milestone's first task |
+| ⏸️ Hold | started, then stopped; partly delivered and nobody on it | Task writer, when it moves to another milestone leaving this one incomplete; Architect, when it writes an entry whose work has already partly shipped |
 | ✅ Done | finished and accepted | Task writer on a sub-milestone; Milestone Reviewer on a parent |
 
-On a sub-milestone, 🚧 means someone is writing code for it now, and at
-most one sub-milestone anywhere carries it. On a parent, 🚧 means partly
-delivered, so several parents may carry it at once.
+**Exactly one parent milestone carries 🚧**, and under it at most one
+sub-milestone does. That is the whole point of the marker: the roadmap is
+worked top to bottom, in number order, and one 🚧 is how the file answers
+"what is being worked on" in a single line. Two would mean it no longer
+answers it.
+
+⏸️ Hold is what a milestone gets instead when work under it has shipped
+but nothing is happening now — M13 with its first sub-milestone done and
+the rest untouched, or M23 with a piece of its grammar work landed early
+while another milestone was being built. Hold says nothing about
+priority: the number still decides when the milestone is picked up, and
+the marker only warns that the part already in the tree is not a promise
+anybody is currently keeping. A milestone on Hold goes back to 🚧 when
+the roadmap reaches it in order, which is also the moment the milestone
+that was 🚧 stops being it.
 
 A **sub-milestone** reaches ✅ Done when the Task writer moves off it:
 every subtask of its task accepted by the human, and

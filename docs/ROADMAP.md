@@ -24,16 +24,26 @@ milestone — a `.MD` file, a `// TODO(Mx):` marker, `CLAUDE.md` — moves
 with it, so renumbering and updating those references are one change,
 never two.
 
-Each heading carries one of three statuses, and each is set by exactly
+Each heading carries one of four statuses, and each is set by exactly
 one role:
 
 - **🆕 New** — not started. The Architect sets it when the entry is
   written.
-- **🚧 In Progress** — started. The Task writer sets it when it writes
-  the sub-milestone's first task. On a sub-milestone this means someone is
-  writing code for it right now, and at most one sub-milestone across the
-  roadmap carries it. On a parent it means partly delivered, so several
-  parents can carry it at once.
+- **🚧 In Progress** — the work happening right now. **Exactly one parent
+  milestone in this file carries it**, and under that parent at most one
+  sub-milestone does: one active path, so "what is being worked on" is a
+  question the file answers in a single line. The Task writer sets it
+  when it writes that sub-milestone's first task.
+- **⏸️ Hold** — started and stopped. Something under this milestone has
+  shipped — a finished sub-milestone, or code that landed early while a
+  different milestone was being built — but nobody is working it now.
+  The Task writer sets it when it moves to another milestone leaving this
+  one incomplete, and the Architect sets it when it writes an entry for
+  work that has already partly shipped. Hold is not a priority: the
+  number still says when the work gets picked up, and the marker says
+  only that the part already in the tree is not a promise anyone is
+  currently keeping. It goes back to 🚧 when the roadmap reaches it in
+  order.
 - **✅ Done** — on a *sub*-milestone, the Task writer sets it as it moves
   on: every subtask of that sub-milestone's task accepted by the human,
   and `.claude/problems.md` holding nothing schedulable against it. On a
@@ -41,6 +51,11 @@ one role:
   sub-milestone under it is Done; there it asserts that the milestone's
   functionality was reviewed as a whole and works, not merely that its
   parts were ticked.
+
+Work happens **in roadmap order**. A milestone further down the file that
+already has code in it is on Hold, not in progress: it is the exception
+that got made once, not a second front. That is why only one 🚧 exists —
+two would mean the file no longer says what happens next.
 
 ## M1 — Durable, fixed-size storage ✅ Done
 **Problem:** a database needs a way to persist bytes to disk in units the
@@ -276,7 +291,7 @@ distinct from the interactive `cli` REPL; and container packaging
 file on a named volume, and `SIGTERM` handled as a graceful checkpoint
 -and-close instead of every restart paying for a full crash recovery.
 
-## M13 — Speaking SQL over the network 🚧 In Progress
+## M13 — Speaking SQL over the network ⏸️ Hold
 **Problem:** everything built so far requires an in-process `Database`
 handle - `cli`'s REPL and `server`'s metrics/health endpoints both open
 the database directly in the same process that uses it. Nothing external
@@ -557,7 +572,7 @@ Until this lands, the M13.2 listener must bind to `127.0.0.1` by default
 and require an explicit opt-in to bind anywhere else — record that as a
 constraint in the M13.2 entry, not as a footnote here.
 
-## M23 — Joins and cost-based planning 🚧 In Progress
+## M23 — Joins and cost-based planning ⏸️ Hold
 **Problem:** three things the planner cannot do are really one thing it
 cannot do. `FROM` accepts exactly one table, so multi-table questions
 have no expression at all. `IndexScanRule` picks an index whenever a
@@ -590,7 +605,8 @@ choosing among them are M23.2, and join ordering is M23.3.
 binder's `table_scope` resolution, which makes an aliased table's real
 name go out of scope for qualification) already landed ahead of `JOIN`
 itself existing. Nothing here should reintroduce it — it is also why the
-parent carries 🚧 rather than 🆕.
+parent carries ⏸️ Hold rather than 🆕: part of this milestone is already
+in the tree, shipped ahead of order, and nobody is working the rest.
 
 ### M23.2 — Statistics and single-table cost 🆕 New
 **Problem:** `IndexScanRule` picks an index whenever a predicate mentions
