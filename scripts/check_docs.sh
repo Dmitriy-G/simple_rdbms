@@ -15,6 +15,8 @@
 #     that isn't `// SAFETY:` or `// TODO(`
 #   - every `M<number>`/`M<number>.<number>` under crates/ or docs/ matches
 #     a heading in docs/ROADMAP.md
+#   - every `docs/adr/NNNN-...md` path mentioned anywhere in the tree
+#     resolves to a file that actually exists
 #   - no tracked file under crates/ cites `.claude/` (gitignored working
 #     state a fresh clone does not have); docs/ is exempt, since the agent
 #     flow diagrams cite it deliberately
@@ -168,6 +170,17 @@ while IFS= read -r f; do
         is_known_milestone "$m" || fail "$f: milestone $m has no docs/ROADMAP.md heading"
     done < <(grep -ahoE '\bM[0-9]+(\.[0-9]+)?\b' "$f" | sort -u)
 done < <(find crates docs -type f \( -name '*.rs' -o -name '*.MD' -o -name '*.md' -o -name '*.mmd' \))
+
+# Every docs/adr/NNNN-...md path mentioned anywhere among tracked files must
+# resolve to a file that exists - catching a forward reference to an ADR
+# that was never written, or a stale citation left behind once an ADR's
+# number was reused for something else.
+while IFS= read -r f; do
+    while IFS= read -r adr; do
+        [ -n "$adr" ] || continue
+        [ -f "$adr" ] || fail "$f: cites $adr, which does not exist"
+    done < <(grep -ohE 'docs/adr/[0-9]+-[A-Za-z0-9-]+\.md' "$f" | sort -u)
+done < <(git ls-files)
 
 # .claude/ is gitignored working state; a tracked file under crates/ citing
 # it promises what a fresh clone cannot deliver. docs/ is exempt: the agent

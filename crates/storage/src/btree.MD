@@ -14,9 +14,13 @@ compare with plain `[u8]` `Ord` and get the right answer. Milestone M9.1
 `leaf_for_start`/`scan_leaf` (the primitives `catalog` and `executor` need
 to give this module a place in the query path - see "Key Components"
 below) without changing node layout or the split protocol at all; delete
-is still `todo!()`, tracked as M15 in `docs/ROADMAP.md`. Its design is
-already decided even though it isn't built yet - see "Deleting" below and
-`docs/adr/0012-btree-delete-does-not-merge.md`.
+is still `todo!()`, tracked as M14 in `docs/ROADMAP.md`. Its design is
+already decided even though it isn't built yet - see "Deleting" below,
+which records the no-merge choice itself until M14 writes the ADR that
+will supersede it, taking whatever number is free at the time (the
+number 0012 this once named was taken by
+`docs/adr/0012-bounded-lock-waits.md`, and an unwritten ADR does not
+reserve a number).
 
 ## Node layout
 
@@ -416,8 +420,11 @@ defense in depth `checked_slot_count` already is.
 
 ## Deleting
 
-Not implemented yet (`todo!()`, tracked as M15), but the design is
-already settled: `docs/adr/0012-btree-delete-does-not-merge.md`. Delete
+Not implemented yet (`todo!()`, tracked as M14), but the design is
+already settled, recorded here until M14 writes the ADR that will
+supersede this section - the number 0012 this once named was taken by
+`docs/adr/0012-bounded-lock-waits.md`, and an unwritten ADR does not
+reserve a number. Delete
 removes exactly the entry located by its full sort key (`key ++ rid`, the
 same lookup a duplicate-tolerant `insert` places by - see "Ordering"
 above), the same way `insert` already descends with `leaf_sort_key`
@@ -473,9 +480,9 @@ the same as every other page nothing in this codebase frees yet.
   a multi-level split cascade. `delete(&mut self, key)` is not
   implemented yet - `todo!()`, its
   message still describing a textbook merge-and-rebalance delete that
-  "Deleting" above and ADR 0012 have since superseded with a no-merge
-  design; the signature itself will also gain an `rid: Rid` parameter
-  once M15 implements it, to locate the exact duplicate entry by its full
+  "Deleting" above has since superseded with a no-merge design; the
+  signature itself will also gain an `rid: Rid` parameter once M14
+  implements it, to locate the exact duplicate entry by its full
   sort key rather than removing an arbitrary one sharing `key`.
   `leaf_for_start(&self, start) -> Result<PageId, StorageError>` and the
   associated function `scan_leaf(buffer_pool, leaf_page_id, after) ->
