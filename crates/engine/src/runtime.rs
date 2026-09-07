@@ -503,6 +503,7 @@ struct EngineShared {
 pub struct EngineStats {
     pub checkpoints_written: u64,
     pub version_chains: usize,
+    pub finished_txn_count: usize,
 }
 
 impl EngineShared {
@@ -571,6 +572,7 @@ impl EngineShared {
         EngineStats {
             checkpoints_written: checkpoint.checkpoints_written,
             version_chains: txn_manager.version_store().chain_count(),
+            finished_txn_count: txn_manager.lock_manager().finished_count(),
         }
     }
 

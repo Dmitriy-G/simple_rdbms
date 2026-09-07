@@ -86,12 +86,29 @@ and deadlocks directly against this module instead.
   wakes every thread blocked in `lock`/`lock_table`, which each recheck
   their own request against the new state rather than assuming they were
   the one released.
+- `LockManager::prune_finished(&self, watermark)` - drops every entry of
+  `finished` strictly below `watermark`, keeping the set from growing by
+  one `TxnId` per transaction for the life of the process
+  (`crates/txn/src/manager.MD`'s `commit`/`abort` call this right after
+  `release_all`, passing `TransactionManager::oldest_active_txn_id`).
+  Since a `TxnId` is never reused and `finished` only has to answer
+  "has `release_all` already run for this id" for a transaction whose
+  worker might still be mid-flight, nothing needs the answer for an id
+  older than every currently active transaction: dropping it just means a
+  `lock`/`lock_table` call for that stale id would no longer return
+  `LockAfterUnlock` - a case that only a bug elsewhere could still
+  trigger, since the transaction is long gone by the time its watermark
+  passes.
 - `LockManager::held_lock_count(&self, txn_id) -> usize` -
   `#[cfg(any(test, feature = "test-util"))]`. The number of resources (row
   and table locks combined) `txn_id` currently holds; `0` for a
   transaction holding nothing or already released. Test-only
   introspection, for asserting that `release_all` actually emptied a
   transaction's lock set rather than inferring it indirectly.
+- `LockManager::finished_count(&self) -> usize` -
+  `#[cfg(any(test, feature = "test-util"))]`. The number of `TxnId`s
+  currently recorded in `finished`, for asserting `prune_finished` keeps
+  the set bounded rather than letting it grow forever.
 - `Resource` - private. `Row(Rid)` or `Table(TableId)`: the two kinds of
   thing a lock can be held on, unified so the wait-for graph walk in
   `would_deadlock` doesn't need to know which kind it's looking at.
@@ -102,7 +119,8 @@ and deadlocks directly against this module instead.
   blocked `TxnId` to the single `(Resource, LockMode)` it's parked on - a
   transaction can only ever be blocked on one request at a time, since
   `lock`/`lock_table` itself blocks the calling thread; `finished` is the
-  set of transactions `release_all` has already run for.
+  set of transactions `release_all` has already run for, bounded by
+  `prune_finished` rather than retained forever.
 - `conflicting_holders(state, resource, mode, exclude) -> Vec<TxnId>` -
   private. Every transaction other than `exclude` currently holding
   `resource` in a mode that conflicts with `mode`.

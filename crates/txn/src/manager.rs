@@ -86,6 +86,7 @@ impl TransactionManager {
         self.active.remove(&txn_id);
         self.version_store.prune(self.oldest_active_read_ts());
         self.lock_manager.release_all(txn_id);
+        self.lock_manager.prune_finished(self.oldest_active_txn_id());
         metrics::counter!("transactions_committed_total").increment(1);
         Ok(())
     }
@@ -101,6 +102,7 @@ impl TransactionManager {
         self.version_store.abort_versions(txn_id, self.next_ts);
         self.version_store.prune(self.oldest_active_read_ts());
         self.lock_manager.release_all(txn_id);
+        self.lock_manager.prune_finished(self.oldest_active_txn_id());
         metrics::counter!("transactions_aborted_total").increment(1);
         Ok(())
     }
@@ -122,5 +124,9 @@ impl TransactionManager {
 
     pub fn oldest_active_read_ts(&self) -> u64 {
         self.active.values().map(|txn| txn.read_ts).min().unwrap_or(self.next_ts)
+    }
+
+    pub fn oldest_active_txn_id(&self) -> TxnId {
+        self.active.keys().min().copied().unwrap_or(TxnId(self.next_txn_id))
     }
 }

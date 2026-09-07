@@ -118,10 +118,21 @@ impl LockManager {
         self.released.notify_all();
     }
 
+    pub fn prune_finished(&self, watermark: TxnId) {
+        let mut state = recover_lock(self.state.lock(), "LockManager.state");
+        state.finished.retain(|&id| id >= watermark);
+    }
+
     #[cfg(any(test, feature = "test-util"))]
     pub fn held_lock_count(&self, txn_id: TxnId) -> usize {
         let state = recover_lock(self.state.lock(), "LockManager.state");
         state.held_by.get(&txn_id).map_or(0, HashSet::len)
+    }
+
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn finished_count(&self) -> usize {
+        let state = recover_lock(self.state.lock(), "LockManager.state");
+        state.finished.len()
     }
 
     fn acquire(&self, txn_id: TxnId, resource: Resource, mode: LockMode) -> Result<(), TxnError> {

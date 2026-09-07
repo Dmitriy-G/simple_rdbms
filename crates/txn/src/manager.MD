@@ -79,6 +79,9 @@ transaction had already written.
   set (and therefore the watermark) reflects `txn_id` having left it, then
   releases every lock it held via `lock_manager.release_all` (strict
   two-phase locking: the whole set releases at once, never before), then
+  calls `lock_manager.prune_finished(self.oldest_active_txn_id())` so the
+  lock manager's own bookkeeping of finished transactions stays bounded
+  the same way `version_store.prune` bounds version chains, then
   increments `transactions_committed_total` (a `metrics` counter - see
   `docs/ROADMAP.md`'s M13 entry).
 - `TransactionManager::abort(&mut self, txn_id, pool) -> Result<(), TxnError>` -
@@ -95,7 +98,9 @@ transaction had already written.
   the undone row's bytes (all of them active at this moment, therefore
   with a `read_ts` below it) is guaranteed to have finished by - then
   calls `version_store.prune(self.oldest_active_read_ts())`, same as
-  `commit`, then releases every lock it held via `lock_manager.release_all`.
+  `commit`, then releases every lock it held via `lock_manager.release_all`,
+  then calls `lock_manager.prune_finished(self.oldest_active_txn_id())`,
+  same as `commit`.
   The undo chain starts from `pool.last_lsn(txn_id)` — the log's own
   record of this transaction's most recent append — rather than any value
   cached at `begin` time, since writes made through `PageGuard::write`
@@ -132,6 +137,16 @@ transaction had already written.
   one to be issued is provably safe: nothing still open could have an
   older snapshot, and nothing begun afterward gets one. Called by
   `commit` and `abort` above, each time right before they call `prune`.
+- `TransactionManager::oldest_active_txn_id(&self) -> TxnId` - the
+  smallest `TxnId` among every currently active transaction, or
+  `TxnId(self.next_txn_id)` - the id `begin` would hand out next - when
+  none are active. The `TxnId` analogue of `oldest_active_read_ts` above,
+  passed to `lock_manager.prune_finished` for the same reason: `begin`
+  hands out ids in strictly increasing order, so no transaction still
+  active or yet to begin can ever use an id below this watermark, and
+  `LockManager::release_all`'s `finished` marker for any older,
+  already-finished id can be safely forgotten. Called by `commit` and
+  `abort` above, each time right after they call `lock_manager.release_all`.
 
 ## Usage Example
 
