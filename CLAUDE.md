@@ -17,7 +17,12 @@ Statements from different sessions **run concurrently** on a fixed
 eight-thread worker pool (`engine::runtime`), isolated by snapshot reads
 over two-phase-locked writes: a reader takes no locks and sees the
 snapshot its transaction began with, while a writer holds an exclusive
-table lock until it commits. `docs/adr/0004-acid-scope.md` states exactly
+table lock until it commits. A writer's wait for that lock is **bounded**:
+it expires after `DbConfig::lock_wait_timeout_ms` (default 5000 ms, `0`
+meaning wait forever) as a retryable `55P03 lock_not_available`, so a
+blocked statement cannot hold a worker thread indefinitely
+(`docs/adr/0012-bounded-lock-waits.md`).
+`docs/adr/0004-acid-scope.md` states exactly
 what that does and does not guarantee, and it is the file to read before
 believing anything about isolation here.
 What does not exist yet: `DELETE`/`UPDATE`, multi-table joins, column
@@ -692,7 +697,17 @@ Code that exists but cannot be reached yet, so it should not be mistaken
 for working capability. Each is named with the milestone that finishes
 it — this was requested in an earlier roadmap task and never landed, and
 belongs here rather than in `docs/ROADMAP.md` since this is the file a
-fresh session reads first:
+fresh session reads first.
+
+**A bullet here is deleted by the work that makes it false, in the same
+task.** When a task closes a piece of scaffolding, the Task writer adds
+"remove the `CLAUDE.md` scaffolding bullet this closes" to the subtask
+that closes it, exactly as a `.MD` update ships with its `.rs` — and
+since this file is Architect-owned, a Coder subtask discharges that by
+naming the bullet in its reply so the deletion happens alongside the
+review. A list of things that do not work is only useful while every
+line on it is still true; one stale bullet tells a fresh session that a
+shipped capability is missing, which is worse than not listing it at all.
 
 - `catalog::Column::nullable` — parsed, persisted, plumbed through the
   binder, never enforced (M15).
@@ -714,7 +729,7 @@ fresh session reads first:
   `VersionChain::is_globally_visible` reads it
   (`crates/txn/src/mvcc.rs:36-37`), but no caller ever sets it: every
   entry is created with `end_ts: None`
-  (`crates/txn/src/version_store.rs:24`) and the store has no mutator
+  (`crates/txn/src/version_store.rs:31`) and the store has no mutator
   that changes it, because nothing supersedes a version until `UPDATE`
   and `DELETE` exist (M14).
 - `txn::VersionStore::is_visible` and the
@@ -723,13 +738,6 @@ fresh session reads first:
   `is_visible_to`/`visible_version_for`, which also treats a row's own
   writer as able to see them. M14 deletes the pair unless the ADR 0004
   revisit finds a reader with no transaction id.
-- `common::DbConfig::lock_wait_timeout_ms` and `common::Error::LockTimeout`
-  — the knob is read by nothing and the variant is raised by nothing,
-  because `txn::LockManager::acquire` waits on a `Condvar` with no
-  deadline. `docs/adr/0012-bounded-lock-waits.md` decided both become
-  live; unlike the entries above, what finishes this one is a problem
-  entry rather than a milestone, and until it lands, configuring the knob
-  has no effect.
 
 Milestone numbers here are the roadmap's, and a roadmap number is a
 priority in natural numeric order: an unstarted milestone is renumbered
@@ -874,6 +882,33 @@ siblings, missing `.rs` siblings, a missing `## Key Components` or
 `## Usage Example` heading, an `.MD` file's title not matching its stem, a
 public item undocumented in its sibling `.MD`, a crate missing its
 `README.md`, or a disallowed comment all fail the build.
+
+### Citing code by line number
+
+`docs/` and this file cite source as `path/to/file.rs:123`, which is
+precise and goes stale the moment anything above line 123 changes.
+Nothing checks these, so two rules keep them honest.
+
+**Rewriting a module ends with a grep for its path.** A change that moves
+code — a sub-milestone that restructures a module, not a change of a few
+lines — finishes with
+`grep -rn "<module>.rs:" docs CLAUDE.md` and re-points every hit against
+the file as it now stands, in the same task that moved the code. A
+citation is only verifiable while someone has the old and new shapes in
+front of them; a milestone later, re-pointing it means re-deriving what
+the sentence was trying to say. The Coder cannot edit an ADR, the roadmap
+or this file, so when the grep lands there it names the hits in its reply
+or files a problem entry, and the Architect re-points them.
+
+**A historical passage carries no line numbers.** An ADR's Context
+describes the tree as it was when the decision was taken, and once the
+decision ships that description is history: it goes into the past tense
+and its line numbers come out, because they can never be right again and
+a reader who resolves one lands on unrelated code believing it confirms
+the sentence. Say which milestone or commit the passage describes
+instead. `docs/adr/0012-bounded-lock-waits.md` and
+`docs/adr/0013-version-identity-and-lifetime.md` both open their Context
+that way and are the shape to copy.
 
 ## Lint suppressions
 

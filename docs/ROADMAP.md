@@ -419,7 +419,7 @@ the rules below are stated in terms of.
   `UPDATE` must not be routed through it.
 - **Set `end_ts` on the superseded version.** Nothing does today:
   `VersionEntry::end_ts` is `None` on every entry ever created
-  (`crates/txn/src/mvcc.rs:7`, `crates/txn/src/version_store.rs:24`) and
+  (`crates/txn/src/mvcc.rs:7`, `crates/txn/src/version_store.rs:31`) and
   `VersionStore` has no mutator that sets it, because until now no write
   ever superseded another. Both `DELETE` and `UPDATE` must, or an older
   snapshot silently loses the row it is entitled to see.
@@ -443,8 +443,8 @@ the rules below are stated in terms of.
   chain is dropped in the same step — never before it, since ADR 0013's
   store treats a missing chain as "visible to everyone" and would
   resurrect the row.
-- **Delete `VersionStore::is_visible`** (`version_store.rs:42`), whose
-  only callers are tests; the live path is `is_visible_to` (line 50).
+- **Delete `VersionStore::is_visible`** (`version_store.rs:85`), whose
+  only callers are tests; the live path is `is_visible_to` (line 93).
 
 **Prevention, which ships with this milestone:** a test in
 `crates/executor/tests/` that deletes a row, inserts another into the

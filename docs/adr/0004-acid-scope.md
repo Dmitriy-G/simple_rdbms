@@ -39,7 +39,7 @@ WAL-logged before it touches a page (`BufferPool::flush_pages`
 batch's highest `page_lsn` before any page reaches its real location),
 `TransactionManager::commit` force-flushes the log up
 to its `Commit` record before returning
-(`crates/txn/src/manager.rs:75-77`), and `storage::recovery::recover`
+(`crates/txn/src/manager.rs:79-82`), and `storage::recovery::recover`
 runs Analysis/Redo/Undo on every open, undoing anything that never
 committed via the same `undo_transaction` a user's own `ROLLBACK` calls.
 A transaction's writes are all-or-nothing and, once committed, survive a
@@ -75,18 +75,19 @@ never blocks and never blocks anyone.
 exclusive lock per inserted `Rid` (line 70). Nothing releases a lock
 early: `TransactionManager::commit` and `abort` call
 `LockManager::release_all` as their last step
-(`crates/txn/src/manager.rs:80,94`). That is strict two-phase locking, so
+(`crates/txn/src/manager.rs:88,103`). That is strict two-phase locking, so
 two writers against one table serialize; a waiter that would close a
 cycle in the wait-for graph is aborted as a deadlock victim
-(`crates/txn/src/lock_manager.rs:51-66,143-145`), and its wait is bounded
+(`crates/txn/src/lock_manager.rs:52-67,157-158`), and its wait is bounded
 per `docs/adr/0012-bounded-lock-waits.md`.
 
 *The snapshot is per-process and in memory.* `read_ts` is assigned at
 `begin` and `commit_ts` at commit, both from one counter that starts at 0
-each time the process starts (`crates/txn/src/manager.rs:32,45-46,66,76`).
-`VersionStore` is a `Mutex<HashMap<Rid, VersionChain>>`
-(`crates/txn/src/version_store.rs:11`) that no restart survives, and **a
-`Rid` with no chain is visible to everyone** (lines 44-47, 52-55). That
+each time the process starts (`crates/txn/src/manager.rs:22,51-54,72,83`).
+`VersionStore` is a `Mutex<StoreState>` whose `chains` field is a
+`HashMap<Rid, VersionChain>` (`crates/txn/src/version_store.rs:10-19`)
+that no restart survives, and **a
+`Rid` with no chain is visible to everyone** (lines 89 and 97). That
 default is what makes an empty store after recovery correct: ARIES has
 already undone every loser physically, so what remains in the heap is
 committed, and no snapshot from before the crash exists to be confused.

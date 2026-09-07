@@ -11,20 +11,21 @@ pool and deleted the park queue that used to serialize explicit
 transactions. Two things survived that deletion without a mechanism
 behind them, and one liveness hazard arrived with it.
 
+**This section describes the tree as it stood before this decision was
+implemented during M10** (commit `3da0d74`); its citations are historical,
+and the Decision below is what the code does now.
+
 **The knob and the error outlived their implementation.**
-`common::DbConfig::lock_wait_timeout_ms` (`crates/common/src/config.rs:11`,
-default 5000 via `DEFAULT_LOCK_WAIT_TIMEOUT_MS`) is read by nothing
-outside its own construction. `common::Error::LockTimeout`
-(`crates/common/src/error.rs:125`) maps to `SqlState::LOCK_NOT_AVAILABLE`
-(line 170) but no code path constructs it: `txn::LockManager::acquire`
-(`crates/txn/src/lock_manager.rs:115-150`) waits on a `Condvar` with no
-deadline at all — `state = recover_lock(self.released.wait(state), …)` at
-line 148 — and its only escape is `would_deadlock` (lines 51-66), which
-finds cycles in the wait-for graph and nothing else. Two sibling `.MD`
-files still describe both as live behaviour tied to the deleted park
-queue (`crates/common/src/config.MD:24-26`,
-`crates/common/src/error.MD:154-158`), so the documentation promises a
-`55P03` the engine cannot raise.
+`common::DbConfig::lock_wait_timeout_ms` (default 5000 via
+`DEFAULT_LOCK_WAIT_TIMEOUT_MS`) was read by nothing outside its own
+construction. `common::Error::LockTimeout` mapped to
+`SqlState::LOCK_NOT_AVAILABLE` but no code path constructed it:
+`txn::LockManager::acquire` waited on a `Condvar` with no deadline at all
+— `state = recover_lock(self.released.wait(state), …)` — and its only
+escape was `would_deadlock`, which finds cycles in the wait-for graph and
+nothing else. Two sibling `.MD` files still described both as live
+behaviour tied to the deleted park queue, so the documentation promised a
+`55P03` the engine could not raise.
 
 **An untimed wait plus a fixed pool is a wedge.**
 `crates/engine/src/runtime.rs:34` fixes `WORKER_POOL_SIZE = 8`, and every

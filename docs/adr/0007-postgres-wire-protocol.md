@@ -2,6 +2,8 @@
 
 Date: 2026-08-25
 
+Revised: 2026-09-07 — what M13 inherits, after M10
+
 Status: Accepted
 
 ## Context
@@ -76,17 +78,38 @@ every error this engine can raise already carries a real SQLSTATE code,
 so `pgwire`'s error responses have real data to report instead of a
 generic failure. M10 was originally assumed to be a hard prerequisite
 here, on the reasoning that multiple wire connections mean multiple
-concurrent transactions for real, and `txn::LockManager`/`txn::mvcc`
-(currently unwired scaffolding, per `docs/adr/0004-acid-scope.md`) would
-need wiring into every read and write path before M13 could safely ship.
-That assumption is corrected in `docs/ROADMAP.md`'s M13 entry: M13.1 runs
-the engine on one dedicated thread reached by message passing instead of
-sharing `Database` across connection threads, so every connection's
-statements execute serially in arrival order - real isolation by
-construction, without needing M10's lock manager or MVCC. This is a
-**design choice**, not a technical necessity the storage layer forces:
-storage is `Mutex`/`RwLock`/`Condvar`/atomics throughout and is
-`Send + Sync` already, so a later milestone remains free to share it
-across threads and lean on M10's lock manager instead. M10 stays valuable
-for the concurrency it adds on its own merits, but M13 no longer depends
-on it.
+concurrent transactions for real, and `txn::LockManager`/`txn::mvcc` -
+unwired scaffolding at the time this ADR was written - would need wiring
+into every read and write path before M13 could safely ship. That
+assumption was corrected in `docs/ROADMAP.md`'s M13 entry, and the
+correction stands: M13.1 gave the engine a message-passing entry point
+that any number of connection tasks can send statements to, which
+separates the number of connections from the execution model entirely, so
+M13 was never blocked on M10.
+
+**What M13 inherits, however, is no longer serial execution.** This
+paragraph originally continued that M13.1 ran the engine on one dedicated
+thread, so every connection's statements executed serially in arrival
+order - real isolation by construction, without needing M10's lock
+manager or MVCC. M10 then shipped first and replaced that premise:
+statements from different sessions run concurrently on a fixed
+eight-thread worker pool (`engine::runtime::WORKER_POOL_SIZE`), every user
+statement runs at `IsolationLevel::SnapshotIsolation`, and the lock
+manager and version store are wired into every read and write path
+(`crates/executor/src/operators/seq_scan.rs`, `index_scan.rs`,
+`insert.rs`). The listener therefore inherits the isolation
+`docs/adr/0004-acid-scope.md` now describes - snapshot reads over
+two-phase-locked writes, with a lock wait bounded per
+`docs/adr/0012-bounded-lock-waits.md` - and **M13.2 must plan against
+that, not against a serialization that no longer exists**: concurrent
+sessions on the wire meet concurrent execution underneath, so a client
+can now be handed `40P01 deadlock_detected` or `55P03 lock_not_available`
+where the serial model promised neither was reachable.
+
+What survives from the original reasoning is the independence, not the
+mechanism. Sharing the engine across connections was a **design choice**
+rather than a technical necessity the storage layer forces: storage is
+`Mutex`/`RwLock`/`Condvar`/atomics throughout and `Send + Sync` already,
+so the wire layer was free to arrive before or after M10. It arrived
+after, which means M13 gets M10's concurrency rather than having to
+provide isolation by construction itself.

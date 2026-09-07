@@ -6,8 +6,18 @@ Status: Accepted
 
 ## Context
 
-M10.3 shipped MVCC visibility: `txn::VersionStore` keeps a
-`Mutex<HashMap<Rid, VersionChain>>` (`crates/txn/src/version_store.rs:11`),
+**This section describes `crates/txn` as it stood after M10.3, which is
+the state this decision was taken against.** M10.4 has since implemented
+the Decision below, so the shapes described here are the ones it
+replaced: the store is now a `Mutex<StoreState>` carrying `chains`,
+`write_sets` and `prune_candidates`
+(`crates/txn/src/version_store.rs:10-19`). Line numbers are therefore
+omitted here where the code has moved — a historical account is not a
+map of the current tree, and a citation that resolves to something else
+is worse than none.
+
+M10.3 shipped MVCC visibility: `txn::VersionStore` kept a
+`Mutex<HashMap<Rid, VersionChain>>`,
 `insert.rs` records a version per inserted row
 (`crates/executor/src/operators/insert.rs:70`), and the scan executors ask
 the store whether a `Rid` is visible to the reader
@@ -29,18 +39,18 @@ hidden from a reader entitled to it, depending on the timestamps. Nothing
 detects this: it is a silent wrong answer, and it becomes reachable the
 day `DELETE` lands.
 
-**Lifetime.** The store is only ever appended to. `record_insert` (lines
-19-26) adds a chain per inserted `Rid`; `commit_versions` (lines 28-33)
-stamps `begin_ts`; `abort_versions` (lines 35-40) removes the aborting
-transaction's entries but keeps the emptied chain; there is no other
-mutator. Two costs follow. The map grows monotonically with every row
+**Lifetime.** The store was only ever appended to. `record_insert` added
+a chain per inserted `Rid`; `commit_versions` stamped `begin_ts`;
+`abort_versions` removed the aborting transaction's entries but kept the
+emptied chain; there was no other mutator. Two costs followed. The map
+grew monotonically with every row
 inserted since process start, with no ceiling and no knob — the exact
 opposite of the "bounded memory over an unbounded database" property M2
 exists to give and the buffer pool enforces for pages. And commit and
-abort both iterate **every chain in the map** under the single store
-mutex, so commit latency scales with the whole database rather than with
-the transaction's write set, while readers contend on that same mutex
-once per tuple (`version_store.rs:43,51`).
+abort both iterated **every chain in the map** under the single store
+mutex, so commit latency scaled with the whole database rather than with
+the transaction's write set, while readers contended on that same mutex
+once per tuple.
 
 The two are one question — what identifies a version, and how long does
 it live — because both are answered by the same missing thing: a name for
@@ -48,9 +58,9 @@ a row that outlives its slot, and a rule for when a chain stops mattering
 to anybody. Deciding them apart risks deciding them inconsistently, in
 the milestone that can least afford it.
 
-One property of today's code shapes everything below: `is_visible` and
-`is_visible_to` return **`true` when the key is absent**
-(`version_store.rs:44-47,52-55`). "No chain" means "visible to everyone".
+One property of the code shapes everything below, and it still holds:
+`is_visible` and `is_visible_to` return **`true` when the key is absent**
+(`version_store.rs:89,97`). "No chain" means "visible to everyone".
 That default is what makes pruning possible at all — a chain nobody needs
 can simply be dropped — and it is also the trap: dropping the chain of a
 *deleted* row resurrects it.
@@ -131,7 +141,7 @@ set for every real statement.
 **The prune rule is one watermark.** `TransactionManager` exposes the
 oldest `read_ts` among active transactions — the exact analogue of the
 `earliest_active_begin_lsn` it already computes
-(`crates/txn/src/manager.rs:110`) — and when there is no active
+(`crates/txn/src/manager.rs:119`) — and when there is no active
 transaction the watermark is the next timestamp to be issued, which
 prunes everything prunable. Against that watermark:
 
@@ -153,7 +163,7 @@ prunes everything prunable. Against that watermark:
   there the same window surfaces as a `CorruptTuple` error over a row the
   undo has already removed), while `TransactionManager::abort` undoes the
   pages first and empties the chains after
-  (`crates/txn/src/manager.rs:86-97`), so a reader can be holding the
+  (`crates/txn/src/manager.rs:94-106`), so a reader can be holding the
   bytes of a row whose undo has already run. The empty chain is what makes
   that reader drop the row; "no chain" would make it yield a rolled-back
   one. The chain becomes prunable once the watermark reaches the timestamp
@@ -210,8 +220,8 @@ trade-off and it is now an explicit one — a transaction left open holds
 version state proportional to what has changed since it started, which
 `idle_in_transaction_timeout_ms` already bounds in time.
 
-`VersionStore::is_visible` (`version_store.rs:42`) has no caller outside
-tests; the live path is `is_visible_to` (line 50). Whichever milestone
+`VersionStore::is_visible` (`version_store.rs:85`) has no caller outside
+tests; the live path is `is_visible_to` (line 93). Whichever milestone
 implements this should delete it rather than port it, unless the ADR 0004
 revisit finds a reason for a reader with no transaction id.
 

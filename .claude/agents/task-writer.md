@@ -186,6 +186,15 @@ Order subtasks so each one is independently completable and reviewable.
 A subtask that cannot be finished without a later one is two subtasks in
 the wrong order.
 
+**A subtask that makes a `CLAUDE.md` "Known scaffolding" bullet false
+says so in its own text.** Before you write a subtask, check that list:
+if the work reaches code named there — a `todo!()` filled in, a knob
+wired up, a field finally read — add "remove the `CLAUDE.md` scaffolding
+bullet this closes" to the subtask, so the deletion is reviewed with the
+change instead of being found by a milestone review three commits later.
+`CLAUDE.md` is Architect-owned, so a Coder subtask discharges this by
+naming the bullet in its reply rather than editing the file.
+
 **Grep every identifier you write into the file.** A subtask that names a
 function, field or type must name one that exists and does what the
 subtask claims. This is not pedantry: a spec once said "delete `waiters`"

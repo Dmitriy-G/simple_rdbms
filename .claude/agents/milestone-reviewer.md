@@ -49,6 +49,19 @@ gap, or a documented rule that is now false.
    job is often to make one of them false — and `README.md`'s **opening
    paragraph**. A capability that shipped and is still listed as missing
    is a review failure, not a nitpick.
+
+   **When the milestone changed the execution model, sweep the ADRs for
+   the old one.** An ADR states how the engine works in the present
+   tense, and that tense goes stale silently: nothing links a change in
+   `engine::runtime` to a paragraph in an ADR about the wire protocol.
+   Grep `docs/adr/` and `docs/ROADMAP.md` for the model the milestone
+   replaced — `serially`, `one thread`, `unwired scaffolding`, whatever
+   the old wording was — and file an entry for every passage still
+   asserting it. A past-tense retrospective ("ran one statement at a
+   time") is fine and is what a revised ADR should look like; a
+   present-tense claim is the defect. ADR 0004's own revisit trigger
+   forces this for one file, and the sweep is that discipline applied to
+   the rest.
 4. **Status.** Milestone markers in `docs/ROADMAP.md` match reality.
    Sub-milestone identifiers referenced from code and `.MD` files
    resolve to real headings.
