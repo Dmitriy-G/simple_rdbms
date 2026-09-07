@@ -107,7 +107,7 @@ decoding. A future composite-key encoding will need to escape `0x00` as
 `0x00 0xFF` and append a `0x00 0x00` terminator after each `Varchar`
 component before concatenation, the standard memcomparable technique for
 making a length-prefix-free encoding safe to concatenate - marked in
-`memcomparable.rs` with `// TODO(M11): composite key encoding` at the
+`memcomparable.rs` with `// TODO(M23.2): composite key encoding` at the
 point in `MemcomparableEncode` where that escaping would need to happen.
 
 ## Usage Example

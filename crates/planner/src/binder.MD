@@ -111,7 +111,7 @@ becomes "semantically valid against this database's schema".
   threaded unchanged through every recursive call - it names the one
   table a qualifier may refer to, not a type to check an operand against,
   so it never varies within one statement the way `schema` conceptually
-  could once joins exist (M11). Returns the bound expression along with
+  could once joins exist (M23.1). Returns the bound expression along with
   its resolved type, or `None` if the expression is a `NULL` literal
   (which has no type of its own and is treated as compatible with any
   type it's checked against). `sql::Expr::IsNull { expr, negated }` binds

@@ -15,6 +15,9 @@
 #     that isn't `// SAFETY:` or `// TODO(`
 #   - every `M<number>`/`M<number>.<number>` under crates/ or docs/ matches
 #     a heading in docs/ROADMAP.md
+#   - no bare `M11` under crates/ (a stale placeholder number CLAUDE.md
+#     documents as permanently retired), except inside a hyphenated range
+#     like `M7-M11`
 #   - every `docs/adr/NNNN-...md` path mentioned anywhere in the tree
 #     resolves to a file that actually exists
 #   - no tracked file under crates/ cites `.claude/` (gitignored working
@@ -170,6 +173,22 @@ while IFS= read -r f; do
         is_known_milestone "$m" || fail "$f: milestone $m has no docs/ROADMAP.md heading"
     done < <(grep -ahoE '\bM[0-9]+(\.[0-9]+)?\b' "$f" | sort -u)
 done < <(find crates docs -type f \( -name '*.rs' -o -name '*.MD' -o -name '*.md' -o -name '*.mmd' \))
+
+# M11 names a real, already-done milestone ("Surviving a torn page write"),
+# so the check above can never catch a reference that drifted onto it - the
+# exact bug this rule exists for: CLAUDE.md's "Known scaffolding" section
+# documents that a bare M11 under crates/ is always stale, because the
+# milestones that once used M11 as a placeholder number (joins,
+# composite-key encoding, cost-based optimization) were later given their
+# own numbers without every reference being updated. A hyphenated range
+# naming several already-done milestones together, e.g. `M7-M11`, is a
+# legitimate historical citation and is not what this flags.
+while IFS= read -r f; do
+    remainder="$(sed -E 's/M[0-9]+-M11//g' "$f")"
+    if grep -qE '\bM11\b' <<<"$remainder"; then
+        fail "$f: cites M11 under crates/ - CLAUDE.md documents this as permanently stale (M11 is 'Surviving a torn page write', already done and unrelated); retarget to the milestone that actually covers this"
+    fi
+done < <(find crates -type f \( -name '*.rs' -o -name '*.MD' -o -name '*.md' \))
 
 # Every docs/adr/NNNN-...md path mentioned anywhere among tracked files must
 # resolve to a file that exists - catching a forward reference to an ADR

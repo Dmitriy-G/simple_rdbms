@@ -52,7 +52,7 @@ specially - lexed or not - is also the one place a future keyword's
   `OFFSET`, `JOIN`, `INNER`, `LEFT`, `RIGHT`, `FULL`, `OUTER`, `CROSS`,
   `ON`, `USING`, `UNION`, `INTERSECT`, `EXCEPT`, `RETURNING`, `SET`,
   `WHERE`, `FROM`. Seeded with every keyword a future grammar addition
-  (`ORDER BY` in M20, `JOIN` in M11, `RETURNING` in M23, ...) will need,
+  (`ORDER BY` in M20, `JOIN` in M23.1, `RETURNING` in M23, ...) will need,
   not only the ones tokenized so far, so `parser.MD`'s
   `parse_optional_table_alias` never has to be revisited just to add one
   more word - only `RESERVED_WORDS` does. A word appearing here before it

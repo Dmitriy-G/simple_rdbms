@@ -56,9 +56,8 @@ locks exactly as before.
 `NestedLoopJoinExecutor::init`/`next` are both `todo!()`. Nothing
 constructs one outside of tests, since `sql` has no `JOIN` syntax for a
 statement to reach it through (see `planner`'s README) — it exists as
-scaffolding for roadmap milestone M11, which is also where a real
-cost-based choice among join algorithms would come from. See
-`docs/ROADMAP.md`.
+scaffolding for roadmap milestone M23.1, with a real cost-based choice
+among join algorithms coming later from M23.2. See `docs/ROADMAP.md`.
 
 ## Dependencies
 

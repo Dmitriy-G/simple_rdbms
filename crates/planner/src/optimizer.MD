@@ -44,8 +44,8 @@ e.g. whether an index exists on the column a `Filter` compares.
   (the index only needs to narrow candidates, not fully decide
   membership) and means a bounds-derivation bug would produce missing
   rows rather than wrong ones - dropping a filter that an equality index
-  scan alone could already fully satisfy is a `// TODO(M11)` left for the
-  cost-based optimizer, not attempted here. Anything that isn't exactly
+  scan alone could already fully satisfy is a `// TODO(M23.2)` left for
+  the cost-based optimizer, not attempted here. Anything that isn't exactly
   this shape (no `Filter`, a `Filter` over something other than a plain
   `SeqScan`, or a `SeqScan` over a table with no usable index) is returned
   unchanged - falling back to a sequential scan is always correct, just
@@ -62,7 +62,7 @@ e.g. whether an index exists on the column a `Filter` compares.
   Literal(value)` with `op` in `Eq | Lt | LtEq | Gt | GtEq`, returning the
   column ordinal, operator, and literal. Nothing else matches - in
   particular `Literal <op> ColumnRef` (operands reversed) does not,
-  tracked as the same `// TODO(M11)` as the dropped-filter case above.
+  tracked as the same `// TODO(M23.2)` as the dropped-filter case above.
 - `successor(bytes) -> Vec<u8>` - private. Appends one `0x00` byte,
   producing the tightest possible exclusive upper bound that still admits
   `bytes` itself (used to turn an inclusive bound - `=`'s upper end,
@@ -88,7 +88,7 @@ e.g. whether an index exists on the column a `Filter` compares.
   conjunct (in source order) that is both a recognized
   `column_and_literal` shape and has an index via
   `catalog.index_for_column` - there is no cost-based choice among
-  multiple indexed columns yet (`// TODO(M11)`). Returns `None` (meaning
+  multiple indexed columns yet (`// TODO(M23.2)`). Returns `None` (meaning
   "stay a `SeqScan`") if no conjunct qualifies. Once a target column is
   chosen, every conjunct on that *same* column contributes a candidate
   `(start, end)` bound - `Eq` contributes both an inclusive start and an

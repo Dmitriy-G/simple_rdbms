@@ -92,7 +92,7 @@ fn flatten_and_conjuncts<'a>(expr: &'a BoundExpr, out: &mut Vec<&'a BoundExpr>) 
     }
 }
 
-// TODO(M11): also match `Literal <op> ColumnRef` (the operands reversed) and drop a
+// TODO(M23.2): also match `Literal <op> ColumnRef` (the operands reversed) and drop a
 // fully-covered equality filter once the index alone can answer it.
 fn column_and_literal(expr: &BoundExpr) -> Option<(usize, BinaryOperator, &Value)> {
     let BoundExpr::BinaryOp { left, op, right, .. } = expr else { return None };

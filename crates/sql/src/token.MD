@@ -11,7 +11,7 @@ The lexical tokens `Lexer` produces and `Parser` consumes.
   `START TRANSACTION`), `Transaction`, `Commit`, `Rollback`, `Explain`)
   carry no payload. `Index`/`On` exist solely for `CREATE INDEX ident ON
   ident (ident)` (`parser.MD`'s `parse_create_index`) - `On` is not reused
-  for `JOIN ... ON`, since no `JOIN` grammar exists yet (M11). `Is` exists
+  for `JOIN ... ON`, since no `JOIN` grammar exists yet (M23.1). `Is` exists
   solely for `<expr> IS [NOT] NULL` (`parser.MD`'s `parse_is_null_operand`).
   `As` exists for `FROM table [AS] alias` (`parser.MD`'s
   `parse_optional_table_alias`) - the alias is equally valid without it,

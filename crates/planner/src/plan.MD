@@ -9,7 +9,7 @@ Lowers a bound statement into a `LogicalPlan`.
   `Projection(Filter(SeqScan))` (dropping the `Filter` node when there is
   no `WHERE` clause) - always a `SeqScan` at this stage, never an
   `IndexScan`; choosing an access path is `optimizer::IndexScanRule`'s job,
-  run afterward, not this function's (`// TODO(M11): cost-based
+  run afterward, not this function's (`// TODO(M23.2): cost-based
   optimization` marks the larger, still-missing piece: choosing *among*
   multiple viable access paths by estimated cost, once more than one
   exists). `CreateTable`/`CreateIndex` each lower to their own

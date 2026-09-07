@@ -2,7 +2,7 @@ use crate::binder::BoundStatement;
 use crate::error::PlannerError;
 use crate::logical_plan::LogicalPlan;
 
-// TODO(M11): cost-based optimization
+// TODO(M23.2): cost-based optimization
 
 pub fn plan(statement: BoundStatement) -> Result<LogicalPlan, PlannerError> {
     let plan = match statement {

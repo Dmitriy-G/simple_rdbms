@@ -56,8 +56,8 @@ Architecture), and round-trip across a reopen (`tests/persistence.rs`).
 `Catalog::drop_table` does not: its body is `todo!("remove the entry from
 tables_by_name, erroring if absent")` — no `DROP TABLE`/`DROP INDEX`
 support exists yet anywhere above this crate either, so nothing currently
-calls it. Indexes are single-column only — see `docs/ROADMAP.md`'s M11 for
-composite keys. There is no `ALTER TABLE` or constraint enforcement
+calls it. Indexes are single-column only — see `docs/ROADMAP.md`'s M23.2
+for composite keys. There is no `ALTER TABLE` or constraint enforcement
 (`CHECK`, `UNIQUE`, foreign keys) beyond nullability bookkeeping — see
 `docs/adr/0004-acid-scope.md` for the precise scope of what "consistency"
 means in this engine today.

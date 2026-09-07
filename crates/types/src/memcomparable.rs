@@ -37,7 +37,7 @@ impl MemcomparableEncode for Value {
             }
             Value::Varchar(s) => {
                 buf.push(VALUE_TAG);
-                // TODO(M11): composite key encoding - escape 0x00 as 0x00 0xFF and
+                // TODO(M23.2): composite key encoding - escape 0x00 as 0x00 0xFF and
                 // append a 0x00 0x00 terminator here once a key can be more than one
                 // concatenated value; see memcomparable.MD's "Concatenation is not safe".
                 buf.extend_from_slice(s.as_bytes());

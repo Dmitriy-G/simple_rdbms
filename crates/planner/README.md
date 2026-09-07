@@ -71,7 +71,7 @@ column, deriving `[start, end)` bounds and combining multiple conjuncts on
 the same column — always keeping the `Filter` on top so the rewrite is
 correct by construction. Choosing *among* several viable access paths by
 estimated cost, and dropping a filter an equality index scan alone could
-already satisfy, are both left to roadmap milestone M11 — see
+already satisfy, are both left to roadmap milestone M23.2 — see
 `docs/ROADMAP.md`.
 
 `EXPLAIN [VERBOSE] <statement>` binds and lowers its target exactly as if

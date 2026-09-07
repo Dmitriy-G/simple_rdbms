@@ -26,7 +26,7 @@ consumes.
   filter predicate.
 - `TableRef` - the single source table of a `FROM` clause: `name` is the
   table as it exists in the catalog; `alias` is the optional `[AS]
-  alias` naming a range variable for it. This is the one place `M11`'s
+  alias` naming a range variable for it. This is the one place `M23.1`'s
   eventual multi-table `FROM` list will extend from - see
   `planner::binder.MD` for why an alias, once given, replaces `name` as
   the only valid qualifier for `Expr::Column { table, .. }` inside this
