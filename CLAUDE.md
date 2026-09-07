@@ -1017,6 +1017,33 @@ reproducing a reported bug, or settling a hypothesis that cannot be
 settled by reading — where one targeted `cargo test -p <crate> <filter>`
 is the cheapest answer.
 
+**A change that touches no code runs the documentation gate and nothing
+else.** When a subtask's whole diff is prose — sibling `.MD`s, a crate
+`README.md`, anything under `docs/` including an ADR, this file,
+`.claude/**` — the one command that can tell it anything is
+`bash scripts/check_docs.sh`, and it is the only one to run.
+`cargo build`, `cargo fmt --check`, `cargo clippy` and
+`cargo test --workspace` would read exactly the `.rs` files they read on
+the previous run and can only reproduce the previous answer, at the cost
+of the crash-injection sweeps. This binds the Coder and the Architect
+alike, and for the Architect it is the normal case: it may not write a
+`.rs` file at all, so `check_docs.sh` is its whole gate.
+
+The boundary is the file list, not the intent. **One changed `.rs` file
+puts the subtask back on the full gate** — a `// TODO(Mx):` marker
+retargeted in place counts, since `check_docs.sh` and clippy both read
+source comments — and so does a change to `Cargo.toml`, `scripts/**` or
+`.github/workflows/**`, which are code by the ownership table above and
+are inputs to the gate itself. A mixed subtask that edits both prose and
+code is a code subtask: the full gate runs once, at the end, over the
+whole of it.
+
+Nothing is skipped permanently. CI (`.github/workflows/ci.yml`) runs all
+five commands on every PR whatever the diff contained, so a docs-only
+change is still compiled and tested before it merges; what this rule
+saves is the minutes between finishing a paragraph and handing it back
+for review.
+
 Tests must be deterministic: no assertions that depend on wall-clock time,
 hash map/set iteration order, or thread scheduling. Use `tempfile` for
 anything touching the filesystem so tests don't collide or leave state

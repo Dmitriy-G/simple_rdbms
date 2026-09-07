@@ -336,6 +336,16 @@ empties the file: the ADR gets written, the roadmap entry gets its
 paragraph, `CLAUDE.md` gets its sentence. Finishing without that step
 loses exactly what the entry was filed to preserve.
 
+**Your gate is `bash scripts/check_docs.sh` and nothing else.** Every
+file you may write is prose, so `cargo build`, `cargo fmt --check`,
+`cargo clippy` and `cargo test --workspace` read exactly the sources they
+read last time and can only repeat their previous answer — at the cost of
+the crash-injection sweeps. Run `check_docs.sh` when your change touched
+anything under `crates/` or named an ADR path, since those are the two
+things it checks; a change confined to `.claude/` needs no command at
+all. `CLAUDE.md`'s "Testing rules" states the rule in full, for both
+roles.
+
 ## What you do not do
 
 - Never change source or tests.

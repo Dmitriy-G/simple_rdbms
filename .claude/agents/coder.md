@@ -124,6 +124,15 @@ Run the full gate: `cargo build --workspace`,
 `cargo clippy --workspace --all-targets -- -D warnings`,
 `bash scripts/check_docs.sh`, `cargo test --workspace`.
 
+**Unless the subtask changed no code at all**, in which case
+`bash scripts/check_docs.sh` is the whole gate and the other four are
+skipped. That is the case when the entire diff is prose — sibling
+`.MD`s, a crate `README.md`, `docs/**` — and it stops being the case the
+moment one `.rs` file changes, a retargeted `// TODO(Mx):` marker
+included, or `Cargo.toml`, `scripts/**` or `.github/workflows/**` does.
+A subtask that edits both prose and code is a code subtask and runs all
+five. Say in your reply which of the two gates you ran.
+
 **Run the test suite once, at the end of the subtask — not while you
 work.** Write the whole subtask first: code, tests, sibling `.MD`s,
 crate README. Then run the gate. If it fails, fix what it reports and run
