@@ -215,8 +215,16 @@ Role: <role name>
    invariants, documentation truth, forward dependencies it created, and
    deferred items — functionality, never code style. Files every bug and
    gap it finds as an entry in `.claude/problems.md`, which is how a
-   failed review reopens the work, and is the only role that sets ✅ Done
-   on a parent milestone in `docs/ROADMAP.md`.
+   failed review reopens the work, marking each one **gating** — it
+   violates a named Done-when line, the Solution, or an invariant from
+   this file — or **non-gating**, since only a gating finding holds the
+   parent open and a milestone passes with the rest of them still in the
+   queue. It is the only role that sets ✅ Done on a parent milestone in
+   `docs/ROADMAP.md`, and the only one that may append a `Reviewed:` line
+   to a milestone entry, which is how a failing pass tells the next pass
+   what it gated on. A review is bounded: one full pass, the repair, then
+   a pass scoped to that repair
+   (`docs/adr/0015-milestone-review-terminates.md`).
 5. **Helper** — the default role: anything not covered by the four roles
    above, such as answering a question about the project. Read-only.
 
@@ -474,8 +482,9 @@ needs one field and not two.
 | `crates/*/README.md` | Coder | Same rule: it documents that crate's code, so it goes stale the moment code lands without it. |
 | `README.md`, `CLAUDE.md` | Architect | Repository-level prose. "What works today" claims here are checked by the Milestone Reviewer at the end of each milestone. |
 | `docs/adr/**` | Architect | A decision worth an ADR is recorded by the role that investigated it. |
-| `docs/ROADMAP.md` — entry prose | Architect | Including retiring or splitting an entry. |
-| `docs/ROADMAP.md` — status markers | Architect sets 🆕 on a new entry, and ⏸️ Hold on a new entry whose work has already partly shipped; Task writer sets 🚧, ⏸️ and ✅ on a sub-milestone and 🚧/⏸️ on its parent; Milestone Reviewer sets ✅ on a parent | Nobody else. Exactly one parent carries 🚧 at a time; everything else partly delivered is ⏸️ Hold. ✅ on a parent means the milestone's functionality was reviewed as a whole and works, which is the gate that makes "Done" mean something. |
+| `docs/ROADMAP.md` — entry prose | Architect | Including retiring or splitting an entry. The one exception is the `Reviewed:` line, below. |
+| `docs/ROADMAP.md` — a milestone entry's `Reviewed:` line | Milestone Reviewer | The single line a failing review pass appends to the milestone it reviewed, naming the date, which pass it was, and the gating and non-gating entries it filed. It is what tells the next pass what to verify, and every such line on the entry is deleted in the same edit that sets the parent ✅ Done. Nobody else writes or removes one. |
+| `docs/ROADMAP.md` — status markers | Architect sets 🆕 on a new entry, and ⏸️ Hold on a new entry whose work has already partly shipped; Task writer sets 🚧, ⏸️ and ✅ on a sub-milestone and 🚧/⏸️ on its parent; Milestone Reviewer sets ✅ on a parent | Nobody else. Exactly one parent carries 🚧 at a time; everything else partly delivered is ⏸️ Hold. ✅ on a parent means the milestone's functionality was reviewed as a whole and works and nothing gating is open against it, which is the gate that makes "Done" mean something. |
 | `docs/backlog.md` | Architect | The checked-in list of problems the project has decided not to do. An entry gets there only through an approved triage, and leaves only when the human approves a revive — the Architect then deletes it and files a fresh `P-` entry in the same edit — or when the problem it describes is gone. |
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `CLAUDE.md` or `.claude/agents/`, the diagram is wrong. |
 | `.claude/agents/*.md`, `.claude/settings*.json` | Architect | The roles' own definitions and Claude Code configuration. |
@@ -608,6 +617,24 @@ reviewed as a whole and works. That is why the Task writer's "the
 milestone looks finished" is a question to the human rather than a status
 change, and why a review that fails files problems and leaves the parent
 at 🚧 instead of reopening children.
+
+**What holds a parent at 🚧 is a gating finding, not any finding.** A
+gating finding violates a named line of that milestone's Done-when, its
+Solution, or an invariant from "Invariants that must not be broken"
+above; the reviewer names that line in the entry, and an entry that
+cannot name one is not gating. Everything else the review turns up is
+filed in `.claude/problems.md` and triaged like any other problem, and
+**the milestone passes with it open** — ✅ on a parent has never meant
+the tree is free of known problems, only that the milestone's own
+functionality was reviewed and works. The review itself is bounded the
+same way: one full pass, the repair of its gating entries, then a pass
+scoped to that repair, with a `Reviewed:` line on the milestone entry
+carrying the first pass's verdict to the second. Before that rule, any
+finding at all — down to a stale line number — held the parent open, and
+no parent milestone had ever reached ✅ Done.
+`docs/adr/0015-milestone-review-terminates.md` records why an exit
+condition is always a finite set of checks against a named scope and
+never the absence of findings.
 
 `.claude/problems.md` is a queue, not a log. The file holds exactly the
 problems that have not yet been turned into work; an entry leaves it when

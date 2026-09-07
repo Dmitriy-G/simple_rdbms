@@ -10,27 +10,37 @@ flowchart TD
     START(["Every sub-milestone under the parent<br/>stands at ✅ Done — the Task writer set<br/>each one as it moved off it, which required<br/>the human accepting every subtask"]):::human
     MR["Milestone Reviewer — whole-milestone scope.<br/>Functionality and gaps, never code style:<br/>fmt and clippy are the style gate"]:::role
 
+    WHICH{"Reviewed: line on the<br/>milestone's roadmap entry?"}
+
     C1["1. The roadmap entry:<br/>does the code satisfy the Solution and<br/>every line of Done-when?<br/>Not 'did each subtask land'"]
     C2["2. Cross-cutting invariants across the<br/>milestone as a whole — multi-step protocols<br/>whose individual steps are each correct<br/>are the classic failure"]
     C3["3. Documentation truth:<br/>every touched .MD still describes the code,<br/>every referenced ADR exists, decisions are<br/>recorded somewhere durable"]
     C4["4. Status: roadmap markers match reality,<br/>sub-milestone ids referenced from code<br/>and .MD files resolve to real headings"]
     C5["5. Forward dependencies: did this milestone<br/>leave work a later one now silently<br/>depends on?"]
     C6["6. Deferred items: anything the Coder or<br/>the human's review put off is written down,<br/>not in someone's head"]
+    REPORT["All six reported in the reply, 'nothing'<br/>included — a check that found nothing and<br/>a check never run look identical otherwise"]
 
-    VERDICT{"Verdict"}
-    BUGS["Every bug and every gap becomes an entry in<br/>.claude/problems.md — Created by: Milestone<br/>Reviewer, Importance: and Effort: estimated,<br/>no Thinking: and no Decision:,<br/>prevention field mandatory.<br/>The parent stays at 🚧 In Progress; the<br/>entries are what reopens the work"]:::channel
-    PROB[".claude/problems.md — findings that are<br/>not defects but need investigation"]:::channel
-    FWD["Write the forward dependency into the<br/>later milestone's docs/ROADMAP.md entry"]
+    VERIFY["Verification pass — scope is exactly the<br/>repairs: did each gating entry's fix land and<br/>do what the entry asked, and what did those<br/>commits change? No re-audit of the milestone"]
 
+    SPLIT{"Each finding:<br/>does it violate a named Done-when line,<br/>the Solution, or a CLAUDE.md invariant?"}
+    GATE["Gating — entry in .claude/problems.md<br/>naming that line. The parent stays 🚧"]:::channel
+    NONGATE["Non-gating — entry in .claude/problems.md<br/>like any other problem. Triaged and<br/>scheduled by Importance; the milestone<br/>passes with it still open"]:::channel
+    FWD["Write a forward dependency into the<br/>later milestone's docs/ROADMAP.md entry"]
+
+    REVLINE["Append one Reviewed: line to the milestone<br/>entry — date, which pass, gating and<br/>non-gating P- numbers. The only fact that<br/>survives to the next pass"]:::channel
     LOOP(["Task writer schedules the fixes,<br/>Coder works them as subtasks<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
-    DONE["Set the parent milestone to ✅ Done in<br/>docs/ROADMAP.md. Only this role sets a<br/>parent, and it means the functionality was<br/>reviewed as a whole and works — not that the<br/>sub-milestones were ticked, which is merely<br/>what let the review start"]
+
+    VERDICT{"Anything gating open?"}
+    DONE["Set the parent milestone to ✅ Done in<br/>docs/ROADMAP.md and delete its Reviewed:<br/>lines in the same edit. Only this role sets a<br/>parent: the functionality was reviewed whole<br/>and works and nothing gating stands — not<br/>that the queue is empty"]
     HUMAN["Human reviews and commits"]:::human
     NEXT(["Next milestone<br/>— see agent-flow-milestone-planning.mmd"]):::stop
 
-    START --> MR --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> VERDICT
-    VERDICT -- "defects" --> BUGS --> LOOP
-    VERDICT -- "open questions" --> PROB
-    VERDICT -- "forward dependency" --> FWD
-    VERDICT -- "passes" --> DONE --> HUMAN --> NEXT
-    PROB --> DONE
-    FWD --> DONE
+    START --> MR --> WHICH
+    WHICH -- "no — pass 1" --> C1 --> C2 --> C3 --> C4 --> C5 --> C6 --> REPORT --> SPLIT
+    WHICH -- "yes — repair landed" --> VERIFY --> SPLIT
+    SPLIT -- "yes" --> GATE --> VERDICT
+    SPLIT -- "no" --> NONGATE --> VERDICT
+    SPLIT -- "forward dependency" --> FWD --> VERDICT
+    VERDICT -- "yes" --> REVLINE --> LOOP
+    LOOP -. "milestone comes back" .-> MR
+    VERDICT -- "no" --> DONE --> HUMAN --> NEXT

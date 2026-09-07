@@ -43,7 +43,12 @@ no single agent file has.
   revive the human has approved.
 - [`agent-flow-milestone-review.mmd`](agent-flow-milestone-review.mmd) —
   whole-milestone review, the only path to ✅ Done on a parent, and the
-  bugs and gaps it files when a milestone does not pass.
+  bugs and gaps it files when a milestone does not pass. Shows the two
+  things that make the loop terminate
+  (`docs/adr/0015-milestone-review-terminates.md`): the split between a
+  gating finding, which holds the parent at 🚧, and a non-gating one,
+  which the milestone passes with; and the second pass, scoped to the
+  repairs rather than re-auditing the tree.
 - [`agent-flow-documentation.mmd`](agent-flow-documentation.mmd) — who
   owns which documentation, and the four layers that validate it.
 - [`agent-flow-investigation.mmd`](agent-flow-investigation.mmd) — the

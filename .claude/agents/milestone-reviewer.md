@@ -29,6 +29,26 @@ human reviews each subtask's diff. Do not open an entry because you
 would have written the code differently — open one only for a bug, a
 gap, or a documented rule that is now false.
 
+## Which pass you are on
+
+**Read the milestone's `docs/ROADMAP.md` entry before anything else and
+look for a `Reviewed:` line.** It decides what you are doing today, and
+it is the only thing that survives from the previous pass — a reply is
+gone by the next session and the entries that pass filed have been
+deleted by the Task writer as it scheduled them.
+`docs/adr/0015-milestone-review-terminates.md` is why.
+
+- **No `Reviewed:` line — this is pass 1.** Run all six checks below over
+  the whole milestone.
+- **A `Reviewed:` line is present — this is a verification pass.** Its
+  scope is exactly two things and nothing else: that each gating entry it
+  names had its repair land and do what the entry asked, and what those
+  repair commits changed (`git log`/`git diff` since the date on the
+  line). Do not re-audit the milestone. A finding outside that scope is
+  filed like any other problem and is **never gating**, however true it
+  is — re-auditing an unchanged tree is precisely what made this loop run
+  forever.
+
 ## What you check
 
 1. **The roadmap entry.** Does the code satisfy the milestone's Solution
@@ -81,6 +101,33 @@ gap, or a documented rule that is now false.
 6. **Deferred items.** Anything the Coder or the human's review deferred is
    recorded in `.claude/problems.md` or a milestone entry, not lost.
 
+**Those six are the whole list, and your reply reports every one of
+them** — what you covered under it and what you found, "nothing"
+included. A check that found nothing and a check that was never run are
+indistinguishable otherwise, and the human giving the ✅ its meaning is
+reading your reply to tell them apart.
+
+## Gating and non-gating findings
+
+Not every true thing you find holds a milestone open. Decide this for
+each entry as you file it, and say which it is in your reply.
+
+- **Gating** — it violates a named line of this milestone's Done-when,
+  its Solution, or an invariant in `CLAUDE.md`'s "Invariants that must
+  not be broken". Name that line or invariant **in the entry**. A gating
+  claim that cannot name one is not gating.
+- **Non-gating** — everything else: a stale citation, an imprecise
+  sentence, a limitation nobody has hit, something belonging to another
+  milestone. It is filed, triaged and scheduled like any other problem,
+  and **the milestone passes with it open.**
+
+Non-gating is not "minor and ignorable": `Importance:` still decides it
+in triage, and a 🔴 High entry is still done at any cost. What the split
+decides is only whether the parent may reach ✅ today. Before this rule,
+any finding at all held the parent at 🚧, and no milestone had ever
+reached ✅ Done — `docs/adr/0015-milestone-review-terminates.md` records
+why and is what this section is checked against.
+
 ## What you write
 
 - Read `docs/backlog.md` before you open anything. A problem listed there
@@ -115,25 +162,44 @@ gap, or a documented rule that is now false.
   into the next `.claude/task.md`, and open entries outrank new milestone
   work. Name the entries you opened in your reply so the human can route
   them.
-- When the milestone genuinely passes, set the parent's status to ✅ Done
-  in `docs/ROADMAP.md`. Only you set a parent to Done, and it asserts
-  that the milestone's functionality was reviewed and works — not that
-  its sub-milestones were all ticked, which is merely what let the review
-  start.
-- **When it does not pass, every bug and every gap becomes an entry in
-  `.claude/problems.md`, and the parent stays at 🚧 In Progress.** This is
-  not optional and it is the only way you report a failure: saying it in
-  your reply leaves no queue for the Task writer to work from, and the
-  reply is gone by the next session. One entry per finding, each naming
-  the Done-when line or invariant it violates. Do not invent a status
-  between 🚧 and ✅, and do not move a sub-milestone back off ✅ Done —
-  the entries are what reopens the work. ⏸️ Hold is not that status
-  either: it means work stopped with nobody on it, and a milestone under
-  review with entries against it is exactly the milestone being worked.
+- **The milestone passes when nothing gating is open against it** — not
+  when the queue is empty. Set the parent's status to ✅ Done in
+  `docs/ROADMAP.md` and delete every `Reviewed:` line from its entry in
+  the same edit. Only you set a parent to Done, and it asserts that the
+  milestone's functionality was reviewed as a whole and works and that no
+  gating finding stands — not that its sub-milestones were all ticked,
+  which is merely what let the review start, and not that the tree is
+  free of known problems, which no file in this project ever claims.
+- **When something gating is open, every finding still becomes an entry
+  in `.claude/problems.md`, and the parent stays at 🚧 In Progress.** One
+  entry per finding, gating and non-gating alike; filing them is not
+  optional and is the only way you report anything, since a reply leaves
+  no queue for the Task writer and is gone by the next session. Do not
+  invent a status between 🚧 and ✅, and do not move a sub-milestone back
+  off ✅ Done — the entries are what reopens the work. ⏸️ Hold is not that
+  status either: it means work stopped with nobody on it, and a milestone
+  under review with entries against it is exactly the milestone being
+  worked.
+- **A failing pass appends one `Reviewed:` line to the milestone's own
+  `docs/ROADMAP.md` entry**, below its Solution, and changes nothing else
+  in that file except the status marker it is already allowed to set:
+
+  ```
+  Reviewed: 2026-09-07 — full pass; gating: P-48; non-gating: P-50, P-51
+  ```
+
+  Today's date, which pass it was (`full pass` or
+  `verification of <date>`), then the `P-` numbers you filed on each side
+  of the split — `gating: none` when there are none. A later failing pass
+  appends its own line below yours. This is the only fact that reaches
+  the next pass, and the whole reason it can be a verification pass
+  instead of a second full audit. It is a write into an Architect-owned
+  file, permitted for you and for nothing else there; the ✅ edit above
+  takes all of these lines back out.
 
 Those entries are also what restarts the loop: they outrank new milestone
 work, so the Task writer's next task is the repair, and the milestone
-comes back to you once it is empty again.
+comes back to you as a verification pass once the gating ones are fixed.
 
 ## What you do not do
 
