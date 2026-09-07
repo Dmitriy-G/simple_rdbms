@@ -1067,7 +1067,30 @@ time, and a suite run against half-written code reports failures that are
 expected and teaches nothing. The single exception is a genuine unknown —
 reproducing a reported bug, or settling a hypothesis that cannot be
 settled by reading — where one targeted `cargo test -p <crate> <filter>`
-is the cheapest answer.
+is the cheapest answer. **One means one:** a single invocation, with no
+shell loop around it and no `| tail` throwing away the assertion message
+the run was for. A question that one run cannot settle is answered by
+changing the test, not by running the same command eight times.
+
+**Three executions is the budget for a subtask, and the fourth is a
+problem entry instead.** In the ideal case a subtask runs tests exactly
+once — the gate, at the end, green. When it fails, fix what it reported
+and run again, but **no more than three executions in total**, counting
+the gate and every targeted `cargo test -p <crate> <filter>` alike; a
+`--no-run` compile is a compile, not an execution, and is not counted. If
+the third run still fails, stop and do not start a fourth. A failure that
+survives three attempts is no longer a typo being corrected one line at a
+time — it is a diagnosis that is wrong, and every further run spends
+minutes to re-learn that. File an entry in `.claude/problems.md` naming
+what failed, what each of the three attempts changed, and why each did not
+work; leave the subtask at 🚧 In Progress, since it is not ready for
+review; and hand back. This is the quantified form of the rule that a
+large investigation is Architect work and not the Coder's: an experiment
+run four times is an investigation, whatever it was called when it
+started. The case it catches most often is a test being *tuned* — round
+counts, batch sizes, sleeps adjusted until a race shows up. Reproduction
+by repetition is the signal that the test needs deterministic
+synchronization, which is a design question, not more runs.
 
 **A change that touches no code runs the documentation gate and nothing
 else.** When a subtask's whole diff is prose — sibling `.MD`s, a crate
@@ -1146,7 +1169,17 @@ prefix. Any change to storage, the WAL, recovery, or the double-write
 buffer must run both of these before it is considered done, and a change
 that alters their results is wrong until proven otherwise.
 
-Concurrency tests carry their own discipline. Bound every repetition with
+Concurrency tests carry their own discipline. **The repetition lives
+inside the test, never in the shell around it.** A race that needs many
+attempts to show itself gets those attempts as a bounded loop in the
+`#[test]` — `crates/engine/tests/catalog_reload_race.rs`'s `CREATE_ROUNDS`
+and `SPLIT_ROUNDS` are the shape to copy — so CI runs exactly what the
+author ran and the evidence is a test result rather than a transcript.
+Wrapping `cargo test` in a `for i in 1 2 3 ...` loop proves the same thing
+to nobody: it never runs in CI, it gates no PR, and it disappears with the
+session that ran it, while costing minutes of the subtask. If one run
+cannot answer the question, raise the in-test round count and commit that;
+do not run the command again. Bound every repetition with
 a timeout — a hang and a slow pass are otherwise indistinguishable
 without one — and reproduce CI's low-core scheduling with `taskset -c
 0,1` (or an equivalent CPU-affinity constraint) rather than trusting a

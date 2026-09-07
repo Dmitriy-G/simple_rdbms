@@ -146,6 +146,36 @@ fix, or confirming a hypothesis you cannot settle by reading — and then
 it is `cargo test -p <crate> <filter>`, once, not the workspace suite on
 a loop.
 
+**"Once" is literal: one invocation, never a shell loop.**
+`for i in 1 2 3 4 5 6 7 8; do cargo test ...; done` is not a targeted run,
+it is a flakiness sweep, and it is the wrong tool for one whatever the
+test is: it takes minutes, CI never repeats it, and its result vanishes
+with your session. A concurrency test that needs many attempts carries
+them inside the `#[test]` as a bounded loop — see CLAUDE.md's "Testing
+rules" and `crates/engine/tests/catalog_reload_race.rs` — so raise that
+round count and commit it rather than re-running the command. Do not pipe
+a test run through `tail` either; the lines it drops are the assertion
+message you ran it to see.
+
+**Three executions per subtask, then you file a problem instead of running
+a fourth.** One run is the ideal: the gate, at the end, green. If it
+fails, fix what it reported and run again — twice more at most. The count
+covers every execution of a test binary in the subtask, gate runs and
+targeted `cargo test -p <crate> <filter>` runs together; a `--no-run`
+compile does not count. When the third run still fails, **stop**: append an
+entry to `.claude/problems.md` saying what failed, what each of your three
+attempts changed and why each one did not work, leave the subtask at
+🚧 In Progress, and hand back saying you hit the budget. You are not being
+asked to give up early — you are being told that a fourth run buys nothing
+a wrong diagnosis has not already cost you, and that deciding what to try
+next is Architect work under the rule above.
+
+Watch for the shape this rule exists to stop: adjusting a test's round
+count, batch size or sleeps and re-running until a race appears. If a test
+only fails sometimes, the fix is a barrier or a channel that makes the
+interleaving happen every time — and if you cannot see how to synchronize
+it deterministically, that is the problem entry, not the next run.
+
 Follow every convention in CLAUDE.md, in particular: no comments in
 `.rs` files, a sibling `.MD` for every `.rs` file including tests, and
 tests in `tests/` unless the pure-private-function carve-out applies.
