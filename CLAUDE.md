@@ -283,7 +283,12 @@ have been settled.
 
 The human asks for a triage when a task, a sub-milestone or a milestone
 is finished — it is a request, never something a role starts on its own,
-because it ends with entries leaving the queue. It runs as two Architect
+because it ends with entries leaving the queue. Any request naming
+`.claude/problems.md` as a whole is that request, whatever verb it uses:
+"review", "analyse", "check", "go through". It always includes writing
+the `Thinking:` and `Decision:` lines every entry is missing, since an
+entry without them is scheduled by nobody and a report that leaves them
+blank leaves the queue as stuck as it found it. It runs as two Architect
 passes over entries that already carry their filer's estimate, with the
 human sitting between them:
 

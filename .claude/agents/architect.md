@@ -102,10 +102,15 @@ milestone is finished. Never start one unasked: it ends with entries
 leaving the queue. It has two passes and the human sits between them, so
 **pass one stops and waits.**
 
-"Review `.claude/problems.md`" — in those words or near them — is that
-ask. It means the triage below, not a re-reading of the entries for their
-own sake: estimate every entry, decide what is `Backlog`, report the
-table, stop. Reviewing the *project* is the separate job described above,
+**Any request naming `.claude/problems.md` as a whole is that ask** —
+"review it", "analyse it", "check it", "go through it". It means the
+triage below, not a re-reading of the entries for their own sake:
+estimate every entry, fill in every `Thinking:` and `Decision:` that is
+missing, decide what is `Backlog`, report the table, stop. An entry left
+without those two lines after such a request is the one outcome that is
+always wrong, because it is the request's whole point: an unrated entry
+is scheduled by nobody, so reporting on the queue without filling them in
+leaves it exactly as stuck as it was. Reviewing the *project* is the separate job described above,
 and it is asked for in terms of the tree — a crate, the docs, the
 roadmap, a module boundary — not in terms of the problems file.
 
