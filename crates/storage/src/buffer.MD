@@ -65,14 +65,14 @@ the mutex, marking its page id `evicting` rather than removing it from
 `page_table` (the eviction-visibility rule below), then releases the
 mutex *before* flushing that victim if it was dirty (`flush_pages` takes
 each frame's `RwLock` for a read-only snapshot, never the pool mutex).
-This is the rule M10.2's lock manager
-will be tempted to violate by taking a shortcut that holds the pool
-mutex "just for this one flush" - don't. `fetch_frame` returns a bare
-`FrameId` and never takes a frame latch itself - `fetch_page`/
-`fetch_page_read` take it afterward, in `write_guard`/`read_guard` - so
-the shared fetch/pin/evict/install logic already follows this structurally;
-M10.2 will be tempted to inline pinning and latching into one step, and
-doing so would reintroduce exactly the ordering this rule forbids.
+This is the rule any caller taking both locks - `txn::LockManager` since
+M10.2 included - has to keep respecting: a shortcut that holds the pool
+mutex "just for this one flush" reintroduces exactly the ordering this
+rule forbids. `fetch_frame` returns a bare `FrameId` and never takes a
+frame latch itself - `fetch_page`/`fetch_page_read` take it afterward, in
+`write_guard`/`read_guard` - so the shared fetch/pin/evict/install logic
+already follows this structurally; inlining pinning and latching into one
+step would be the same mistake.
 
 **The flush-sequence rule - read this before touching `flush_pages`:**
 `flush_sequence` (a `Mutex<()>`) is acquired *after* `index`'s mutex has

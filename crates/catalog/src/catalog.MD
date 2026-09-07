@@ -52,23 +52,25 @@ runs before `Catalog::open` (`engine::database.rs`'s `open_with_managers`),
 so a cache built by `open` after recovery already reflects every completed
 redo and undo.
 
-**Locking is deliberately out of scope here.** `engine::Database` owns its
-`Catalog` directly (a plain field, no `Mutex`/`RwLock` around it) even
-though `BufferPool` became `Send + Sync` in M10.1 and `Catalog` itself
-already is too - nothing about M10.1 required `Catalog` to gain a lock,
-only that it be safe to *move* into a `Send + Sync`-bounded `Database`.
-Wrapping it in a coarse `RwLock` now, before any concurrent access
-actually exists, would be guessing at a granularity with nothing to
-design against: the right shape depends on the DDL/DML access pattern
-M10.2's connection layer settles on (one lock for the whole catalog vs.
-per-table, readers-block-writers vs. an MVCC-style snapshot) and on how
-that layer's rollback invalidation interacts with the root-page cache
-described above - `engine::Database` reloading `self.catalog` wholesale
-on every abort only works today because there is exactly one `Catalog`
-and exactly one thread that can be reloading it. A coarse lock added
-now, before those rules exist, would very likely have to be torn out or
-reshaped once they do; leaving `Catalog` unguarded is the deliberate
-choice to defer that design to M10.2 rather than an oversight.
+**Locking lives in `engine`, not in `Catalog` itself.** `Catalog` carries
+no `Mutex`/`RwLock` of its own; `engine`'s `EngineShared` wraps the whole
+thing in one coarse `catalog: RwLock<Catalog>`
+(`crates/engine/src/runtime.rs:492`, constructed at line 546). Binding,
+planning and execution all take `catalog.read()` (e.g.
+`runtime.rs:745,821,918,997`) for the length of the statement they're
+serving; `CREATE TABLE` and `CREATE INDEX` take `catalog.write()`
+(`runtime.rs:896,927`) instead, since they mutate the catalog itself
+rather than just reading it. `EngineShared::reload_catalog`
+(`runtime.rs:846`) builds a fresh `Catalog` from disk and swaps it in
+under `catalog.write()` (line 856), and every abort path calls it -
+autocommit failure, an explicit `ROLLBACK`, and a `COMMIT` that turns
+into a rollback (`runtime.rs:431,472,758,790,812`). The write guard is
+what makes that wholesale reload safe now that many sessions can be
+active at once: taking it excludes every binder and executor in the
+process, each of which holds only the read guard, for exactly as long as
+its one statement runs - so a reload can never swap `self.catalog` out
+from under a reader that is mid-lookup, and the root-page cache described
+above never observes a `Catalog` half-replaced.
 
 ## Key Components
 

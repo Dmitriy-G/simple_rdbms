@@ -107,11 +107,19 @@ for `TxnError`. Dev-only: `tempfile` and `test-support`
 
 ## Configuration
 
-None as a runtime knob of this crate itself — `TransactionManager::new`
-takes the highest `TxnId` recovery observed at startup, and
-`Database::maybe_checkpoint` (in `engine`) decides *when* to call
-`write_checkpoint` based on `common::DbConfig::checkpoint_byte_threshold`,
-but that threshold isn't part of this crate's own state.
+`LockManager` stores a `timeout: Duration` (`crates/txn/src/lock_manager.rs:73`)
+bounding how long `acquire` blocks on a conflicting lock before giving up,
+defaulted from `common::DbConfig::DEFAULT_LOCK_WAIT_TIMEOUT_MS` (5,000ms,
+`crates/txn/src/lock_manager.rs:84`) via `LockManager::with_timeout`
+(line 87); `timeout == Duration::ZERO` means wait forever, matching the
+pre-M12 behavior. `TransactionManager::with_lock_wait_timeout`
+(`crates/txn/src/manager.rs:30`) threads an explicit millisecond value down
+to the `LockManager` it constructs, and `engine::Database::open` is the
+caller that supplies `common::DbConfig::lock_wait_timeout_ms`
+(`crates/engine/src/runtime.rs:529`), so the knob lives in `common::DbConfig`
+rather than in this crate's own state — this crate only owns the mechanism
+that obeys it. See `docs/adr/0012-bounded-lock-waits.md` for why the bound
+exists and `src/lock_manager.MD` for the wait/wake mechanics.
 
 ## Testing
 

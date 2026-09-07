@@ -8,8 +8,9 @@ per-row `VersionChain`/`VersionEntry` types the way `LockManager`
 exposes it via `TransactionManager::version_store`, mirroring
 `lock_manager`, so executors can be handed `Arc<VersionStore>` clones to
 record inserts and consult visibility through instead of locking rows
-under snapshot isolation — see the closing note below for what still
-isn't wired up.
+under snapshot isolation — see the closing paragraph below for what
+bounds the map's size, and the paragraph after the usage example for
+which executors actually call it.
 
 ## Key Components
 
