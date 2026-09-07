@@ -440,15 +440,23 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `explain_logical`/`explain_physical` calls, since all three need the
   same borrowed `&Catalog`. Never begins a transaction and never touches
   the buffer pool beyond the catalog already resident in memory.
-- `EngineShared::reload_catalog(&self) -> Result<()>` - begins (under
+- `EngineShared::reload_catalog(&self) -> Result<()>` - takes `catalog`'s
+  *write* lock first and holds it for the whole call: begins (under
   `txn::IsolationLevel::SnapshotIsolation`, like every other transaction
   this file begins) and commits a short-lived bootstrap transaction, calls
-  `Catalog::open` against it outside any lock (this can take a while - it
-  replays the whole catalog heap), then swaps the result into
-  `self.catalog` under a single brief write lock. Called after every
-  abort/rollback, since `Catalog::create_table`/`create_index` mutate the
-  in-memory catalog immediately rather than waiting for commit, and an
-  aborted transaction needs that mutation discarded.
+  `Catalog::open` against it (this can take a while - it replays the whole
+  catalog heap), then swaps the result into `self.catalog`, all under that
+  one write guard (P-46). Holding the lock across `Catalog::open` itself,
+  not just the final swap, is what makes a reload exclude a concurrent
+  `CreateTable`/`CreateIndex` (which hold the same write lock across their
+  own mutation) and a concurrent `Insert`/`Select` (which hold the *read*
+  lock across `run`'s whole `init`/`next` loop, `InsertExecutor`'s
+  `update_index_root_page` call included) - without it, `Catalog::open`'s
+  scan could interleave with either and install a catalog missing a
+  committed table or holding a stale index root page id. Called after
+  every abort/rollback, since `Catalog::create_table`/`create_index`
+  mutate the in-memory catalog immediately rather than waiting for commit,
+  and an aborted transaction needs that mutation discarded.
 - `EngineShared::commit_txn(&self, txn_id) -> Result<()>`/`abort_txn(&self,
   txn_id) -> Result<()>` - private one-line wrappers that lock
   `txn_manager` just long enough for the underlying `TransactionManager`

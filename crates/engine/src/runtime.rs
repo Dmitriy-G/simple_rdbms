@@ -844,6 +844,7 @@ impl EngineShared {
     }
 
     fn reload_catalog(&self) -> Result<()> {
+        let mut catalog = recover_lock(self.catalog.write(), "EngineShared.catalog");
         let reload_txn = {
             let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
             txn_manager.begin(&self.buffer_pool, IsolationLevel::SnapshotIsolation)?
@@ -853,7 +854,7 @@ impl EngineShared {
             let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
             txn_manager.commit(reload_txn, &self.buffer_pool)?;
         }
-        *recover_lock(self.catalog.write(), "EngineShared.catalog") = fresh;
+        *catalog = fresh;
         Ok(())
     }
 
