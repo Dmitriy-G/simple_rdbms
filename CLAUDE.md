@@ -64,7 +64,8 @@ name a branch:
    here today), 0005 (the durability boundary after the double-write
    buffer), 0008 (write-guard reentrancy), 0009 (buffer pool frame
    ownership), 0010 (waiting for a frame instead of failing), 0014 (no
-   catalog lock spans a statement).
+   catalog lock spans a statement), 0016 (a checkpoint holds no lock
+   across its page flush).
 3. `docs/backlog.md` — the problems this project knows about and has
    decided not to do. Something listed there is not a finding to report
    again; it is a decision already made.
@@ -772,6 +773,20 @@ mistake at review time.
   `crates/engine/tests/catalog_reload_race.rs` and
   `crates/engine/tests/dispatch_never_blocks.rs` are the two suites that
   hold the two halves of this in place.
+- **No lock a statement needs spans a data page flush.** The rule ADR 0014
+  set for the catalog holds for `EngineShared.txn_manager` too, and for
+  whatever acquires a long-held lock next: a checkpoint takes it for
+  `txn::write_checkpoint_record` and releases it before
+  `txn::finish_checkpoint` flushes page 0 and syncs the device
+  (`docs/adr/0016-a-checkpoint-is-not-a-quiesce-point.md`). Log I/O under
+  that mutex is allowed and unchanged — every `COMMIT` already flushes the
+  log while holding it — because what has to stay out is the unbounded
+  part, a write to the database file plus its `fsync`. Running both phases
+  under one lock stopped every session in the database for the length of
+  one `fsync`, on the ordinary `maybe_checkpoint` path rather than a rare
+  one, and `crates/engine/tests/dispatch_never_blocks.rs`'s
+  `a_stalled_checkpoint_does_not_block_an_unrelated_session` is what holds
+  it in place.
 - **Errors are logged once, at the engine boundary.** See the "Error
   handling" section below rather than duplicating it here.
 

@@ -9,7 +9,9 @@ mod mvcc;
 mod transaction;
 mod version_store;
 
-pub use checkpoint::write_checkpoint;
+pub use checkpoint::{
+    PendingCheckpoint, finish_checkpoint, write_checkpoint, write_checkpoint_record,
+};
 pub use error::TxnError;
 pub use isolation::IsolationLevel;
 pub use lock_manager::{LockManager, LockMode};

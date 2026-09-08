@@ -31,7 +31,11 @@ same path as of M10.3 (see Features).
 
 ## Key Components
 
-- `checkpoint` - `write_checkpoint`, writes a fuzzy checkpoint. See
+- `checkpoint` - `write_checkpoint_record`/`finish_checkpoint`, the two
+  phases of a fuzzy checkpoint, split so no caller holds a transaction
+  lock across the page flush
+  (`docs/adr/0016-a-checkpoint-is-not-a-quiesce-point.md`), plus
+  `write_checkpoint` for a caller that has exclusive access anyway. See
   [checkpoint.MD](src/checkpoint.MD).
 - `error` - `TxnError`, errors raised by the transaction subsystem. See
   [error.MD](src/error.MD).

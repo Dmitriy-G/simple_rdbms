@@ -21,7 +21,7 @@ use storage::heap::TableHeap;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
-use txn::{IsolationLevel, TransactionManager, write_checkpoint};
+use txn::{IsolationLevel, TransactionManager, finish_checkpoint, write_checkpoint_record};
 use types::{MemcomparableEncode, Tuple, Value};
 
 use crate::executor_factory::build_executor;
@@ -597,10 +597,11 @@ impl EngineShared {
     }
 
     fn checkpoint_and_flush(&self) -> Result<()> {
-        {
+        let pending = {
             let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
-            write_checkpoint(&self.buffer_pool, &mut txn_manager)?;
-        }
+            write_checkpoint_record(&self.buffer_pool, &mut txn_manager)?
+        };
+        finish_checkpoint(&self.buffer_pool, pending)?;
         self.record_checkpoint_written();
         self.buffer_pool.flush_log_all()?;
         self.buffer_pool.flush_all()?;
@@ -627,10 +628,11 @@ impl EngineShared {
         if grown < self.checkpoint_byte_threshold {
             return;
         }
-        let result = {
+        let pending = {
             let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
-            write_checkpoint(&self.buffer_pool, &mut txn_manager)
+            write_checkpoint_record(&self.buffer_pool, &mut txn_manager)
         };
+        let result = pending.and_then(|pending| finish_checkpoint(&self.buffer_pool, pending));
         match result {
             Ok(_) => {
                 let mut checkpoint =

@@ -33,25 +33,24 @@ so a stalled flush froze every other session's `Connect`/`Execute` the
 same way a stalled lock did for P-14. `dispatch_checkpoint`/
 `dispatch_best_effort_flush` (`runtime.MD`) now submit that work to the
 worker pool instead, and
-`a_stalled_checkpoint_does_not_block_an_unrelated_sessions_dispatch`
+`a_stalled_checkpoint_does_not_block_an_unrelated_session`
 below is the regression test, pausing a *write* rather than a read since
 that is where a checkpoint's flush actually blocks.
 
-**What that test asserts, and what it deliberately does not.** Its probe
-is a `Connect` plus a `table_names()`, both served inline by the dispatch
-thread, because those are exactly the requests P-54 makes immune to a
-stalled checkpoint. A probe that ran a real statement would *not* pass,
-and not because the dispatch thread is blocked: a checkpoint holds
-`EngineShared.txn_manager` across `write_checkpoint`'s own page-0 flush
-(`crates/txn/src/checkpoint.rs`, `flush_page(PageId(0))` under the lock
-`EngineShared::checkpoint_and_flush` took), and every statement needs that
-same mutex to begin its transaction
-(`EngineShared::txn_for_statement`). So a stalled checkpoint still stalls
-statements — through a data structure's lock, not through the dispatch
-thread — and closing that gap is a separate change to the checkpoint's
-locking, tracked as its own problem entry. Widening this test's timeout
-until an `Execute` probe passes is therefore not an option: the wait it
-would be tolerating is unbounded.
+**That test covers two fixes, and it is worth knowing why, because the
+first one alone did not make it pass.** Moving the arm to a worker frees
+the dispatch thread, so `Connect` and `table_names()` are answered while
+the checkpoint is stuck. A `SELECT` was not: a checkpoint also held
+`EngineShared.txn_manager` across `write_checkpoint`'s page-0 flush, and
+`EngineShared::txn_for_statement` needs that same mutex to begin any
+statement's transaction, so the probe parked one layer below the layer
+that had just been fixed. `docs/adr/0016-a-checkpoint-is-not-a-quiesce-point.md`
+is the second fix - the checkpoint's page flush moved out from under the
+lock - and the probe below asserts all three requests together for that
+reason. If it ever fails again, which request timed out says which of the
+two halves regressed: `Connect` means the dispatch thread, the `SELECT`
+alone means the transaction manager. Widening its timeout is never the
+answer; the wait it would be tolerating is unbounded, not slow.
 
 ## Key Components
 
@@ -84,7 +83,7 @@ would be tolerating is unbounded.
   `a_paused_select_does_not_block_an_unrelated_sessions_request`'s device
   reads; `PausingDevice::with_write_pause(inner, write_armed, write_slots)`
   is the mirror image for
-  `a_stalled_checkpoint_does_not_block_an_unrelated_sessions_dispatch`,
+  `a_stalled_checkpoint_does_not_block_an_unrelated_session`,
   which needs to intercept the page write a checkpoint's flush issues, not
   a read. `pause_if_armed(armed, slots)` is the shared body both `read_at`
   and `write_at` call: if armed (checked via `swap(false, ...)`, so only
@@ -133,7 +132,7 @@ would be tolerating is unbounded.
   count - the
   fix must not change what the paused statement itself sees, only stop it
   from starving every other session while it runs.
-- `a_stalled_checkpoint_does_not_block_an_unrelated_sessions_dispatch` -
+- `a_stalled_checkpoint_does_not_block_an_unrelated_session` -
   opens a database through a `PausingDevice::with_write_pause` at the
   default `buffer_pool_size` (the pause is on a write this test forces,
   not on an eviction it has to engineer), creates a table and commits one
@@ -143,16 +142,19 @@ would be tolerating is unbounded.
   first page write that checkpoint issues is page 0's header flush inside
   `write_checkpoint`; it parks there, and the test waits on
   `flush_reached_rx` until it knows the flush is genuinely stuck. Only
-  then does it open a *third* session from `db_probe_base` and ask for
-  `table_names()`, on its own thread, asserting the `Connect` and the
-  lookup both come back within `RESPONSIVENESS_BOUND` and that the answer
-  really contains `t` - `Database::table_names` returns an empty `Vec` on
-  error, so asserting on the content is what separates "answered" from
-  "failed fast". Before the P-54 fix, `dispatch_checkpoint` did not exist
-  and `dispatch_message` ran `checkpoint_and_flush` to completion inline,
-  so the dispatch thread was parked in the write and never reached the
-  probe's `Connect` at all: the probe hung past every bound in this file,
-  exactly as the P-14 probe did behind a stalled lock. The probe thread
+  then does it open a *third* session from `db_probe_base` and, on its own
+  thread, ask for `table_names()` and run `SELECT * FROM t`, asserting all
+  three - the `Connect`, the lookup and the statement - come back within
+  `RESPONSIVENESS_BOUND`. It checks the answers, not just the timing: the
+  name list must really contain `t`, since `Database::table_names` returns
+  an empty `Vec` on error, and the `SELECT` must return its one row, since
+  a statement that was merely *dispatched* would satisfy a timing
+  assertion on its own. Before the P-54 fix, `dispatch_checkpoint` did not
+  exist and `dispatch_message` ran `checkpoint_and_flush` to completion
+  inline, so the dispatch thread was parked in the write and never reached
+  the probe's `Connect` at all; before ADR 0016 the `Connect` and the
+  lookup passed and the `SELECT` hung on `EngineShared.txn_manager`. Both
+  hangs were unbounded, not slow. The probe thread
   hands both its sessions back to the test rather than dropping them,
   because `Drop for Database` calls `best_effort_flush`, which would queue
   behind the very flush the test is holding; joining it is therefore done

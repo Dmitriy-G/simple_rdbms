@@ -115,23 +115,25 @@ and `dispatch_best_effort_flush` (below) now submit that work to the
 worker pool the same way `dispatch_execute` does, so every arm in
 `dispatch_message` now satisfies the rule without exception.
 
-**What that rule buys, stated exactly, because it is narrower than it
-sounds.** It makes the *dispatch thread* immune to a slow or stalled
-worker, so `Connect`, `TableNames`, `TableSchema` and the submission of
-every `Execute` keep being served while a checkpoint is stuck mid-write.
-It does not make a *statement* immune. A checkpoint holds
-`EngineShared.txn_manager` for the whole of `write_checkpoint`, and
-`write_checkpoint` ends by flushing page 0 and syncing
-(`crates/txn/src/checkpoint.rs`, `flush_page(PageId(0))` then `sync()`),
-so that mutex is held across real device I/O - while `txn_for_statement`
-needs the same mutex to begin any statement's transaction. A stalled
-checkpoint therefore still stalls every statement, one lock further down
-than it used to. That is a separate defect with a separate fix (moving
-the page-0 flush out from under the lock), not something submitting the
-arm to a worker can address, and
-`crates/engine/tests/dispatch_never_blocks.rs` probes with `Connect` plus
-`table_names()` for exactly that reason - a probe that ran a statement
-would be asserting a property the engine does not yet have.
+**Getting the arm off the dispatch thread was necessary and was not
+sufficient**, and the second half is worth stating because it cost a
+misdiagnosis to find. Submitting `Checkpoint` to a worker frees the
+dispatch loop, so `Connect`, `TableNames`, `TableSchema` and the
+submission of every `Execute` keep being served while a checkpoint is
+stuck mid-write. It does nothing for the *statement* that worker then
+runs, because a checkpoint used to hold `EngineShared.txn_manager` across
+`write_checkpoint`'s page-0 flush and `sync`, and `txn_for_statement`
+needs that same mutex to begin any statement's transaction. The engine
+therefore drives the checkpoint's two phases separately:
+`write_checkpoint_record` under the lock, `finish_checkpoint` - the page
+flush, the sync and the log truncation - after it is released
+(`docs/adr/0016-a-checkpoint-is-not-a-quiesce-point.md`). Both halves
+together are what
+`crates/engine/tests/dispatch_never_blocks.rs`'s
+`a_stalled_checkpoint_does_not_block_an_unrelated_session` asserts: with
+the checkpoint's page write stalled at the device, an unrelated session
+connects, reads the catalog *and* runs a `SELECT` to completion. Undoing
+either half fails it.
 
 `crates/engine/tests/dispatch_never_blocks.rs` (`dispatch_never_blocks.MD`)
 is the regression test: it pauses a `SELECT` mid-scan with a device-level
@@ -361,10 +363,9 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   result to `reply`; neither function itself blocks or touches a lock, so
   a slow or stalled flush can no longer freeze the dispatch loop - another
   session's `Connect` and catalog lookups are served throughout, where
-  running these two arms inline stopped the engine dead. A statement is a
-  weaker claim: it still has to take `EngineShared.txn_manager`, which a
-  running checkpoint holds across page-0 I/O (see the paragraph on what
-  the rule buys, above).
+  running these two arms inline stopped the engine dead. Statements keep
+  running too, but that takes the second half of the fix as well: see
+  `checkpoint_and_flush` below and ADR 0016.
   `WorkerPool::submit`'s job queue is drained to completion before the
   pool's own threads exit (`worker_pool.MD`), so a checkpoint or flush
   already submitted still runs to completion during shutdown even though
@@ -449,19 +450,26 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   test-only introspection into how many locks a transaction (commonly one
   a test already committed or aborted) still holds.
   `checkpoint_and_flush(&self) -> Result<()>` - the work `Database::close`
-  needs: `write_checkpoint` (under the `txn_manager` lock),
-  `record_checkpoint_written`, `flush_log_all`, `flush_all`, `sync`, in
-  that order. That lock is **not** brief, whatever its scope here looks
-  like: `write_checkpoint` itself flushes page 0 and syncs the device
-  before returning (`crates/txn/src/checkpoint.rs`), so the mutex every
-  statement needs to begin a transaction is held across device I/O for as
-  long as that flush takes. It is the reason a stalled checkpoint still
-  stalls statements even though the dispatch thread stays free. `best_effort_flush(&self)` - the work `Drop for Database`
+  needs: `txn::write_checkpoint_record` under the `txn_manager` lock, then
+  `txn::finish_checkpoint` with the lock released, then
+  `record_checkpoint_written`, `flush_log_all`, `flush_all`, `sync`. The
+  split is load-bearing rather than stylistic: `finish_checkpoint` flushes
+  page 0 and syncs the database file, and holding the mutex every
+  statement needs to begin a transaction across that `fsync` stopped every
+  session in the database for its duration
+  (`docs/adr/0016-a-checkpoint-is-not-a-quiesce-point.md`). Calling
+  `txn::write_checkpoint`, which runs both phases in one go, would
+  reintroduce exactly that - it exists for callers that hold the
+  transaction manager exclusively anyway, which the engine never does.
+  `best_effort_flush(&self)` - the work `Drop for Database`
   needs: skip entirely if `buffer_pool.is_flush_poisoned()`, otherwise
   attempt `flush_log_all`/`flush_all` and discard any error.
   `maybe_checkpoint(&self)` - skips if poisoned, skips if the log hasn't
   grown `checkpoint_byte_threshold` bytes since the last checkpoint
-  (read under a brief `checkpoint` lock), otherwise checkpoints, calls
+  (read under a brief `checkpoint` lock), otherwise checkpoints in the
+  same two phases `checkpoint_and_flush` uses and for the same reason -
+  more so, in fact, since this is the path that runs on an ordinary
+  statement's worker thread rather than on `close` - calls
   `record_checkpoint_written` on success, and logs a `warn!` on failure
   without propagating it. Two statements on different sessions can, in
   principle, both observe the threshold crossed and both checkpoint

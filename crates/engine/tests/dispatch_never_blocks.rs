@@ -178,8 +178,7 @@ fn a_paused_select_does_not_block_an_unrelated_sessions_request() -> Result<(), 
 }
 
 #[test]
-fn a_stalled_checkpoint_does_not_block_an_unrelated_sessions_dispatch() -> Result<(), Box<dyn Error>>
-{
+fn a_stalled_checkpoint_does_not_block_an_unrelated_session() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let config = DbConfig::new(dir.path().join("test.db"));
 
@@ -218,19 +217,26 @@ fn a_stalled_checkpoint_does_not_block_an_unrelated_sessions_dispatch() -> Resul
 
     let (probe_tx, probe_rx) = mpsc::channel();
     let probe_handle = thread::spawn(move || {
-        let db_probe = db_probe_base.connect().expect("connect must not fail");
-        let _ = probe_tx.send(db_probe.table_names());
+        let mut db_probe = db_probe_base.connect().expect("connect must not fail");
+        let names = db_probe.table_names();
+        let rows = db_probe.execute("SELECT * FROM t");
+        let _ = probe_tx.send((names, rows));
         (db_probe_base, db_probe)
     });
-    let names = recv_within(
+    let (names, rows) = recv_within(
         &probe_rx,
         RESPONSIVENESS_BOUND,
-        "an unrelated session's Connect and table_names() request while a checkpoint's flush is \
-         parked mid-write inside the worker pool",
+        "an unrelated session's Connect, table_names() and SELECT while a checkpoint's page-0 \
+         flush is parked mid-write inside the worker pool",
     );
     assert!(
         names.iter().any(|name| name == "t"),
         "the probe must get the real catalog back, not an error default; got {names:?}"
+    );
+    assert_eq!(
+        row_count(rows?),
+        1,
+        "the probe's statement must run to completion, not merely be dispatched"
     );
 
     let _ = flush_release_tx.send(());
