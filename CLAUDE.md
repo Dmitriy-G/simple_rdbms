@@ -802,7 +802,7 @@ shipped capability is missing, which is worse than not listing it at all.
   (`crates/storage/src/btree.rs:663`); its body is `todo!()`, and M14
   changes its signature to `(txn_id, key, rid)` as well as filling it in.
 - `catalog::Catalog::drop_table` — the method exists
-  (`crates/catalog/src/catalog.rs:125`); its body is `todo!()` and nothing
+  (`crates/catalog/src/catalog.rs:168`); its body is `todo!()` and nothing
   in the tree calls it, since no grammar produces `DROP TABLE` (M26).
 - `executor::NestedLoopJoinExecutor` — exists and is wired into the
   executor factory; `init` and `next` are both `todo!()` (M23.1).

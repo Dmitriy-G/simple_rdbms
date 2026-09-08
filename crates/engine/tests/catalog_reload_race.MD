@@ -7,11 +7,28 @@ lock, so a reload triggered by one session's aborted/rolled-back
 autocommit statement could install a catalog that missed a concurrent
 session's just-committed `CREATE TABLE`, or that reverted an index's root
 page id to a pre-split value a concurrent `InsertExecutor` had already
-moved past. The fix holds `catalog`'s write lock across the whole reload
-- `Catalog::open` included, not just the final swap - so a reload now
-excludes both the `catalog` *write* lock `CreateTable`/`CreateIndex` hold
-for their own mutation and the `catalog` *read* lock `run` holds for an
-`Insert`/`Select`'s whole `init`/`next` loop. Both tests here synchronize
+moved past. The fix is that a reload is atomic with respect to every
+catalog *mutation*: `Catalog::reload` holds the catalog's own mutation
+lock across the whole of its read-from-disk plus install, and
+`create_table`, `create_index` and `update_index_root_page` each take that
+same lock for their duration, so a reload's scan can never interleave with
+one of them (`catalog::catalog.MD`,
+`docs/adr/0014-catalog-is-a-live-shared-object.md`).
+
+**This is the requirement that pulls against
+`dispatch_never_blocks.MD`'s, and the pair has to be read together.** An
+earlier fix bought this guarantee by widening `EngineShared`'s
+`RwLock<Catalog>` write lock to cover `Catalog::open`, which excluded
+*readers* too - because a root split travelled under the read lock - and
+that is exactly what made one paused `SELECT` stall every other session's
+metadata request. ADR 0014 resolves both at once by moving the lock into
+`Catalog` and splitting it in two: a mutation `Mutex` (what this suite
+depends on) and a state `RwLock` held only for the length of a single
+lookup (what `dispatch_never_blocks` depends on). A future change that
+re-widens either one to cover the other's job will fail one of these two
+suites, and which one it fails says which half of the pair it broke.
+
+Both tests here synchronize
 their two sessions on a fresh `std::sync::Barrier` every round, the same
 pattern `crates/storage/tests/buffer_pool_concurrency.rs` uses, rather
 than on a sleep - a barrier makes the two sessions' critical sections

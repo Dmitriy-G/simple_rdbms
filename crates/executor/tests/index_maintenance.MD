@@ -45,7 +45,7 @@ silently indexed, and a root split survives being rolled back.
 mod support;
 
 let (pool, _dir) = support::open_pool(16);
-let mut catalog = Catalog::new();
+let catalog = Catalog::new();
 let table_id = catalog.create_table(&pool, TXN, "t", schema).expect("create table").table_id;
 let index_id = catalog.create_index(&pool, TXN, "idx", table_id, 0).expect("create index").index_id;
 

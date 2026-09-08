@@ -61,7 +61,7 @@ concurrently on a fixed worker pool
 serialized behind its session mutex.
 
 *Readers take no locks.* Every user statement runs at
-`IsolationLevel::SnapshotIsolation` (`crates/engine/src/runtime.rs:773,852,883`),
+`IsolationLevel::SnapshotIsolation` (`crates/engine/src/runtime.rs:768,846,876`),
 and under it `SeqScanExecutor::init` skips the shared table lock
 (`crates/executor/src/operators/seq_scan.rs:26-29`) while `next` filters
 each tuple through `VersionStore::is_visible_to(rid, txn_id, read_ts)`

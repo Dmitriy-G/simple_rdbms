@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::error::Error;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,33 +16,31 @@ const REACHED_TIMEOUT: Duration = Duration::from_secs(10);
 const RESPONSIVENESS_BOUND: Duration = Duration::from_millis(500);
 const PAUSE_SAFETY_NET: Duration = Duration::from_secs(10);
 
+struct PauseSlot {
+    reached: mpsc::SyncSender<()>,
+    release: mpsc::Receiver<()>,
+}
+
 struct PausingDevice {
     inner: FileDevice,
     armed: Arc<AtomicBool>,
-    reached: Mutex<Option<mpsc::SyncSender<()>>>,
-    release: Mutex<mpsc::Receiver<()>>,
+    slots: Mutex<VecDeque<PauseSlot>>,
 }
 
 impl PausingDevice {
-    fn new(
-        inner: FileDevice,
-        armed: Arc<AtomicBool>,
-        reached: mpsc::SyncSender<()>,
-        release: mpsc::Receiver<()>,
-    ) -> Self {
-        Self { inner, armed, reached: Mutex::new(Some(reached)), release: Mutex::new(release) }
+    fn new(inner: FileDevice, armed: Arc<AtomicBool>, slots: VecDeque<PauseSlot>) -> Self {
+        Self { inner, armed, slots: Mutex::new(slots) }
     }
 }
 
 impl BlockDevice for PausingDevice {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
         if self.armed.swap(false, Ordering::SeqCst) {
-            let mut reached = self.reached.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            if let Some(tx) = reached.take() {
-                drop(reached);
-                let _ = tx.send(());
-                let release = self.release.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                let _ = release.recv_timeout(PAUSE_SAFETY_NET);
+            let mut slots = self.slots.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(slot) = slots.pop_front() {
+                drop(slots);
+                let _ = slot.reached.send(());
+                let _ = slot.release.recv_timeout(PAUSE_SAFETY_NET);
             }
         }
         self.inner.read_at(offset, buf)
@@ -83,13 +82,18 @@ fn a_paused_select_does_not_block_an_unrelated_sessions_request() -> Result<(), 
     let config = DbConfig { buffer_pool_size: 2, ..DbConfig::new(dir.path().join("test.db")) };
 
     let armed = Arc::new(AtomicBool::new(false));
-    let (reached_tx, reached_rx) = mpsc::sync_channel::<()>(0);
-    let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
+    let (scan_reached_tx, scan_reached_rx) = mpsc::sync_channel::<()>(0);
+    let (scan_release_tx, scan_release_rx) = mpsc::sync_channel::<()>(0);
+    let (reload_reached_tx, reload_reached_rx) = mpsc::sync_channel::<()>(0);
+    let (reload_release_tx, reload_release_rx) = mpsc::sync_channel::<()>(0);
+    let slots = VecDeque::from(vec![
+        PauseSlot { reached: scan_reached_tx, release: scan_release_rx },
+        PauseSlot { reached: reload_reached_tx, release: reload_release_rx },
+    ]);
     let db_device: Box<dyn BlockDevice> = Box::new(PausingDevice::new(
         FileDevice::new(open_file(&dir.path().join("test.db"))?),
         Arc::clone(&armed),
-        reached_tx,
-        release_rx,
+        slots,
     ));
     let wal_store: Arc<dyn SegmentStore> =
         Arc::new(FileSegmentStore::new(wal_base_path(dir.path())));
@@ -110,9 +114,16 @@ fn a_paused_select_does_not_block_an_unrelated_sessions_request() -> Result<(), 
     let mut db_scan = db1.connect()?;
     let scan_handle = thread::spawn(move || db_scan.execute("SELECT * FROM t"));
 
-    recv_within(&reached_rx, REACHED_TIMEOUT, "the paused SELECT to reach its blocked read");
+    recv_within(&scan_reached_rx, REACHED_TIMEOUT, "the paused SELECT to reach its blocked read");
 
+    armed.store(true, Ordering::SeqCst);
     drop(db2);
+    recv_within(
+        &reload_reached_rx,
+        REACHED_TIMEOUT,
+        "the disconnect's catalog reload to reach its blocked read, which is where it holds the \
+         catalog's mutation lock",
+    );
 
     let db_probe = db1.connect()?;
     let (probe_tx, probe_rx) = mpsc::channel();
@@ -124,11 +135,12 @@ fn a_paused_select_does_not_block_an_unrelated_sessions_request() -> Result<(), 
         &probe_rx,
         RESPONSIVENESS_BOUND,
         "an unrelated session's table_names() request while a long SELECT is paused and a \
-         disconnecting session's transaction is being rolled back",
+         catalog reload is known to be parked mid-read holding the catalog's mutation lock",
     );
     probe_handle.join().expect("probe thread must not panic");
 
-    let _ = release_tx.send(());
+    let _ = reload_release_tx.send(());
+    let _ = scan_release_tx.send(());
     let scan_result = scan_handle.join().expect("scan thread must not panic")?;
     assert_eq!(row_count(scan_result), 10, "the paused SELECT must still complete correctly");
     Ok(())

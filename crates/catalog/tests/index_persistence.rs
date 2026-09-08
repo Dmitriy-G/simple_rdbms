@@ -27,7 +27,7 @@ fn an_index_survives_reopen_with_its_identity_and_root_page_intact() -> Result<(
 
     let table_id = {
         let pool = open_pool(&path)?;
-        let mut catalog = Catalog::open(&pool, TXN)?;
+        let catalog = Catalog::open(&pool, TXN)?;
         let table = catalog.create_table(&pool, TXN, "users", users_schema())?;
         let table_id = table.table_id;
         let index = catalog.create_index(&pool, TXN, "idx_users_email", table_id, 1)?;
@@ -49,7 +49,7 @@ fn an_index_survives_reopen_with_its_identity_and_root_page_intact() -> Result<(
         let root_page = catalog.index_root_page(index.index_id)?;
         assert_ne!(root_page, PageId(u32::MAX), "root page must be a real, allocated page");
 
-        let indexes: Vec<_> = catalog.indexes_for_table(table_id).collect();
+        let indexes: Vec<_> = catalog.indexes_for_table(table_id);
         assert_eq!(indexes.len(), 1);
     }
 
@@ -61,7 +61,7 @@ fn duplicate_index_name_is_rejected() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.db");
     let pool = open_pool(&path)?;
-    let mut catalog = Catalog::open(&pool, TXN)?;
+    let catalog = Catalog::open(&pool, TXN)?;
 
     let table = catalog.create_table(&pool, TXN, "users", users_schema())?;
     let table_id = table.table_id;
@@ -83,7 +83,7 @@ fn a_root_page_update_survives_reopen() -> Result<(), Box<dyn Error>> {
 
     let (table_id, new_root) = {
         let pool = open_pool(&path)?;
-        let mut catalog = Catalog::open(&pool, TXN)?;
+        let catalog = Catalog::open(&pool, TXN)?;
         let table = catalog.create_table(&pool, TXN, "users", users_schema())?;
         let table_id = table.table_id;
         let index = catalog.create_index(&pool, TXN, "idx_users_id", table_id, 0)?;
@@ -114,7 +114,7 @@ fn many_root_page_updates_leave_the_index_catalog_heap_with_one_live_row_per_ind
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.db");
     let pool = open_pool(&path)?;
-    let mut catalog = Catalog::open(&pool, TXN)?;
+    let catalog = Catalog::open(&pool, TXN)?;
 
     let table = catalog.create_table(&pool, TXN, "users", users_schema())?;
     let table_id = table.table_id;
@@ -144,7 +144,7 @@ fn update_index_root_page_touches_a_bounded_number_of_pages_regardless_of_prior_
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("test.db");
     let pool = open_pool(&path)?;
-    let mut catalog = Catalog::open(&pool, TXN)?;
+    let catalog = Catalog::open(&pool, TXN)?;
 
     let table = catalog.create_table(&pool, TXN, "users", users_schema())?;
     let table_id = table.table_id;

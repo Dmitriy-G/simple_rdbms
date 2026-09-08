@@ -38,7 +38,14 @@ path, not just an explicit `ROLLBACK`.
   since `AtomicU32` implements neither: `Clone` snapshots the current
   value into a fresh, independent atomic; `PartialEq` compares the loaded
   values field-for-field, the same shape the derived impl would have
-  produced over a `Cell<PageId>`.
+  produced over a `Cell<PageId>`. That `Clone` is load-bearing rather than
+  incidental: `Catalog`'s lookups hand back cloned `IndexInfo`s so no
+  caller holds a borrow into the map behind the catalog's state lock
+  (`docs/adr/0014-catalog-is-a-live-shared-object.md`), which means a
+  caller's copy is a *snapshot* of the root page at lookup time. A split
+  updates the entry the catalog stores, not the caller's clone, so code
+  that needs the post-split value calls `Catalog::index_root_page` again
+  instead of re-reading its own `IndexInfo`.
 - `IndexInfo::new(index_id, name, table_id, column_index, root_page_id, catalog_rid, root_page_id_offset) -> Self` -
   builds an index's full catalog entry, including its current root page
   and the two pieces of bookkeeping needed to update it later.

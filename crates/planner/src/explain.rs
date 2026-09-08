@@ -24,15 +24,16 @@ pub fn explain_physical(plan: &PhysicalPlan, catalog: &Catalog, verbose: bool) -
 pub(crate) fn table_name(table_id: TableId, catalog: &Catalog) -> String {
     catalog
         .get_table_by_id(table_id)
-        .map(|info| info.name.clone())
+        .map(|info| info.name)
         .unwrap_or_else(|_| format!("<table {}>", table_id.0))
 }
 
 pub(crate) fn index_name(index_id: IndexId, table_id: TableId, catalog: &Catalog) -> String {
     catalog
         .indexes_for_table(table_id)
+        .into_iter()
         .find(|info| info.index_id == index_id)
-        .map(|info| info.name.clone())
+        .map(|info| info.name)
         .unwrap_or_else(|| format!("<index {}>", index_id.0))
 }
 
@@ -40,8 +41,7 @@ pub(crate) fn column_name(table_id: TableId, column_index: usize, catalog: &Cata
     catalog
         .get_table_by_id(table_id)
         .ok()
-        .and_then(|info| info.schema.columns().get(column_index))
-        .map(|column| column.name.clone())
+        .and_then(|info| info.schema.columns().get(column_index).map(|column| column.name.clone()))
         .unwrap_or_else(|| format!("<column {column_index}>"))
 }
 
@@ -209,7 +209,8 @@ fn render_index_cond_inner(
     end: &Option<Vec<u8>>,
     catalog: &Catalog,
 ) -> Option<String> {
-    let info = catalog.indexes_for_table(table_id).find(|info| info.index_id == index_id)?;
+    let info =
+        catalog.indexes_for_table(table_id).into_iter().find(|info| info.index_id == index_id)?;
     let table = catalog.get_table_by_id(table_id).ok()?;
     let column = table.schema.columns().get(info.column_index)?;
     let column_name = &column.name;

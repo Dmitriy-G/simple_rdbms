@@ -14,7 +14,7 @@ const TXN: TxnId = TxnId(0);
 #[test]
 fn insert_maintains_a_single_index() {
     let (pool, _dir) = support::open_pool(16);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
 
     let schema = Schema::new(vec![Column::new("id", DataType::Integer, true)]);
     let table_id = catalog.create_table(&pool, TXN, "t", schema).expect("create table").table_id;
@@ -42,7 +42,7 @@ fn insert_maintains_a_single_index() {
 #[test]
 fn insert_maintains_every_index_on_a_multi_indexed_table() {
     let (pool, _dir) = support::open_pool(16);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
 
     let schema = Schema::new(vec![
         Column::new("a", DataType::Integer, true),
@@ -74,7 +74,7 @@ fn insert_maintains_every_index_on_a_multi_indexed_table() {
 #[test]
 fn a_failed_index_insert_returns_an_error_and_leaves_that_row_out_of_the_index() {
     let (pool, _dir) = support::open_pool(16);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
 
     let schema = Schema::new(vec![Column::new("val", DataType::Double, true)]);
     let table = catalog.create_table(&pool, TXN, "t", schema).expect("create table");
@@ -111,7 +111,7 @@ fn a_rolled_back_root_split_leaves_the_index_structurally_valid_and_empty() {
     let mut txn_manager = TransactionManager::new(None);
 
     let setup_txn = txn_manager.begin(&pool, IsolationLevel::ReadCommitted).expect("begin setup");
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
     let schema = Schema::new(vec![Column::new("id", DataType::Integer, true)]);
     let table_id =
         catalog.create_table(&pool, setup_txn, "t", schema).expect("create table").table_id;

@@ -17,7 +17,7 @@ fn open_pool(pool_size: usize) -> (BufferPool, tempfile::TempDir) {
 }
 
 #[cfg(test)]
-fn seed_table(pool: &BufferPool, catalog: &mut Catalog, count: i64) -> (TableId, Vec<i64>) {
+fn seed_table(pool: &BufferPool, catalog: &Catalog, count: i64) -> (TableId, Vec<i64>) {
     let schema = Schema::new(vec![Column::new("n", DataType::BigInt, false)]);
     let info = catalog.create_table(pool, TXN, "t", schema).expect("create table");
     let table_id = info.table_id;
@@ -43,8 +43,8 @@ fn as_bigint(tuple: &Tuple) -> i64 {
 #[test]
 fn scan_spanning_pages_preserves_insertion_order() {
     let (pool, _dir) = open_pool(2);
-    let mut catalog = Catalog::new();
-    let (table_id, expected) = seed_table(&pool, &mut catalog, 800);
+    let catalog = Catalog::new();
+    let (table_id, expected) = seed_table(&pool, &catalog, 800);
 
     let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();
@@ -63,8 +63,8 @@ fn scan_spanning_pages_preserves_insertion_order() {
 #[test]
 fn pulling_one_tuple_never_fetches_pages_beyond_the_first() {
     let (pool, _dir) = open_pool(4);
-    let mut catalog = Catalog::new();
-    let (table_id, _expected) = seed_table(&pool, &mut catalog, 800);
+    let catalog = Catalog::new();
+    let (table_id, _expected) = seed_table(&pool, &catalog, 800);
 
     let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();
@@ -86,8 +86,8 @@ fn pulling_one_tuple_never_fetches_pages_beyond_the_first() {
 #[test]
 fn interleaved_scans_over_the_same_table_each_yield_the_full_result() {
     let (pool, _dir) = open_pool(2);
-    let mut catalog = Catalog::new();
-    let (table_id, expected) = seed_table(&pool, &mut catalog, 800);
+    let catalog = Catalog::new();
+    let (table_id, expected) = seed_table(&pool, &catalog, 800);
 
     let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
     let lock_manager = LockManager::new();

@@ -110,7 +110,7 @@ call).
 
 ```rust
 let (pool, _dir) = open_pool(16);
-let mut catalog = Catalog::new();
+let catalog = Catalog::new();
 let mut txn_manager = TransactionManager::new(None);
 // ... create table ...
 

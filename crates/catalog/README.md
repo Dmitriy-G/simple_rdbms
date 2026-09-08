@@ -27,8 +27,19 @@ across that sequence to prove a header pointing at a never-allocated heap
 can never happen. An index's `root_page_id` is cached in memory and kept
 in sync with an in-place row rewrite on every root split — see
 [catalog.MD](src/catalog.MD)'s "Root-page caching" for the design, and why
-it depends on `engine::Database` reloading the catalog after every abort,
-not only an explicit `ROLLBACK`.
+it depends on the engine reloading the catalog after every abort, not only
+an explicit `ROLLBACK`.
+
+`Catalog` is a **live, self-synchronizing shared object**: there is one
+per open database, it is never replaced, every method takes `&self`, and
+callers hold no lock on it
+([ADR 0014](../../docs/adr/0014-catalog-is-a-live-shared-object.md)). It
+owns a `RwLock` over its maps and a separate mutation `Mutex` that
+mutators and reloads take to exclude each other; readers are excluded by
+neither, so a long `SELECT` never delays a metadata request from another
+session. Lookups therefore return owned `TableInfo`/`IndexInfo` values
+rather than references, and a reload refills this object in place instead
+of swapping a new one in.
 
 ## Key Components
 

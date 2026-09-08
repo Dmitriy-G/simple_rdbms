@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock, TryLockError, mpsc};
+use std::sync::{Arc, Mutex, TryLockError, mpsc};
 use std::time::{Duration, Instant};
 
 use catalog::{Catalog, Column, Schema};
@@ -489,7 +489,7 @@ struct CheckpointState {
 }
 
 struct EngineShared {
-    catalog: RwLock<Catalog>,
+    catalog: Arc<Catalog>,
     buffer_pool: Arc<BufferPool>,
     txn_manager: Mutex<TransactionManager>,
     checkpoint: Mutex<CheckpointState>,
@@ -544,7 +544,7 @@ impl EngineShared {
         );
 
         Ok(Self {
-            catalog: RwLock::new(catalog),
+            catalog: Arc::new(catalog),
             buffer_pool,
             txn_manager: Mutex::new(txn_manager),
             checkpoint: Mutex::new(CheckpointState {
@@ -638,13 +638,11 @@ impl EngineShared {
     }
 
     fn table_names(&self) -> Vec<String> {
-        let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
-        catalog.table_names().into_iter().map(String::from).collect()
+        self.catalog.table_names()
     }
 
     fn table_schema(&self, name: &str) -> Result<Schema> {
-        let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
-        Ok(catalog.get_table(name)?.schema.clone())
+        Ok(self.catalog.get_table(name)?.schema)
     }
 
     fn execute(&self, session: &mut SessionState, sql: &str) -> Result<ResultSet> {
@@ -743,10 +741,7 @@ impl EngineShared {
         statement: Statement,
     ) -> Result<ResultSet> {
         let (txn_id, autocommit) = self.txn_for_statement(session)?;
-        let bound = {
-            let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
-            Binder::new(&catalog).bind(statement).map_err(Error::from)
-        };
+        let bound = Binder::new(&self.catalog).bind(statement).map_err(Error::from);
         let result = bound.and_then(|bound| self.execute_bound(bound, txn_id));
 
         if autocommit {
@@ -820,8 +815,8 @@ impl EngineShared {
     }
 
     fn handle_explain(&self, statement: Statement) -> Result<ResultSet> {
-        let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
-        let bound = Binder::new(&catalog).bind(statement).map_err(Error::from)?;
+        let catalog = &self.catalog;
+        let bound = Binder::new(catalog).bind(statement).map_err(Error::from)?;
         let BoundStatement::Explain { verbose, inner } = bound else {
             unreachable!(
                 "handle_explain is only called for Statement::Explain, whose binder output is \
@@ -830,33 +825,31 @@ impl EngineShared {
         };
 
         let logical = planner::plan(*inner)?;
-        let optimized = Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &catalog);
+        let optimized = Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, catalog);
         let physical = to_physical(optimized.clone());
 
         let mut lines = Vec::new();
         if verbose {
             lines.push("Logical plan:".to_string());
-            lines.extend(explain_logical(&optimized, &catalog, verbose));
+            lines.extend(explain_logical(&optimized, catalog, verbose));
             lines.push("Physical plan:".to_string());
         }
-        lines.extend(explain_physical(&physical, &catalog, verbose));
+        lines.extend(explain_physical(&physical, catalog, verbose));
 
         let rows = lines.into_iter().map(|line| Tuple::new(vec![Value::Varchar(line)])).collect();
         Ok(ResultSet::rows(vec!["QUERY PLAN".to_string()], rows))
     }
 
     fn reload_catalog(&self) -> Result<()> {
-        let mut catalog = recover_lock(self.catalog.write(), "EngineShared.catalog");
         let reload_txn = {
             let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
             txn_manager.begin(&self.buffer_pool, IsolationLevel::SnapshotIsolation)?
         };
-        let fresh = Catalog::open(&self.buffer_pool, reload_txn)?;
+        self.catalog.reload(&self.buffer_pool, reload_txn)?;
         {
             let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
             txn_manager.commit(reload_txn, &self.buffer_pool)?;
         }
-        *catalog = fresh;
         Ok(())
     }
 
@@ -896,8 +889,7 @@ impl EngineShared {
                         .map(|column| Column::new(column.name, column.data_type, column.nullable))
                         .collect(),
                 );
-                let mut catalog = recover_lock(self.catalog.write(), "EngineShared.catalog");
-                catalog.create_table(&self.buffer_pool, txn_id, &create.table_name, schema)?;
+                self.catalog.create_table(&self.buffer_pool, txn_id, &create.table_name, schema)?;
                 Ok(ResultSet::rows_affected(0))
             }
             BoundStatement::Insert(insert) => {
@@ -917,18 +909,16 @@ impl EngineShared {
             BoundStatement::Select(select) => {
                 let column_names = select.column_names.clone();
                 let logical = planner::plan(BoundStatement::Select(select))?;
-                let optimized = {
-                    let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
-                    Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &catalog)
-                };
+                let optimized =
+                    Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &self.catalog);
                 let physical = to_physical(optimized);
                 tracing::debug!(plan = ?physical, "executing plan");
                 let rows = self.run(physical, txn_id)?;
                 Ok(ResultSet::rows(column_names, rows))
             }
             BoundStatement::CreateIndex(create) => {
-                let mut catalog = recover_lock(self.catalog.write(), "EngineShared.catalog");
-                let index_id = catalog
+                let index_id = self
+                    .catalog
                     .create_index(
                         &self.buffer_pool,
                         txn_id,
@@ -937,13 +927,7 @@ impl EngineShared {
                         create.column_index,
                     )?
                     .index_id;
-                self.populate_index(
-                    &catalog,
-                    txn_id,
-                    create.table_id,
-                    create.column_index,
-                    index_id,
-                )?;
+                self.populate_index(txn_id, create.table_id, create.column_index, index_id)?;
                 Ok(ResultSet::rows_affected(0))
             }
             BoundStatement::Explain { .. } => unreachable!(
@@ -956,18 +940,17 @@ impl EngineShared {
 
     fn populate_index(
         &self,
-        catalog: &Catalog,
         txn_id: TxnId,
         table_id: common::TableId,
         column_index: usize,
         index_id: common::IndexId,
     ) -> Result<()> {
-        let table = catalog.get_table_by_id(table_id)?;
+        let table = self.catalog.get_table_by_id(table_id)?;
         let first_page_id = table.first_page_id;
         let column_types: Vec<_> =
             table.schema.columns().iter().map(|column| column.data_type).collect();
 
-        let mut root_page_id = catalog.index_root_page(index_id)?;
+        let mut root_page_id = self.catalog.index_root_page(index_id)?;
         let heap = TableHeap::open(&self.buffer_pool, first_page_id);
         for entry in heap.iter() {
             let (rid, bytes) = entry?;
@@ -981,7 +964,12 @@ impl EngineShared {
             btree_index.insert(txn_id, &key, rid)?;
             let root_after = btree_index.root_page_id();
             if root_after != root_page_id {
-                catalog.update_index_root_page(&self.buffer_pool, txn_id, index_id, root_after)?;
+                self.catalog.update_index_root_page(
+                    &self.buffer_pool,
+                    txn_id,
+                    index_id,
+                    root_after,
+                )?;
                 root_page_id = root_after;
             }
         }
@@ -997,10 +985,14 @@ impl EngineShared {
                 txn_manager.version_store().clone(),
             )
         };
-        let catalog = recover_lock(self.catalog.read(), "EngineShared.catalog");
         let mut executor = build_executor(physical);
-        let mut ctx =
-            ExecutorContext::new(&catalog, &self.buffer_pool, &txn, &lock_manager, &version_store);
+        let mut ctx = ExecutorContext::new(
+            &self.catalog,
+            &self.buffer_pool,
+            &txn,
+            &lock_manager,
+            &version_store,
+        );
         executor.init(&mut ctx)?;
 
         let mut rows = Vec::new();

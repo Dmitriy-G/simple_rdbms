@@ -48,7 +48,7 @@ Integration tests for the index half of the catalog - `Catalog::create_index`,
 
 ```rust
 let pool = open_pool(&path)?;
-let mut catalog = Catalog::open(&pool, TXN)?;
+let catalog = Catalog::open(&pool, TXN)?;
 let table = catalog.create_table(&pool, TXN, "users", users_schema())?;
 let index = catalog.create_index(&pool, TXN, "idx_users_id", table.table_id, 0)?;
 let root = catalog.index_root_page(index.index_id)?;

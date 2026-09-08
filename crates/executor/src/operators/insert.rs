@@ -51,6 +51,7 @@ impl Executor for InsertExecutor {
         let mut targets: Vec<IndexTarget> = ctx
             .catalog
             .indexes_for_table(self.table_id)
+            .into_iter()
             .map(|index| IndexTarget {
                 index_id: index.index_id,
                 column_index: index.column_index,

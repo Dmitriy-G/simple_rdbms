@@ -60,7 +60,7 @@ fn insert_row(
 #[test]
 fn seq_scan_under_snapshot_isolation_hides_uncommitted_rows_but_shows_untracked_ones() {
     let (pool, _dir) = open_pool(16);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
     let mut txn_manager = TransactionManager::new(None);
 
     let ddl_txn = txn_manager.begin(&pool, IsolationLevel::ReadCommitted).expect("begin ddl");
@@ -101,7 +101,7 @@ fn seq_scan_under_snapshot_isolation_hides_uncommitted_rows_but_shows_untracked_
 #[test]
 fn seq_scan_under_snapshot_isolation_sees_its_own_uncommitted_insert() {
     let (pool, _dir) = open_pool(16);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
     let mut txn_manager = TransactionManager::new(None);
 
     let ddl_txn = txn_manager.begin(&pool, IsolationLevel::ReadCommitted).expect("begin ddl");
@@ -139,7 +139,7 @@ fn seq_scan_under_snapshot_isolation_sees_its_own_uncommitted_insert() {
 #[test]
 fn seq_scan_under_read_committed_still_takes_its_locks() {
     let (pool, _dir) = open_pool(16);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
     let mut txn_manager = TransactionManager::new(None);
 
     let ddl_txn = txn_manager.begin(&pool, IsolationLevel::ReadCommitted).expect("begin ddl");
@@ -169,7 +169,7 @@ fn seq_scan_under_read_committed_still_takes_its_locks() {
 #[test]
 fn index_scan_under_snapshot_isolation_hides_the_same_invisible_row() {
     let (pool, _dir) = open_pool(16);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
     let mut txn_manager = TransactionManager::new(None);
 
     let ddl_txn = txn_manager.begin(&pool, IsolationLevel::ReadCommitted).expect("begin ddl");
@@ -211,7 +211,7 @@ fn index_scan_under_snapshot_isolation_hides_the_same_invisible_row() {
 #[test]
 fn insert_registers_a_version_chain_before_the_rid_is_returned() {
     let (pool, _dir) = open_pool(16);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
     let mut txn_manager = TransactionManager::new(None);
 
     let ddl_txn = txn_manager.begin(&pool, IsolationLevel::ReadCommitted).expect("begin ddl");
@@ -257,7 +257,7 @@ fn insert_registers_a_version_chain_before_the_rid_is_returned() {
 fn seq_scan_under_snapshot_isolation_never_observes_a_row_before_its_version_chain_exists() {
     let (pool, _dir) = open_pool(16);
     let pool = Arc::new(pool);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
     let mut txn_manager = TransactionManager::new(None);
 
     let ddl_txn = txn_manager.begin(&pool, IsolationLevel::ReadCommitted).expect("begin ddl");

@@ -12,7 +12,7 @@ const TXN: TxnId = TxnId(0);
 
 #[cfg(test)]
 fn seed(pool: &BufferPool, count: i32) -> (Catalog, TableId, IndexId) {
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
     let schema = Schema::new(vec![Column::new("id", DataType::Integer, true)]);
     let table_id = catalog.create_table(pool, TXN, "t", schema).expect("create table").table_id;
     let index_id =
@@ -69,7 +69,7 @@ fn index_scan_respects_start_and_end_bounds() {
 #[test]
 fn index_scan_returns_every_duplicate_key() {
     let (pool, _dir) = support::open_pool(16);
-    let mut catalog = Catalog::new();
+    let catalog = Catalog::new();
     let schema = Schema::new(vec![Column::new("id", DataType::Integer, true)]);
     let table_id = catalog.create_table(&pool, TXN, "t", schema).expect("create table").table_id;
     let index_id =

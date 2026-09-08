@@ -39,7 +39,18 @@ let mut ctx = ExecutorContext::new(&catalog, &buffer_pool, txn, &lock_manager, &
 executor.init(&mut ctx)?;
 ```
 
-`engine::Database::run` builds exactly one `ExecutorContext` per statement
-and passes it by mutable reference into every `init`/`next` call on the
-operator tree, so all operators in a plan see the same catalog snapshot,
+`engine::EngineShared::run` builds exactly one `ExecutorContext` per
+statement and passes it by mutable reference into every `init`/`next` call
+on the operator tree, so all operators in a plan see the same catalog,
 buffer pool, and transaction.
+
+`catalog` stays a `&Catalog` rather than becoming an owned handle, but it
+is no longer a *snapshot*: since ADR 0014
+(`docs/adr/0014-catalog-is-a-live-shared-object.md`) there is one live
+`Catalog` that is never replaced, it synchronizes itself, and the context
+holds no lock on it. Each lookup an operator makes returns an owned
+`TableInfo`/`IndexInfo` read at the moment of that call, so two calls
+within one statement may observe different catalog states if DDL commits
+in between - acceptable while DDL runs under an exclusive table lock, and
+recorded as the limit to revisit if DDL ever becomes concurrent with DML
+on the same table.

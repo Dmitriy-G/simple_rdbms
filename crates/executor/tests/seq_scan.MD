@@ -36,8 +36,8 @@ alongside the cursor.
 
 ```rust
 let (pool, _dir) = open_pool(2);
-let mut catalog = Catalog::new();
-let (table_id, expected) = seed_table(&pool, &mut catalog, 800);
+let catalog = Catalog::new();
+let (table_id, expected) = seed_table(&pool, &catalog, 800);
 
 let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted, Lsn(0), 0);
 let lock_manager = LockManager::new();

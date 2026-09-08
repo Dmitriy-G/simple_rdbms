@@ -32,7 +32,7 @@ fn example_round_trips_a_table_across_reopen() -> Result<(), Box<dyn std::error:
     let path = dir.path().join("test.db");
     {
         let pool = open_pool(&path)?;
-        let mut catalog = catalog::Catalog::open(&pool, TXN)?;
+        let catalog = catalog::Catalog::open(&pool, TXN)?;
         catalog.create_table(&pool, TXN, "users", users_schema())?;
         pool.flush_all()?;
     }

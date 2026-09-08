@@ -35,15 +35,18 @@ page is deliberately never cached in memory.
 use catalog::{Catalog, Column, Schema};
 use types::DataType;
 
-let mut catalog = Catalog::open(&buffer_pool, bootstrap_txn)?;
+let catalog = Catalog::open(&buffer_pool, bootstrap_txn)?;
 let schema = Schema::new(vec![Column::new("id", DataType::Integer, false)]);
-let info = catalog.create_table(&buffer_pool, txn_id, "users", schema)?.clone();
+let info = catalog.create_table(&buffer_pool, txn_id, "users", schema)?;
 catalog.create_index(&buffer_pool, txn_id, "idx_users_id", info.table_id, 0)?;
 ```
 
-`engine::Database::open_with_managers` opens the catalog once, at startup,
-against the live `BufferPool`; `Database::execute` then calls
-`create_table`/`create_index` and `get_table`/`index_for_column` as DDL and
-query statements flow through, and reloads the catalog wholesale (via
-`Catalog::open` again) on an explicit `ROLLBACK`, rather than trying to
-undo its in-memory effects surgically.
+`engine::EngineShared::open` opens the catalog once, at startup, against
+the live `BufferPool`, and holds it as an `Arc<Catalog>` for the database's
+whole lifetime; every method takes `&self`, so no caller ever holds a lock
+on it (`docs/adr/0014-catalog-is-a-live-shared-object.md`).
+`EngineShared::execute` then calls `create_table`/`create_index` and
+`get_table`/`index_for_column` as DDL and query statements flow through,
+and refills the same object in place (via `Catalog::reload`) after every
+abort, rather than trying to undo its in-memory effects surgically or
+swapping the object out from under its readers.

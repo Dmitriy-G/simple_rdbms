@@ -57,7 +57,7 @@ use executor::{InsertExecutor, SeqScanExecutor};
 use txn::{IsolationLevel, Transaction};
 
 let (pool, _dir) = support::open_pool(16);
-let mut catalog = Catalog::new();
+let catalog = Catalog::new();
 // ... catalog.create_table / create_index ...
 let txn = Transaction::new(TxnId(0), IsolationLevel::ReadCommitted);
 let mut insert = InsertExecutor::new(table_id, rows);

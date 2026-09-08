@@ -26,10 +26,12 @@ restriction: `storage::buffer::BufferPool`, `catalog::Catalog`, and
 `txn::TransactionManager` are all `Send + Sync`
 (`crates/engine/tests/send_sync.rs`), and `EngineShared` now actually
 shares them across threads rather than owning them exclusively on one -
-`catalog: RwLock<Catalog>` (many concurrent readers - every `SELECT`/
-`INSERT`'s bind and plan step - or one writer - `CREATE TABLE`/
-`CREATE INDEX`, held for that statement's whole duration since neither is
-performance-sensitive), `txn_manager: Mutex<TransactionManager>` (locked
+`catalog: Arc<Catalog>` (no engine-level lock at all - the type
+synchronizes itself and every method takes `&self`, so a bind, a plan step
+and a `CREATE TABLE` are serialized only inside `Catalog` and only for as
+long as each call needs; see
+`docs/adr/0014-catalog-is-a-live-shared-object.md`),
+`txn_manager: Mutex<TransactionManager>` (locked
 only for the brief `begin`/`commit`/`abort`/`get` call itself, never
 across a page fetch or an executor's `next()`), and
 `checkpoint: Mutex<CheckpointState>` (the two checkpoint-bookkeeping
@@ -68,11 +70,8 @@ other session's `SessionState` is untouched by an expiry, proven by
 
 **Never block the dispatch thread on a lock a worker might hold (P-14).**
 The `try_lock` above only ever *peeks* at whether a session looks overdue;
-it never itself calls `abort_txn`/`reload_catalog`. Those calls -
-`EngineShared::reload_catalog` takes `EngineShared::catalog`'s *write*
-lock, which a worker running a long `SELECT`/`INSERT` holds for that
-whole statement's `read` lock's duration (`run`, below) - used to run
-inline on the dispatch thread in both `expire_idle_transaction` and
+it never itself calls `abort_txn`/`reload_catalog`. Those calls used to
+run inline on the dispatch thread in both `expire_idle_transaction` and
 `disconnect`, which meant a slow statement on session A could make the
 dispatch thread block for that statement's entire duration the moment
 session B's idle timeout fired or session B disconnected, stalling every
@@ -81,20 +80,48 @@ exactly the failure mode the worker pool exists to remove, reintroduced
 through this one code path. Both now only ever *submit* the actual
 abort-and-reload work to `worker_pool::WorkerPool` - `expire_idle_session`
 and `disconnect_session` (below) - the same way `dispatch_execute` already
-does for `Execute`, so the dispatch thread never itself takes a lock a
-worker might be holding; the submitted job re-checks the session's own
+does for `Execute`; the submitted job re-checks the session's own
 condition after actually acquiring its lock (blocking is fine there - it's
 a worker thread, not the dispatch thread), since time has passed between
 the cheap peek and the job actually running and the condition might no
 longer hold (a statement may have completed and refreshed `idle_since` in
-between, for instance). `crates/engine/tests/dispatch_never_blocks.rs`
-(`dispatch_never_blocks.MD`) is the regression test: it pauses a `SELECT`
-mid-scan with a device-level hook so it genuinely blocks rather than
-merely runs slowly, disconnects a session with its own open transaction
-while that pause holds `catalog`'s read lock, and asserts a fourth
-session's `table_names()` still comes back quickly - disabling the fix
-locally while writing that test reproduced an unbounded hang, not just a
-slow response, confirming this was a real deadlock hazard rather than a
+between, for instance).
+
+**The catalog is no longer one of those locks.** `EngineShared.catalog` is
+an `Arc<Catalog>` with no lock around it: the type synchronizes itself,
+every method takes `&self`, and no lock on it is held across a statement
+(`docs/adr/0014-catalog-is-a-live-shared-object.md`, `catalog::catalog.MD`).
+Before that, this one `RwLock<Catalog>` did three jobs at three durations -
+a statement's whole lifetime under `read`, a `CREATE TABLE`/`CREATE INDEX`
+under `write`, and a `reload_catalog` that swapped the object wholesale -
+and the two requirements pulled against each other: widening the reload's
+write lock to cover `Catalog::open` was needed so a reload could not
+regress an index root page (`catalog_reload_race.MD`), but it then parked
+the reload as a pending writer behind any long `SELECT`, and
+`std::sync::RwLock` will not let a new reader overtake a queued writer, so
+every later catalog read - `TableNames` included - waited for that
+statement. `reload_catalog` now begins a transaction, calls
+`Catalog::reload` (which takes the catalog's own mutation lock across its
+read-and-install, excluding mutators and nothing else) and commits;
+`table_names`/`table_schema` are plain in-memory lookups.
+
+The remaining rule for a new `EngineMessage` arm is therefore checkable
+per arm: **an arm served inline on the dispatch thread must touch no
+`EngineShared` lock, and any arm that does must submit to the worker
+pool.** `Checkpoint` and `BestEffortFlush` are still served inline and
+still take the buffer pool and `txn_manager` locks, which is the open part
+of this (P-54).
+
+`crates/engine/tests/dispatch_never_blocks.rs` (`dispatch_never_blocks.MD`)
+is the regression test: it pauses a `SELECT` mid-scan with a device-level
+hook so it genuinely blocks rather than merely runs slowly, disconnects a
+session with its own open transaction, waits until the resulting catalog
+reload is itself parked mid-read - so the probe demonstrably runs while a
+reload holds the catalog's mutation lock, rather than merely while a
+disconnect is somewhere in flight - and asserts a fourth session's
+`table_names()` still comes back quickly. Disabling the P-14 fix locally
+while writing that test reproduced an unbounded hang, not just a slow
+response, confirming this was a real deadlock hazard rather than a
 theoretical one.
 
 **Propagating the tracing subscriber across thread boundaries.** Every
@@ -345,7 +372,7 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `checkpoints_written`, the two checkpoint counters, grouped into one
   struct so a single `Mutex` covers both without them drifting apart under
   concurrent commits from different sessions.
-- `EngineShared` - private. `catalog: RwLock<Catalog>`, `buffer_pool:
+- `EngineShared` - private. `catalog: Arc<Catalog>`, `buffer_pool:
   Arc<BufferPool>`, `txn_manager: Mutex<TransactionManager>`,
   `checkpoint: Mutex<CheckpointState>`, `checkpoint_byte_threshold`,
   `slow_query_warn_threshold_ms`, and `idle_in_transaction_timeout` - see
@@ -395,7 +422,9 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   one redundant checkpoint, never a missed one, so this is left as is
   rather than serialized further.
 - `EngineShared::table_names(&self) -> Vec<String>`/`table_schema(&self,
-  name) -> Result<Schema>` - each takes a brief `catalog` read lock.
+  name) -> Result<Schema>` - each is one in-memory `Catalog` lookup and
+  holds no engine-level lock at all, which is what lets both be served
+  inline on the dispatch thread while a statement of any length runs.
 - `EngineShared::execute(&self, session, sql) -> Result<ResultSet>` - the
   per-request entry point a worker-pool job calls for every `Execute`
   message, with the session already locked by that job. Unchanged in
@@ -422,7 +451,7 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `execute_non_control_statement`.
 - `EngineShared::execute_non_control_statement(&self, session, statement)
   -> Result<ResultSet>` - resolves this statement's transaction
-  (`txn_for_statement`), binds it under a brief `catalog` read lock, and
+  (`txn_for_statement`), binds it against `self.catalog` directly, and
   dispatches to `execute_bound`; on autocommit, commits (propagating a
   commit failure) or aborts-and-reloads (swallowing that failure, since
   the statement's own error is what the caller sees) depending on the
@@ -438,25 +467,24 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   - there is no SQL syntax to choose a different isolation level, so this
   is every explicit transaction's level.
 - `EngineShared::handle_explain(&self, statement) -> Result<ResultSet>` -
-  takes one `catalog` read lock spanning bind, optimize, and both
-  `explain_logical`/`explain_physical` calls, since all three need the
-  same borrowed `&Catalog`. Never begins a transaction and never touches
-  the buffer pool beyond the catalog already resident in memory.
-- `EngineShared::reload_catalog(&self) -> Result<()>` - takes `catalog`'s
-  *write* lock first and holds it for the whole call: begins (under
+  hands the same `&Catalog` to bind, optimize, and both
+  `explain_logical`/`explain_physical`, holding no lock across any of them.
+  Never begins a transaction and never touches the buffer pool beyond the
+  catalog already resident in memory.
+- `EngineShared::reload_catalog(&self) -> Result<()>` - begins (under
   `txn::IsolationLevel::SnapshotIsolation`, like every other transaction
-  this file begins) and commits a short-lived bootstrap transaction, calls
-  `Catalog::open` against it (this can take a while - it replays the whole
-  catalog heap), then swaps the result into `self.catalog`, all under that
-  one write guard (P-46). Holding the lock across `Catalog::open` itself,
-  not just the final swap, is what makes a reload exclude a concurrent
-  `CreateTable`/`CreateIndex` (which hold the same write lock across their
-  own mutation) and a concurrent `Insert`/`Select` (which hold the *read*
-  lock across `run`'s whole `init`/`next` loop, `InsertExecutor`'s
-  `update_index_root_page` call included) - without it, `Catalog::open`'s
-  scan could interleave with either and install a catalog missing a
-  committed table or holding a stale index root page id. Called after
-  every abort/rollback, since `Catalog::create_table`/`create_index`
+  this file begins) a short-lived transaction, calls `Catalog::reload`
+  against it - which can take a while, since it replays the whole catalog
+  heap - and commits. It takes no lock of its own: `Catalog::reload` holds
+  the catalog's *mutation* lock across both its read-from-disk and its
+  install, which excludes a concurrent `CreateTable`/`CreateIndex` and a
+  concurrent `InsertExecutor`'s `update_index_root_page` (all of which
+  take the same mutation lock) and nothing else (P-46,
+  `docs/adr/0014-catalog-is-a-live-shared-object.md`). Without that
+  exclusion the reload's scan could interleave with a mutation and install
+  a catalog missing a committed table or holding a stale index root page
+  id; with it, a `SELECT` of any length is unaffected either way. Called
+  after every abort/rollback, since `Catalog::create_table`/`create_index`
   mutate the in-memory catalog immediately rather than waiting for commit,
   and an aborted transaction needs that mutation discarded.
 - `EngineShared::commit_txn(&self, txn_id) -> Result<()>`/`abort_txn(&self,
@@ -471,18 +499,18 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `txn::IsolationLevel::SnapshotIsolation`, under a brief `txn_manager`
   lock (autocommit) depending on `session.txn_slot`.
 - `EngineShared::execute_bound(&self, bound, txn_id) -> Result<ResultSet>` -
-  matches on `BoundStatement`. `CreateTable`/`CreateIndex` each take a
-  `catalog` *write* lock spanning the whole mutation (`create_index` plus
-  `populate_index`, in `CreateIndex`'s case, since populating an index is
-  rare enough that serializing readers against it for that span costs
-  nothing); `Insert`/`Select` never take a write lock, only the read locks
-  `run`/the `Select` arm's `Optimizer::optimize` call need.
-- `EngineShared::populate_index(&self, catalog, txn_id, table_id,
-  column_index, index_id) -> Result<()>` - takes `&Catalog` directly
-  (the caller's already-held write guard derefs to it) rather than
-  reaching through `self.catalog` itself, since every method it calls
-  (`get_table_by_id`, `index_root_page`, `update_index_root_page`) only
-  ever needed `&Catalog` in the first place.
+  matches on `BoundStatement`. Every arm calls straight through
+  `self.catalog` and takes no engine-level lock: `Catalog` serializes its
+  own mutators internally, and `CreateIndex`'s backfill runs *outside* that
+  exclusion (`create_index` returns before `populate_index` starts), so
+  indexing a large table no longer stalls unrelated catalog work the way
+  the single write lock spanning both used to.
+- `EngineShared::populate_index(&self, txn_id, table_id, column_index,
+  index_id) -> Result<()>` - reads `self.catalog` directly. Every method it
+  calls (`get_table_by_id`, `index_root_page`, `update_index_root_page`)
+  takes `&self`, so there is no guard to thread in from the caller; each
+  `update_index_root_page` takes and releases the mutation lock per root
+  split rather than one lock covering the whole backfill.
 - `EngineShared::run(&self, physical, txn_id) -> Result<Vec<Tuple>>` -
   clones the transaction and an `Arc<txn::LockManager>` and an
   `Arc<txn::VersionStore>` out of `txn_manager` (a brief lock;

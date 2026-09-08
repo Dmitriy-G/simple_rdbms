@@ -46,7 +46,10 @@ isolation still needs even though its readers stop taking locks
 (`txn::version_store.MD`).
 
 **Index maintenance.** Before the row loop, `next` resolves
-`ctx.catalog.indexes_for_table(self.table_id)` once into a `Vec<IndexTarget>`
+`ctx.catalog.indexes_for_table(self.table_id)` - which returns owned
+`IndexInfo` clones, since the catalog never lends a reference into the maps
+behind its own lock (`docs/adr/0014-catalog-is-a-live-shared-object.md`) -
+once into a `Vec<IndexTarget>`
 (private: `index_id`, `column_index`, and a `root_page_id` seeded from
 `IndexInfo::root_page_id()`'s cache, see `catalog::catalog.MD`'s
 "Root-page caching") - not once per row, since a table's index list and

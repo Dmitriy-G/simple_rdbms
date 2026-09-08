@@ -164,6 +164,14 @@ where that limit belongs when it is stated to users.
 This decision touches no storage format, no WAL record and no recovery
 path, so it carries no crash-injection obligation of its own — but it does
 change code that runs concurrently with the buffer pool, so the existing
-sweeps stay the gate they always were. The implementation is filed as its
-own problem entry rather than done here, and the tests that must ship with
-it are named there.
+sweeps stay the gate they always were.
+
+**Implemented.** The catalog now holds a private `RwLock<CatalogState>`
+and a mutation `Mutex`, every method takes `&self`, `Catalog::reload`
+replaced the wholesale swap, and `EngineShared` holds an `Arc<Catalog>`
+with no lock of its own; the nine `recover_lock(self.catalog…)` sites are
+gone. `crates/catalog/src/catalog.MD` documents the resulting discipline,
+and `crates/engine/tests/dispatch_never_blocks.MD` and
+`crates/engine/tests/catalog_reload_race.MD` each name the other as the
+requirement its own fix must not break, since those two suites are what
+hold the two halves of this decision apart.

@@ -130,7 +130,7 @@ everyone.
 The write set belongs to the store and **not** to `txn::Transaction`,
 beside the `read_ts` and `begin_lsn` it already carries, even though that
 is the more natural home: `EngineShared::run`
-(`crates/engine/src/runtime.rs:992-999`) hands the executors a *clone* of
+(`crates/engine/src/runtime.rs:980-987`) hands the executors a *clone* of
 the `Transaction`, so anything `InsertExecutor`
 (`crates/executor/src/operators/insert.rs:69-71`) recorded on
 `ExecutorContext::txn` (`crates/executor/src/context.rs:8`) would be
