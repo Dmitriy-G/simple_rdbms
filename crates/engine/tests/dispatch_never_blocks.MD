@@ -26,6 +26,33 @@ satisfies both: a mutation `Mutex` for `catalog_reload_race`, and a state
 one of the two suites fails; which one it is tells you which half was
 broken.
 
+It now also covers P-54: `EngineMessage::Checkpoint`/`BestEffortFlush`
+used to run `EngineShared::checkpoint_and_flush`/`best_effort_flush`
+inline on the dispatch thread despite both doing real I/O (a page flush),
+so a stalled flush froze every other session's `Connect`/`Execute` the
+same way a stalled lock did for P-14. `dispatch_checkpoint`/
+`dispatch_best_effort_flush` (`runtime.MD`) now submit that work to the
+worker pool instead, and
+`a_stalled_checkpoint_does_not_block_an_unrelated_sessions_dispatch`
+below is the regression test, pausing a *write* rather than a read since
+that is where a checkpoint's flush actually blocks.
+
+**What that test asserts, and what it deliberately does not.** Its probe
+is a `Connect` plus a `table_names()`, both served inline by the dispatch
+thread, because those are exactly the requests P-54 makes immune to a
+stalled checkpoint. A probe that ran a real statement would *not* pass,
+and not because the dispatch thread is blocked: a checkpoint holds
+`EngineShared.txn_manager` across `write_checkpoint`'s own page-0 flush
+(`crates/txn/src/checkpoint.rs`, `flush_page(PageId(0))` under the lock
+`EngineShared::checkpoint_and_flush` took), and every statement needs that
+same mutex to begin its transaction
+(`EngineShared::txn_for_statement`). So a stalled checkpoint still stalls
+statements — through a data structure's lock, not through the dispatch
+thread — and closing that gap is a separate change to the checkpoint's
+locking, tracked as its own problem entry. Widening this test's timeout
+until an `Execute` probe passes is therefore not an option: the wait it
+would be tolerating is unbounded.
+
 ## Key Components
 
 - `REACHED_TIMEOUT`/`RESPONSIVENESS_BOUND`/`PAUSE_SAFETY_NET` - the three
@@ -37,22 +64,35 @@ broken.
   that reintroduces dispatch-thread blocking must fail this, not merely
   slow it down), and `PAUSE_SAFETY_NET` bounds the device's own internal
   wait so a broken test can't hang the suite forever even if the test
-  function itself never reaches its release send.
+  function itself never reaches its release send. Both tests share all
+  three: each probes with in-memory dispatch-thread work only, so
+  `RESPONSIVENESS_BOUND` is the right order of magnitude for either, and
+  a bound that has to be widened to pass is the signal that the probe is
+  waiting on a lock rather than on a scheduler.
 - `PauseSlot` - one arming's worth of synchronization: the `reached`
   `SyncSender` the device signals when it parks, and the `release`
   `Receiver` it then blocks on. The device holds a `VecDeque` of these and
   consumes one per arming, which is what lets a single test pause two
   different threads in sequence at two different reads.
-- `PausingDevice` - wraps a real `FileDevice` and pauses exactly the next
-  `read_at` call after `armed` (an `Arc<AtomicBool>`, shared with the
-  test so it can arm the device after the database is already open and
-  the device has moved into `DiskManager`) is set: it pops the front
-  `PauseSlot` (the queue is `Mutex`-wrapped only so `read_at`, which takes
-  `&self`, can mutate it), signals that slot's `reached`, and blocks on its
-  `release` (bounded by `PAUSE_SAFETY_NET`) before delegating to the
-  wrapped device. `armed.swap(false, ...)` ensures only the *next* read
-  after each arming pauses, not every read forever after - every other
-  `BlockDevice` method delegates straight through unpaused.
+- `PausingDevice` - wraps a real `FileDevice` and independently arms a
+  read pause and a write pause, each its own `Arc<AtomicBool>` plus
+  `Mutex`-wrapped `VecDeque<PauseSlot>` (`read_armed`/`read_slots`,
+  `write_armed`/`write_slots`) so a test can pick which operation it needs
+  to intercept without one pause's arming affecting the other.
+  `PausingDevice::new(inner, read_armed, read_slots)` builds one with only
+  read pausing live (write pausing disarmed and empty), for
+  `a_paused_select_does_not_block_an_unrelated_sessions_request`'s device
+  reads; `PausingDevice::with_write_pause(inner, write_armed, write_slots)`
+  is the mirror image for
+  `a_stalled_checkpoint_does_not_block_an_unrelated_sessions_dispatch`,
+  which needs to intercept the page write a checkpoint's flush issues, not
+  a read. `pause_if_armed(armed, slots)` is the shared body both `read_at`
+  and `write_at` call: if armed (checked via `swap(false, ...)`, so only
+  the *next* call after each arming pauses), it pops the front
+  `PauseSlot`, signals that slot's `reached`, and blocks on its `release`
+  (bounded by `PAUSE_SAFETY_NET`) before the caller delegates to the
+  wrapped device. Every other `BlockDevice` method delegates straight
+  through unpaused.
 - `recv_within`/`row_count` - the same private helpers as
   `tests/sessions.rs` (`sessions.MD`), duplicated rather than shared
   since `tests/support/` is for helpers more than one file actually needs
@@ -93,6 +133,32 @@ broken.
   count - the
   fix must not change what the paused statement itself sees, only stop it
   from starving every other session while it runs.
+- `a_stalled_checkpoint_does_not_block_an_unrelated_sessions_dispatch` -
+  opens a database through a `PausingDevice::with_write_pause` at the
+  default `buffer_pool_size` (the pause is on a write this test forces,
+  not on an eviction it has to engineer), creates a table and commits one
+  row unarmed, opens a second session (`db_probe_base`) that stays alive
+  across the whole test, then arms the write pause and calls
+  `Database::close` (which sends `Checkpoint`) on its own thread. The
+  first page write that checkpoint issues is page 0's header flush inside
+  `write_checkpoint`; it parks there, and the test waits on
+  `flush_reached_rx` until it knows the flush is genuinely stuck. Only
+  then does it open a *third* session from `db_probe_base` and ask for
+  `table_names()`, on its own thread, asserting the `Connect` and the
+  lookup both come back within `RESPONSIVENESS_BOUND` and that the answer
+  really contains `t` - `Database::table_names` returns an empty `Vec` on
+  error, so asserting on the content is what separates "answered" from
+  "failed fast". Before the P-54 fix, `dispatch_checkpoint` did not exist
+  and `dispatch_message` ran `checkpoint_and_flush` to completion inline,
+  so the dispatch thread was parked in the write and never reached the
+  probe's `Connect` at all: the probe hung past every bound in this file,
+  exactly as the P-14 probe did behind a stalled lock. The probe thread
+  hands both its sessions back to the test rather than dropping them,
+  because `Drop for Database` calls `best_effort_flush`, which would queue
+  behind the very flush the test is holding; joining it is therefore done
+  only after the release. Finally the pause is released and the checkpoint
+  thread is joined on its `Result`, confirming the checkpoint completes
+  rather than being abandoned mid-write.
 - `wal_base_path(dir) -> PathBuf` - private helper, identical in shape to
   `tests/sessions.rs`'s helper of the same name, building the WAL's base
   path for `Database::open_with_devices`.

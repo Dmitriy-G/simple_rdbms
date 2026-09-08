@@ -105,12 +105,33 @@ statement. `reload_catalog` now begins a transaction, calls
 read-and-install, excluding mutators and nothing else) and commits;
 `table_names`/`table_schema` are plain in-memory lookups.
 
-The remaining rule for a new `EngineMessage` arm is therefore checkable
-per arm: **an arm served inline on the dispatch thread must touch no
-`EngineShared` lock, and any arm that does must submit to the worker
-pool.** `Checkpoint` and `BestEffortFlush` are still served inline and
-still take the buffer pool and `txn_manager` locks, which is the open part
-of this (P-54).
+The rule for a new `EngineMessage` arm is therefore checkable per arm:
+**an arm served inline on the dispatch thread must touch no `EngineShared`
+lock, and any arm that does must submit to the worker pool.** `Checkpoint`
+and `BestEffortFlush` used to be the one exception, served inline despite
+taking the buffer pool and `txn_manager` locks through
+`checkpoint_and_flush`/`best_effort_flush` (P-54); `dispatch_checkpoint`
+and `dispatch_best_effort_flush` (below) now submit that work to the
+worker pool the same way `dispatch_execute` does, so every arm in
+`dispatch_message` now satisfies the rule without exception.
+
+**What that rule buys, stated exactly, because it is narrower than it
+sounds.** It makes the *dispatch thread* immune to a slow or stalled
+worker, so `Connect`, `TableNames`, `TableSchema` and the submission of
+every `Execute` keep being served while a checkpoint is stuck mid-write.
+It does not make a *statement* immune. A checkpoint holds
+`EngineShared.txn_manager` for the whole of `write_checkpoint`, and
+`write_checkpoint` ends by flushing page 0 and syncing
+(`crates/txn/src/checkpoint.rs`, `flush_page(PageId(0))` then `sync()`),
+so that mutex is held across real device I/O - while `txn_for_statement`
+needs the same mutex to begin any statement's transaction. A stalled
+checkpoint therefore still stalls every statement, one lock further down
+than it used to. That is a separate defect with a separate fix (moving
+the page-0 flush out from under the lock), not something submitting the
+arm to a worker can address, and
+`crates/engine/tests/dispatch_never_blocks.rs` probes with `Connect` plus
+`table_names()` for exactly that reason - a probe that ran a statement
+would be asserting a property the engine does not yet have.
 
 `crates/engine/tests/dispatch_never_blocks.rs` (`dispatch_never_blocks.MD`)
 is the regression test: it pauses a `SELECT` mid-scan with a device-level
@@ -310,13 +331,15 @@ taken at `BEGIN`, does not move even after the inserting session commits.
 - `dispatch_message(state, sessions, message) -> bool` - private free
   function. One arm per `EngineMessage` variant; returns `false` only for
   `Shutdown`. `Execute` goes through `dispatch_execute` rather than
-  running inline, and `Disconnect` goes through the free function
-  `disconnect` (below) rather than a bare `sessions.remove`, since it
-  still has an open transaction to abort if one exists. `CurrentTxnId`
-  and `LockCountForTxn` (both `#[cfg(feature = "test-util")]`) answer
-  inline too, for the same reason `TableNames`/`TableSchema` do: a
-  `HashMap`/lock-manager lookup can never block on anything a client
-  controls, so there is nothing a worker-pool job would buy here.
+  running inline; `Checkpoint`/`BestEffortFlush` go through
+  `dispatch_checkpoint`/`dispatch_best_effort_flush` (below) for the same
+  reason; and `Disconnect` goes through the free function `disconnect`
+  (below) rather than a bare `sessions.remove`, since it still has an open
+  transaction to abort if one exists. `CurrentTxnId` and `LockCountForTxn`
+  (both `#[cfg(feature = "test-util")]`) answer inline too, for the same
+  reason `TableNames`/`TableSchema` do: a `HashMap`/lock-manager lookup
+  can never block on anything a client controls, so there is nothing a
+  worker-pool job would buy here.
 - `tick(state, sessions)` - private free function, run once per
   `TICK_INTERVAL` with no message pending. Calls `expire_idle_transaction`;
   unlike the pre-M10.2 version there is no waiter queue left to expire or
@@ -330,6 +353,25 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `EngineShared::execute`, and sends the result to `reply` - this function
   itself never blocks and never runs a statement; it only ever builds and
   submits the job.
+- `dispatch_checkpoint(state, reply)`/`dispatch_best_effort_flush(state,
+  reply)` - private free functions, `dispatch_message`'s handlers for
+  `Checkpoint`/`BestEffortFlush` (P-54). Each clones `state.shared`'s
+  `Arc` and submits a job to `state.worker_pool` that calls
+  `EngineShared::checkpoint_and_flush`/`best_effort_flush` and sends the
+  result to `reply`; neither function itself blocks or touches a lock, so
+  a slow or stalled flush can no longer freeze the dispatch loop - another
+  session's `Connect` and catalog lookups are served throughout, where
+  running these two arms inline stopped the engine dead. A statement is a
+  weaker claim: it still has to take `EngineShared.txn_manager`, which a
+  running checkpoint holds across page-0 I/O (see the paragraph on what
+  the rule buys, above).
+  `WorkerPool::submit`'s job queue is drained to completion before the
+  pool's own threads exit (`worker_pool.MD`), so a checkpoint or flush
+  already submitted still runs to completion during shutdown even though
+  the dispatch thread itself does not wait for it; if the job is instead
+  dropped without running (the pool already shut down), dropping it drops
+  `reply` too, so the caller's blocking `recv()` gets an error rather than
+  hanging.
 - `expire_idle_transaction(state, sessions)` - private free function, run
   from `tick`. For every session in the table: `try_lock`s it (skipping
   one a worker is currently using, recovering one poisoned by a panicked
@@ -407,9 +449,14 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   test-only introspection into how many locks a transaction (commonly one
   a test already committed or aborted) still holds.
   `checkpoint_and_flush(&self) -> Result<()>` - the work `Database::close`
-  needs: `write_checkpoint` (under a brief `txn_manager` lock),
+  needs: `write_checkpoint` (under the `txn_manager` lock),
   `record_checkpoint_written`, `flush_log_all`, `flush_all`, `sync`, in
-  that order. `best_effort_flush(&self)` - the work `Drop for Database`
+  that order. That lock is **not** brief, whatever its scope here looks
+  like: `write_checkpoint` itself flushes page 0 and syncs the device
+  before returning (`crates/txn/src/checkpoint.rs`), so the mutex every
+  statement needs to begin a transaction is held across device I/O for as
+  long as that flush takes. It is the reason a stalled checkpoint still
+  stalls statements even though the dispatch thread stays free. `best_effort_flush(&self)` - the work `Drop for Database`
   needs: skip entirely if `buffer_pool.is_flush_poisoned()`, otherwise
   attempt `flush_log_all`/`flush_all` and discard any error.
   `maybe_checkpoint(&self)` - skips if poisoned, skips if the log hasn't

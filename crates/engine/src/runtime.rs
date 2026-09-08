@@ -326,11 +326,10 @@ fn dispatch_message(
             let _ = reply.send(state.shared.table_schema(&name));
         }
         EngineMessage::Checkpoint { reply } => {
-            let _ = reply.send(state.shared.checkpoint_and_flush());
+            dispatch_checkpoint(state, reply);
         }
         EngineMessage::BestEffortFlush { reply } => {
-            state.shared.best_effort_flush();
-            let _ = reply.send(());
+            dispatch_best_effort_flush(state, reply);
         }
         EngineMessage::Disconnect { session_id } => {
             disconnect(state, sessions, session_id);
@@ -378,6 +377,21 @@ fn dispatch_execute(
         let mut session = recover_lock(session.lock(), "SessionState");
         let result = shared.execute(&mut session, &sql);
         let _ = reply.send(result);
+    }));
+}
+
+fn dispatch_checkpoint(state: &EngineState, reply: mpsc::SyncSender<Result<()>>) {
+    let shared = Arc::clone(&state.shared);
+    state.worker_pool.submit(Box::new(move || {
+        let _ = reply.send(shared.checkpoint_and_flush());
+    }));
+}
+
+fn dispatch_best_effort_flush(state: &EngineState, reply: mpsc::SyncSender<()>) {
+    let shared = Arc::clone(&state.shared);
+    state.worker_pool.submit(Box::new(move || {
+        shared.best_effort_flush();
+        let _ = reply.send(());
     }));
 }
 
