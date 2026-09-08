@@ -172,17 +172,25 @@ undo.
   table's metadata from the catalog. Does not reclaim its heap storage.
   Unimplemented (`todo!`).
 - `Catalog::create_index(buffer_pool, txn_id, name, table_id, column_index) -> Result<IndexInfo, CatalogError>` -
-  registers a new single-column index: rejects a duplicate `name`
-  (`CatalogError::IndexAlreadyExists`), allocates a fresh `IndexId` and an
-  empty `storage::btree::BTreeIndex` (via `BTreeIndex::create`), encodes
-  and inserts its catalog row (capturing the `Rid` it lands at and the
-  byte offset of `root_page_id` within it), and builds the `IndexInfo`
+  registers a new, *empty* single-column index: allocates the B+tree with
+  `storage::btree::BTreeIndex::create` and hands its root to
+  `create_index_with_root`. This is the constructor for a caller that
+  wants an index maintained from empty onwards - `catalog`'s and
+  `executor`'s own test fixtures - and is not the path `CREATE INDEX`
+  takes.
+- `Catalog::create_index_with_root(buffer_pool, txn_id, name, table_id, column_index, root_page_id) -> Result<IndexInfo, CatalogError>` -
+  registers an index whose tree already exists: rejects a duplicate `name`
+  (`CatalogError::IndexAlreadyExists`), allocates a fresh `IndexId`,
+  encodes and inserts its catalog row (capturing the `Rid` it lands at and
+  the byte offset of `root_page_id` within it), and builds the `IndexInfo`
   from all of that in one shot, under the mutation lock throughout.
-  Returns it by value. Does not itself populate the index from existing
-  rows - `engine::EngineShared::populate_index` does that afterward, the
-  same way it would for any row `executor::InsertExecutor` adds later, and
-  it runs *outside* the mutation lock so a backfill over a large table
-  does not block unrelated catalog work.
+  Returns it by value. `engine::EngineShared` calls it *after*
+  `build_index` has filled the tree, so an index is never visible to
+  another session's optimizer while it is still being backfilled, and the
+  backfill's root splits need no `update_index_root_page` at all
+  (`docs/adr/0017-create-index-is-a-locked-writer.md`). The duplicate-name
+  check therefore happens after that backfill rather than before it; the
+  error is the same, the wasted scan is the price of publishing atomically.
 - `Catalog::index_for_column(table_id, column_index) -> Option<IndexInfo>` -
   an in-memory-only lookup (no I/O) for whether an index exists on a given
   table's column; what `planner::optimizer::IndexScanRule` calls to decide

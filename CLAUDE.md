@@ -17,7 +17,11 @@ Statements from different sessions **run concurrently** on a fixed
 eight-thread worker pool (`engine::runtime`), isolated by snapshot reads
 over two-phase-locked writes: a reader takes no locks and sees the
 snapshot its transaction began with, while a writer holds an exclusive
-table lock until it commits. A writer's wait for that lock is **bounded**:
+table lock until it commits — `CREATE INDEX` included, which takes that
+lock before it reads a row and registers the index only once it is fully
+built, so no session ever plans against a half-populated one
+(`docs/adr/0017-create-index-is-a-locked-writer.md`).
+A writer's wait for that lock is **bounded**:
 it expires after `DbConfig::lock_wait_timeout_ms` (default 5000 ms, `0`
 meaning wait forever) as a retryable `55P03 lock_not_available`, so a
 blocked statement cannot hold a worker thread indefinitely
@@ -65,7 +69,8 @@ name a branch:
    buffer), 0008 (write-guard reentrancy), 0009 (buffer pool frame
    ownership), 0010 (waiting for a frame instead of failing), 0014 (no
    catalog lock spans a statement), 0016 (a checkpoint holds no lock
-   across its page flush).
+   across its page flush), 0017 (`CREATE INDEX` locks the table it indexes
+   and publishes only a finished index).
 3. `docs/backlog.md` — the problems this project knows about and has
    decided not to do. Something listed there is not a finding to report
    again; it is a decision already made.

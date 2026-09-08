@@ -57,11 +57,12 @@ database in a state a real schema would have rejected.
 is enforced rather than accidental. Statements from different sessions run
 concurrently on a fixed worker pool
 (`engine::runtime::WORKER_POOL_SIZE = 8`,
-`crates/engine/src/runtime.rs:34,179`); one session's own statements stay
+`crates/engine/src/runtime.rs:36,181`); one session's own statements stay
 serialized behind its session mutex.
 
 *Readers take no locks.* Every user statement runs at
-`IsolationLevel::SnapshotIsolation` (`crates/engine/src/runtime.rs:768,846,876`),
+`IsolationLevel::SnapshotIsolation`
+(`crates/engine/src/runtime.rs:547,786,864,894`),
 and under it `SeqScanExecutor::init` skips the shared table lock
 (`crates/executor/src/operators/seq_scan.rs:26-29`) while `next` filters
 each tuple through `VersionStore::is_visible_to(rid, txn_id, read_ts)`
@@ -72,8 +73,11 @@ never blocks and never blocks anyone.
 *Writers take exclusive locks and hold them to commit.*
 `InsertExecutor::init` takes an exclusive **table** lock
 (`crates/executor/src/operators/insert.rs:35`) and `next` takes an
-exclusive lock per inserted `Rid` (line 72). Nothing releases a lock
-early: `TransactionManager::commit` and `abort` call
+exclusive lock per inserted `Rid` (line 72), and `CREATE INDEX` takes an
+exclusive table lock of its own before it reads the first row of the table
+it is indexing (`EngineShared::lock_table_exclusive`,
+`docs/adr/0017-create-index-is-a-locked-writer.md`). Nothing releases a
+lock early: `TransactionManager::commit` and `abort` call
 `LockManager::release_all` as their last step
 (`crates/txn/src/manager.rs:88,103`). That is strict two-phase locking, so
 two writers against one table serialize; a waiter that would close a

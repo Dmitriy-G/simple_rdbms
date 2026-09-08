@@ -198,6 +198,26 @@ impl Catalog {
         table_id: TableId,
         column_index: usize,
     ) -> Result<IndexInfo, CatalogError> {
+        let tree = BTreeIndex::create(buffer_pool, txn_id)?;
+        self.create_index_with_root(
+            buffer_pool,
+            txn_id,
+            name,
+            table_id,
+            column_index,
+            tree.root_page_id(),
+        )
+    }
+
+    pub fn create_index_with_root(
+        &self,
+        buffer_pool: &BufferPool,
+        txn_id: TxnId,
+        name: &str,
+        table_id: TableId,
+        column_index: usize,
+        root_page_id: PageId,
+    ) -> Result<IndexInfo, CatalogError> {
         let _mutation = self.lock_mutation();
         let index_id = {
             let state = self.read_state();
@@ -207,8 +227,7 @@ impl Catalog {
             IndexId(state.next_index_id)
         };
 
-        let tree = BTreeIndex::create(buffer_pool, txn_id)?;
-        let bytes = encode_index_row(index_id, name, table_id, column_index, tree.root_page_id());
+        let bytes = encode_index_row(index_id, name, table_id, column_index, root_page_id);
         let root_page_id_offset = bytes.len() - 4;
 
         let index_catalog_first_page = self.ensure_index_catalog_heap(buffer_pool, txn_id)?;
@@ -220,7 +239,7 @@ impl Catalog {
             name,
             table_id,
             column_index,
-            tree.root_page_id(),
+            root_page_id,
             catalog_rid,
             root_page_id_offset,
         );

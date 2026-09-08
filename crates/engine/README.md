@@ -59,9 +59,11 @@ explicit `BEGIN` is already open. `CREATE TABLE`/`CREATE INDEX` are the
 exception: both bind the same way but are handled directly by `execute`
 rather than reaching the optimizer or the executor, since each mutates the
 catalog itself rather than producing rows - `CREATE INDEX` additionally
-populates the new index from every existing row
-(`Database::populate_index`) before returning, under the same transaction
-as the `CREATE INDEX` statement itself.
+takes an exclusive table lock, builds the new index from every existing
+row (`EngineShared::build_index`) and only then registers it in the
+catalog, all under the same transaction as the `CREATE INDEX` statement
+itself, so another session sees the index either absent or complete
+(`docs/adr/0017-create-index-is-a-locked-writer.md`).
 
 `EXPLAIN [VERBOSE] <statement>` runs the same bind -> plan -> optimize ->
 lower prefix as its target statement would, then stops: the resulting

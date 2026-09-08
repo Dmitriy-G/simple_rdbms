@@ -36,7 +36,8 @@ through a `TEXT` column, which requires valid UTF-8. No serde.
   `TableInfo`.
 - `encode_index_row(index_id, name, table_id, column_index, root_page_id) -> Vec<u8>` -
   crate-visible. Encodes an index catalog row's tuple bytes from primitive
-  fields rather than an `&IndexInfo` - `Catalog::create_index` needs the
+  fields rather than an `&IndexInfo` - `Catalog::create_index_with_root`
+  needs the
   encoded bytes (to get a `Rid` back from inserting them) *before* an
   `IndexInfo` can be built, since `IndexInfo::new` itself needs that `Rid`
   and the row's `root_page_id_offset` (see `index_info.MD`); taking
@@ -71,8 +72,8 @@ assert_eq!(round_tripped, info);
 `Catalog::create_table` calls `encode_table_info` before inserting a row
 into the catalog's own `TableHeap`; `Catalog::open` calls `decode_table_info`
 on every row it reads back out of that heap while rebuilding the in-memory
-index. `Catalog::create_index` calls `encode_index_row` once, to build the
-row it inserts when a new index is created; `Catalog::open` calls
+index. `Catalog::create_index_with_root` calls `encode_index_row` once, to
+build the row it inserts when a new index is registered; `Catalog::open` calls
 `decode_index_row` on every row it reads back out of the index catalog
 heap. Neither `encode_index_row` nor `decode_index_row` is called again
 after that: a root split updates the cached `IndexInfo` and rewrites only

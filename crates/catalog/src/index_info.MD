@@ -71,7 +71,8 @@ let info = IndexInfo::new(index_id, "idx_users_email", table_id, 2, root_page_id
 assert_eq!(info.root_page_id(), root_page_id);
 ```
 
-`Catalog::create_index` builds an `IndexInfo` from a fresh `IndexId`,
+`Catalog::create_index_with_root` builds an `IndexInfo` from a fresh
+`IndexId`,
 right after inserting its row into the index-catalog heap (so it has a
 real `catalog_rid` and offset to give it), and stores it in the catalog's
 in-memory index; `Catalog::open` rebuilds the same `IndexInfo`s by

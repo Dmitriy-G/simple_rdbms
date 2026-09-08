@@ -555,17 +555,38 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   lock (autocommit) depending on `session.txn_slot`.
 - `EngineShared::execute_bound(&self, bound, txn_id) -> Result<ResultSet>` -
   matches on `BoundStatement`. Every arm calls straight through
-  `self.catalog` and takes no engine-level lock: `Catalog` serializes its
-  own mutators internally, and `CreateIndex`'s backfill runs *outside* that
-  exclusion (`create_index` returns before `populate_index` starts), so
-  indexing a large table no longer stalls unrelated catalog work the way
-  the single write lock spanning both used to.
-- `EngineShared::populate_index(&self, txn_id, table_id, column_index,
-  index_id) -> Result<()>` - reads `self.catalog` directly. Every method it
-  calls (`get_table_by_id`, `index_root_page`, `update_index_root_page`)
-  takes `&self`, so there is no guard to thread in from the caller; each
-  `update_index_root_page` takes and releases the mutation lock per root
-  split rather than one lock covering the whole backfill.
+  `self.catalog` and holds no catalog lock of its own: `Catalog` serializes
+  its own mutators internally, and `CreateIndex`'s backfill runs *outside*
+  that exclusion, so indexing a large table does not stall unrelated
+  catalog work. The `CreateIndex` arm is the one arm that takes an
+  engine-level lock: `lock_table_exclusive`, then `build_index`, then
+  `Catalog::create_index_with_root`, in that order
+  (`docs/adr/0017-create-index-is-a-locked-writer.md`). The order is the
+  whole point - the lock comes before the first row is read so no
+  uncommitted row is ever indexed, and the catalog registration comes
+  after the last one so no other session can plan against a half-built
+  index.
+- `EngineShared::lock_table_exclusive(&self, txn_id, table_id) -> Result<()>` -
+  private. Clones the `Arc<txn::LockManager>` out of `txn_manager` under a
+  brief lock (never holding `txn_manager` across the wait itself) and takes
+  `LockMode::Exclusive` on `table_id` for `txn_id`. Nothing releases it
+  here: `TransactionManager::commit`/`abort` call `release_all` as their
+  last step, which is what makes this strict 2PL rather than a latch. A
+  wait that outlives `DbConfig::lock_wait_timeout_ms` surfaces as a
+  retryable `55P03` exactly as an `INSERT`'s would
+  (`docs/adr/0012-bounded-lock-waits.md`).
+- `EngineShared::build_index(&self, txn_id, table_id, column_index) -> Result<PageId>` -
+  private. Creates a fresh `storage::btree::BTreeIndex`, scans the table
+  heap with `TableHeap::iter`, encodes each row's indexed value
+  memcomparably and inserts it, and returns the tree's final root page id.
+  It keeps the root in the local `BTreeIndex` across splits instead of
+  publishing each one through `Catalog::update_index_root_page`, which is
+  safe only because the tree is unreachable from the catalog until the
+  caller registers it. It applies no `VersionStore` filter, and must not:
+  under the exclusive table lock every heap row is committed, while
+  filtering by this statement's own `read_ts` would drop rows committed
+  between its `begin` and its lock grant - rows that belong in a
+  structure every transaction shares.
 - `EngineShared::run(&self, physical, txn_id) -> Result<Vec<Tuple>>` -
   clones the transaction and an `Arc<txn::LockManager>` and an
   `Arc<txn::VersionStore>` out of `txn_manager` (a brief lock;

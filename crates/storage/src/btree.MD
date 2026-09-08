@@ -662,7 +662,11 @@ debug_assert!(index.check_invariants(None).is_ok());
 
 `catalog::Catalog::create_index`/`index_root_page` (`catalog::catalog.MD`)
 are what actually construct a `BTreeIndex` in this workspace -
-`Catalog::create_index` calls `create` once, at `CREATE INDEX` time;
+`create` is called once per index, either by `Catalog::create_index` for
+an index that starts empty or by `engine::EngineShared::build_index`,
+which builds the tree first and registers it through
+`Catalog::create_index_with_root` afterwards
+(`docs/adr/0017-create-index-is-a-locked-writer.md`);
 every later access opens a fresh handle from the root page id `catalog`
 looks up, since `open` is free of I/O. `executor::InsertExecutor`
 (`executor::operators::insert.MD`) calls `insert` to maintain every index

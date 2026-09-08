@@ -21,7 +21,9 @@ use storage::heap::TableHeap;
 use storage::recovery;
 use storage::replacer::LruKReplacer;
 use storage::wal::LogManager;
-use txn::{IsolationLevel, TransactionManager, finish_checkpoint, write_checkpoint_record};
+use txn::{
+    IsolationLevel, LockMode, TransactionManager, finish_checkpoint, write_checkpoint_record,
+};
 use types::{MemcomparableEncode, Tuple, Value};
 
 use crate::executor_factory::build_executor;
@@ -933,17 +935,17 @@ impl EngineShared {
                 Ok(ResultSet::rows(column_names, rows))
             }
             BoundStatement::CreateIndex(create) => {
-                let index_id = self
-                    .catalog
-                    .create_index(
-                        &self.buffer_pool,
-                        txn_id,
-                        &create.index_name,
-                        create.table_id,
-                        create.column_index,
-                    )?
-                    .index_id;
-                self.populate_index(txn_id, create.table_id, create.column_index, index_id)?;
+                self.lock_table_exclusive(txn_id, create.table_id)?;
+                let root_page_id =
+                    self.build_index(txn_id, create.table_id, create.column_index)?;
+                self.catalog.create_index_with_root(
+                    &self.buffer_pool,
+                    txn_id,
+                    &create.index_name,
+                    create.table_id,
+                    create.column_index,
+                    root_page_id,
+                )?;
                 Ok(ResultSet::rows_affected(0))
             }
             BoundStatement::Explain { .. } => unreachable!(
@@ -954,19 +956,27 @@ impl EngineShared {
         }
     }
 
-    fn populate_index(
+    fn lock_table_exclusive(&self, txn_id: TxnId, table_id: common::TableId) -> Result<()> {
+        let lock_manager = {
+            let txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+            txn_manager.lock_manager().clone()
+        };
+        lock_manager.lock_table(txn_id, table_id, LockMode::Exclusive)?;
+        Ok(())
+    }
+
+    fn build_index(
         &self,
         txn_id: TxnId,
         table_id: common::TableId,
         column_index: usize,
-        index_id: common::IndexId,
-    ) -> Result<()> {
+    ) -> Result<common::PageId> {
         let table = self.catalog.get_table_by_id(table_id)?;
         let first_page_id = table.first_page_id;
         let column_types: Vec<_> =
             table.schema.columns().iter().map(|column| column.data_type).collect();
 
-        let mut root_page_id = self.catalog.index_root_page(index_id)?;
+        let mut btree_index = BTreeIndex::create(&self.buffer_pool, txn_id)?;
         let heap = TableHeap::open(&self.buffer_pool, first_page_id);
         for entry in heap.iter() {
             let (rid, bytes) = entry?;
@@ -975,21 +985,9 @@ impl EngineShared {
             let value = &tuple.values()[column_index];
             let mut key = Vec::new();
             value.encode_memcomparable(&mut key).map_err(StorageError::from)?;
-
-            let mut btree_index = BTreeIndex::open(&self.buffer_pool, root_page_id);
             btree_index.insert(txn_id, &key, rid)?;
-            let root_after = btree_index.root_page_id();
-            if root_after != root_page_id {
-                self.catalog.update_index_root_page(
-                    &self.buffer_pool,
-                    txn_id,
-                    index_id,
-                    root_after,
-                )?;
-                root_page_id = root_after;
-            }
         }
-        Ok(())
+        Ok(btree_index.root_page_id())
     }
 
     fn run(&self, physical: PhysicalPlan, txn_id: TxnId) -> Result<Vec<Tuple>> {

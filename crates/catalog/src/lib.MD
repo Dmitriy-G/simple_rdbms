@@ -45,7 +45,8 @@ catalog.create_index(&buffer_pool, txn_id, "idx_users_id", info.table_id, 0)?;
 the live `BufferPool`, and holds it as an `Arc<Catalog>` for the database's
 whole lifetime; every method takes `&self`, so no caller ever holds a lock
 on it (`docs/adr/0014-catalog-is-a-live-shared-object.md`).
-`EngineShared::execute` then calls `create_table`/`create_index` and
+`EngineShared::execute` then calls `create_table`/`create_index_with_root`
+and
 `get_table`/`index_for_column` as DDL and query statements flow through,
 and refills the same object in place (via `Catalog::reload`) after every
 abort, rather than trying to undo its in-memory effects surgically or

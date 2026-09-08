@@ -31,7 +31,9 @@ correctness through `Database::execute`'s public SQL API, complementing
   coverage to catch it.
 - `create_index_on_a_nonempty_table_populates_it` - `CREATE INDEX` issued
   *after* rows already exist finds them via a subsequent indexed query,
-  exercising `engine::Database::populate_index`.
+  exercising `engine::EngineShared::build_index`. The two-session form of
+  the same statement - that it locks the table and publishes only a
+  finished index - is `tests/create_index_concurrency.MD`.
 - `a_rolled_back_create_index_leaves_the_name_reusable` - `BEGIN; CREATE
   INDEX ...; ROLLBACK;` then recreating the same-named index must
   succeed - it would fail with `DuplicateIndex` if the rollback hadn't
