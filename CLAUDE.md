@@ -856,7 +856,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Test:
 ```sh
-cargo test --workspace
+cargo test --workspace --no-fail-fast
 ```
 
 Check documentation:
@@ -1137,8 +1137,8 @@ The suite is run **once, at the end of a subtask**, not continuously
 while it is written. Finish the subtask — code, tests, `.MD`s, README —
 then run the gate (`cargo build --workspace`, `cargo fmt --all --
 --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `bash
-scripts/check_docs.sh`, `cargo test --workspace`); if it fails, fix what
-it reports and run it again until it is clean. `cargo check`/`cargo
+scripts/check_docs.sh`, `cargo test --workspace --no-fail-fast`); if it
+fails, fix what it reports and run it again until it is clean. `cargo check`/`cargo
 build` is the feedback loop during the work, because it answers the
 question actually being asked mid-edit — does this compile — in a
 fraction of the time. Running `cargo test --workspace` after every added
@@ -1189,6 +1189,22 @@ started. The case it catches most often is a test being *tuned* — round
 counts, batch sizes, sleeps adjusted until a race shows up. Reproduction
 by repetition is the signal that the test needs deterministic
 synchronization, which is a design question, not more runs.
+
+**The gate's suite run always carries `--no-fail-fast`.** Cargo's
+fail-fast is per *target*: when one integration-test binary fails, every
+target after it is never run, so the run reports that one failure and
+says nothing whatever about the rest of the suite. A red target then
+costs a second full run — a minute and a half spent learning what the
+first run could have told you, against the three-execution budget above.
+The flag buys that information inside the run already being made and
+costs nothing when the suite is green, since every target runs either
+way, and a run with it is still one execution. This is not
+hypothetical: a gate run stopped at
+`crates/engine/tests/dispatch_never_blocks.rs` and left `sessions`,
+`lock_manager_growth` and `version_store_growth` — two of them added by
+that very task — unexecuted and assumed passing, which took a separate
+task to put right. The same applies to a targeted run over more than one
+target; a single `-p <crate> <filter>` needs nothing.
 
 **A change that touches no code runs the documentation gate and nothing
 else.** When a subtask's whole diff is prose — sibling `.MD`s, a crate

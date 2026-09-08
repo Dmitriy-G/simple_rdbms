@@ -122,7 +122,10 @@ own, and you stop.
 Run the full gate: `cargo build --workspace`,
 `cargo fmt --all -- --check`,
 `cargo clippy --workspace --all-targets -- -D warnings`,
-`bash scripts/check_docs.sh`, `cargo test --workspace`.
+`bash scripts/check_docs.sh`, `cargo test --workspace --no-fail-fast`.
+The flag is not optional: cargo's fail-fast is per target, so without it
+one red integration-test binary hides every target after it and the
+result you get back is not a statement about the suite.
 
 **Unless the subtask changed no code at all**, in which case
 `bash scripts/check_docs.sh` is the whole gate and the other four are

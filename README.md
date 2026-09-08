@@ -43,7 +43,7 @@ cargo build --workspace
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 bash scripts/check_docs.sh
-cargo test --workspace
+cargo test --workspace --no-fail-fast
 ```
 
 `check_docs.sh` enforces the sibling-`.MD` documentation rule described

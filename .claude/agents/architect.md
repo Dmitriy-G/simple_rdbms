@@ -387,7 +387,9 @@ loses exactly what the entry was filed to preserve.
   does a change to `Cargo.toml`, `scripts/**` or `.github/workflows/**`:
   `cargo build --workspace`, `cargo fmt --all -- --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`,
-  `bash scripts/check_docs.sh`, `cargo test --workspace`. Run it once, at
+  `bash scripts/check_docs.sh`, `cargo test --workspace --no-fail-fast`
+  — the flag always, since cargo's fail-fast is per target and one red
+  binary otherwise hides every target after it. Run it once, at
   the end, and obey the three-execution budget — the fourth failing run
   is a problem entry, not another attempt. A change to storage, the WAL,
   recovery or the buffer pool runs both crash-injection sweeps.
