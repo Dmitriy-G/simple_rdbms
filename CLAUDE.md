@@ -1154,6 +1154,22 @@ shell loop around it and no `| tail` throwing away the assertion message
 the run was for. A question that one run cannot settle is answered by
 changing the test, not by running the same command eight times.
 
+**What a run actually costs, so it can be budgeted.** On a warm build
+`cargo test --workspace` is about a minute and a half, and roughly
+two-thirds of that is a single target: `crates/engine/tests/crash_injection.rs`
+alone is around a minute, with `table_heap`, `undo_performance`,
+`buffer_pool_concurrency` and `wal_segments` making up most of the rest
+and every other target finishing in well under a second. Compilation is
+not the expensive part — an incremental rebuild after editing a
+low-level crate like `catalog`, which invalidates everything downstream of
+it, is under ten seconds. Two things follow. Re-running the suite to
+*re-read* a result you already have costs the same minute and a half as
+the run that produced it, so capture the output once instead; that is the
+most common way the budget below gets spent for nothing. And a targeted
+`cargo test -p <crate> <filter>` really is nearly free by comparison,
+which is why it, and not the full gate, is the tool for settling a genuine
+unknown mid-subtask.
+
 **Three executions is the budget for a subtask, and the fourth is a
 problem entry instead.** In the ideal case a subtask runs tests exactly
 once — the gate, at the end, green. When it fails, fix what it reported
