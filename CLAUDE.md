@@ -191,8 +191,12 @@ Role: <role name>
    Owns the project's
    cross-cutting prose and its process: `docs/adr/**`, the roadmap's
    entry text (never its status markers), this file, and
-   `.claude/agents/*.md` plus `.claude/settings*.json`. Never touches a
-   `.rs` file, a test, a sibling module `.MD` or a crate `README.md`.
+   `.claude/agents/*.md` plus `.claude/settings*.json`. It writes a `.rs`
+   file, a test, a sibling module `.MD` or a crate `README.md` in exactly
+   one situation: inside a subtask of a task marked `For: Architect`,
+   where the human has rated the work `8`+ because it is hard rather than
+   because it is prose. Reviewing, investigating and triaging never touch
+   code.
 3. **Task writer** — asked to turn a user request, the open entries in
    `.claude/problems.md`, or the next milestone into a task. Write
    `.claude/task.md` using the task format below: keep it understandable
@@ -402,9 +406,11 @@ human write it.
 - `7` — the entry names the fix and recommends it, but carrying it out
   changes a public API or a documented behaviour other modules rely on.
 - `8` — the answer is not known before the work starts, or the fix is in
-  Architect-owned prose: a design question whose options are not
-  enumerated yet, a boundary that has to move, an ADR to correct, a
-  roadmap entry to rewrite, a change to the process itself.
+  Architect-owned prose, or the change is simply hard: a design question
+  whose options are not enumerated yet, a boundary that has to move, an
+  ADR to correct, a roadmap entry to rewrite, a change to the process
+  itself — or a refactor across several crates that a Coder is likely to
+  get stuck in.
 - `9` — a decision that constrains later milestones and needs an ADR
   before any code is written.
 - `10` — a change to the project's own model: an invariant in this file,
@@ -412,10 +418,10 @@ human write it.
 
 **`1`–`7` is a Coder problem, `8`–`10` an Architect problem**, and that
 one number is the whole routing rule — not the signature, not the files.
-Two things put an entry at `8`, and either alone is enough. The first is
-that **the answer is not known before the work starts**: options with no
-choice made, a boundary nobody has placed. The second is that **the fix
-lands in Architect-owned files** — an ADR, this file, the root
+Three things put an entry at `8`, and any one alone is enough. The first
+is that **the answer is not known before the work starts**: options with
+no choice made, a boundary nobody has placed. The second is that **the
+fix lands in Architect-owned files** — an ADR, this file, the root
 `README.md`, roadmap prose, a diagram, a role definition,
 `.claude/settings*.json` — because the Coder may not write them and the
 rating is what routes the entry. A one-line correction to an ADR is an
@@ -423,6 +429,20 @@ rating is what routes the entry. A one-line correction to an ADR is an
 both, since these files are where every later session gets its
 instructions and a wrong rule in one is not one mistake but every task
 after it.
+
+The third is **difficulty**, and it is the human's to apply: an `8`+ is
+also how a change that is merely *hard* — a public API moved across four
+crates, a locking discipline replaced under live tests — is steered to
+the model that works Architect tasks, because a Coder is expected to get
+stuck in it. A rating set for this reason says nothing about which files
+the diff touches. **A `For: Architect` task may therefore contain a
+subtask whose whole diff is `.rs`, tests and sibling `.MD`s, and the
+Architect writes them**: inside a subtask of a task addressed to it, the
+Architect has the Coder's write targets as well as its own, and runs the
+Coder's full gate over the result. Outside such a subtask nothing
+changes — reviewing, investigating and triaging still produce prose and a
+recommendation, never a code edit. The ownership table below is what
+holds *outside* a task; the `For:` line is what holds inside one.
 
 The level is about the thinking, not the size: a 1 SP entry is a `9` when
 its single line is obvious only once the decision is made, and an 8 SP
@@ -475,9 +495,16 @@ is the same. That is why a fix landing in Architect-owned files is rated
 `Thinking: 8` or above: the rating carries the ownership, so the routing
 needs one field and not two.
 
+The implication runs one way only. A fix in Architect files forces an
+`8`+; an `8`+ does not imply the fix is in Architect files, because the
+human also uses that rating to send a hard *code* change to the
+Architect. So this table says who may change a path **outside** a task,
+and inside a subtask the `For:` line overrides it: whoever the task names
+writes whatever that subtask's fix touches.
+
 | Area | Owner | Notes |
 | --- | --- | --- |
-| `crates/**/*.rs` — source and tests | Coder | The only role that writes Rust. Tests are not a separate area: a subtask's tests ship with its code. |
+| `crates/**/*.rs` — source and tests | Coder, and the Architect inside a `For: Architect` subtask | Tests are not a separate area: a subtask's tests ship with its code. The Architect writes Rust only within a subtask of a task addressed to it — a `Thinking: 8`+ the human set because the change is hard — and never while reviewing, investigating or triaging. |
 | `crates/**/*.MD` — sibling module docs | Coder | Ships in the same commit as its `.rs`. Whoever edits the code edits the doc. |
 | `crates/*/README.md` | Coder | Same rule: it documents that crate's code, so it goes stale the moment code lands without it. |
 | `README.md`, `CLAUDE.md` | Architect | Repository-level prose. "What works today" claims here are checked by the Milestone Reviewer at the end of each milestone. |
@@ -944,7 +971,7 @@ public item undocumented in its sibling `.MD`, a crate missing its
 
 `docs/` and this file cite source as `path/to/file.rs:123`, which is
 precise and goes stale the moment anything above line 123 changes.
-Nothing checks these, so two rules keep them honest.
+Nothing checks these, so three rules keep them honest.
 
 **Rewriting a module ends with a grep for its path.** A change that moves
 code — a sub-milestone that restructures a module, not a change of a few
@@ -956,6 +983,21 @@ front of them; a milestone later, re-pointing it means re-deriving what
 the sentence was trying to say. The Coder cannot edit an ADR, the roadmap
 or this file, so when the grep lands there it names the hits in its reply
 or files a problem entry, and the Architect re-points them.
+
+**The sweep runs once more at the end of the milestone.** The per-task
+grep above only covers the module that task moved, and it is run by the
+task that moved it — which is exactly why it misses the common case: a
+citation written correctly in one task, then broken by a commit landing
+two tasks later in the same milestone. So the **last** task of a
+milestone runs `grep -rn "\.rs:[0-9]" docs CLAUDE.md` over the whole
+tree, not just over what it touched, and every hit that no longer
+resolves to what its sentence claims is re-pointed before the milestone
+is handed to the Milestone Reviewer. Resolving a hit means opening the
+file at the line and checking the sentence, not checking that the file
+still exists. Every site P-48 repaired — three in
+`docs/adr/0004-acid-scope.md`, one in `docs/adr/0012-bounded-lock-waits.md`
+and two in `docs/adr/0013-version-identity-and-lifetime.md` — was correct
+when written and stale by the end of M10.
 
 **A historical passage carries no line numbers.** An ADR's Context
 describes the tree as it was when the decision was taken, and once the
@@ -1141,8 +1183,12 @@ else.** When a subtask's whole diff is prose — sibling `.MD`s, a crate
 `cargo test --workspace` would read exactly the `.rs` files they read on
 the previous run and can only reproduce the previous answer, at the cost
 of the crash-injection sweeps. This binds the Coder and the Architect
-alike, and for the Architect it is the normal case: it may not write a
-`.rs` file at all, so `check_docs.sh` is its whole gate.
+alike, and for the Architect it is the common case rather than the only
+one: most of what it writes is prose, so `check_docs.sh` is usually its
+whole gate — but a `For: Architect` subtask that changes code runs the
+full gate exactly as a Coder subtask does, with the same three-execution
+budget and the same crash-injection obligation. The gate follows the
+diff, never the role.
 
 The boundary is the file list, not the intent. **One changed `.rs` file
 puts the subtask back on the full gate** — a `// TODO(Mx):` marker

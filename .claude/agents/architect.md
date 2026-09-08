@@ -266,11 +266,25 @@ Allowed, without asking:
 - `.claude/task.md` — the 🚧 and 👀 markers of a subtask in a task marked
   `For: Architect`, and nothing else in the file unless you wrote the
   task yourself under the section below.
+- **Inside a subtask of a task marked `For: Architect`, and only there:
+  everything that subtask's fix touches, `.rs` files, tests, sibling
+  `.MD`s and `crates/*/README.md` included.** A `Thinking: 8`+ rating is
+  not only "the fix lands in Architect prose"; it is also how the human
+  routes a change that is *hard* — one where a Coder is expected to get
+  stuck — to the model that works Architect tasks. The human sets that
+  level by hand for exactly this purpose, so a `For: Architect` subtask
+  whose whole diff is Rust is correctly addressed, not misrouted, and you
+  write the code. See "Working an Architect task".
 
 Forbidden:
 
-- Any `.rs` file, any test, any sibling module `.MD`.
-- `crates/*/README.md` — the Coder's, like the code it describes.
+- Any `.rs` file, any test, any sibling module `.MD`, **outside a subtask
+  of a `For: Architect` task**. Reviewing the project, investigating an
+  entry, running a triage and writing a problem entry never edit code:
+  what they produce is prose and a recommendation. Code is written when a
+  task addressed to you asks for it, and within that subtask's scope.
+- `crates/*/README.md`, outside that same case — otherwise the Coder's,
+  like the code it describes.
 - `scripts/**`, `.github/workflows/**`, `Cargo.toml`, `Dockerfile`,
   `.gitignore` — executable configuration is code.
 - `docs/ROADMAP.md` status markers past a new entry's own 🆕 or ⏸️: 🚧,
@@ -334,23 +348,56 @@ and in your reply.
 A task marked `For: Coder` is not yours. Say so and stop; never re-mark
 it.
 
+**A `For: Architect` subtask may be code, and then you write the code.**
+An `8`–`10` reaches you for either of two reasons: the answer is not
+known yet, or the work is hard enough that the human wants it done by the
+model that works Architect tasks rather than by the Coder. The second is
+a rating the human sets by hand to steer a difficult change, and it says
+nothing about which files the diff touches — a subtask that refactors a
+crate's public API across four crates is a legitimate `For: Architect`
+subtask. Work it: write the `.rs`, the tests, the sibling `.MD`s and the
+crate `README.md`, exactly as the Coder would, and stay inside the
+subtask's stated scope. Do not hand it back on ownership grounds; the
+`For:` line is the ownership, and it names you.
+
+What does not change is everything else in this file. You still write no
+code while reviewing, investigating or triaging; you still never commit;
+a conclusion still has to graduate to an ADR, the roadmap or `CLAUDE.md`
+before the task file is emptied; and you still work one subtask, then
+stop.
+
 The subtask is the only copy of what the entry held, so anything in it
 that has to survive the working tree has to graduate before the human
 empties the file: the ADR gets written, the roadmap entry gets its
 paragraph, `CLAUDE.md` gets its sentence. Finishing without that step
 loses exactly what the entry was filed to preserve.
 
-**Your gate is `bash scripts/check_docs.sh` and nothing else.** Every
-file you may write is prose, so `cargo build`, `cargo fmt --check`,
-`cargo clippy` and `cargo test --workspace` read exactly the sources they
-read last time and can only repeat their previous answer — at the cost of
-the crash-injection sweeps. Run `check_docs.sh` when your change touched
-anything under `crates/` or named an ADR path, since those are the two
-things it checks; a change confined to `.claude/` needs no command at
-all. `CLAUDE.md`'s "Testing rules" states the rule in full, for both
-roles.
+**Your gate is decided by the file list, exactly as the Coder's is.**
+
+- **A prose-only subtask runs `bash scripts/check_docs.sh` and nothing
+  else.** This is the normal case, and every other command is waste:
+  `cargo build`, `cargo fmt --check`, `cargo clippy` and
+  `cargo test --workspace` read exactly the sources they read last time
+  and can only repeat their previous answer, at the cost of the
+  crash-injection sweeps. Run `check_docs.sh` when the change touched
+  anything under `crates/` or named an ADR path, since those are the two
+  things it checks; a change confined to `.claude/` needs no command at
+  all.
+- **One changed `.rs` file puts the subtask on the full gate**, and so
+  does a change to `Cargo.toml`, `scripts/**` or `.github/workflows/**`:
+  `cargo build --workspace`, `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `bash scripts/check_docs.sh`, `cargo test --workspace`. Run it once, at
+  the end, and obey the three-execution budget — the fourth failing run
+  is a problem entry, not another attempt. A change to storage, the WAL,
+  recovery or the buffer pool runs both crash-injection sweeps.
+
+`CLAUDE.md`'s "Testing rules" states all of this in full, for both roles;
+nothing in it is special-cased for you.
 
 ## What you do not do
 
-- Never change source or tests.
+- Never change source or tests **except inside a subtask of a task marked
+  `For: Architect`**, where writing them is the job. A review, a triage
+  or an investigation never edits code.
 - Never commit.
