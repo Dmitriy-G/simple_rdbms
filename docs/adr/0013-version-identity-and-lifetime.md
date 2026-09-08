@@ -18,10 +18,9 @@ is worse than none.
 
 M10.3 shipped MVCC visibility: `txn::VersionStore` kept a
 `Mutex<HashMap<Rid, VersionChain>>`,
-`insert.rs` records a version per inserted row
-(`crates/executor/src/operators/insert.rs:70`), and the scan executors ask
-the store whether a `Rid` is visible to the reader
-(`crates/executor/src/operators/seq_scan.rs:43`). It works, and it is
+`crates/executor/src/operators/insert.rs` records a version per inserted
+row, and the scan executors ask the store whether a `Rid` is visible to
+the reader (`crates/executor/src/operators/seq_scan.rs`). It works, and it is
 sound today for one reason that is about to stop being true: a `Rid` can
 currently have at most one version, and no row is ever removed.
 
@@ -131,7 +130,7 @@ everyone.
 The write set belongs to the store and **not** to `txn::Transaction`,
 beside the `read_ts` and `begin_lsn` it already carries, even though that
 is the more natural home: `EngineShared::run`
-(`crates/engine/src/runtime.rs:983-989`) hands the executors a *clone* of
+(`crates/engine/src/runtime.rs:992-999`) hands the executors a *clone* of
 the `Transaction`, so anything `InsertExecutor`
 (`crates/executor/src/operators/insert.rs:69-71`) recorded on
 `ExecutorContext::txn` (`crates/executor/src/context.rs:8`) would be
@@ -141,7 +140,7 @@ set for every real statement.
 **The prune rule is one watermark.** `TransactionManager` exposes the
 oldest `read_ts` among active transactions — the exact analogue of the
 `earliest_active_begin_lsn` it already computes
-(`crates/txn/src/manager.rs:119`) — and when there is no active
+(`crates/txn/src/manager.rs:121`) — and when there is no active
 transaction the watermark is the next timestamp to be issued, which
 prunes everything prunable. Against that watermark:
 

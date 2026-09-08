@@ -54,7 +54,7 @@ The alternative considered seriously was **admission control** — never
 letting the last free worker be occupied by a statement that is about to
 block. It was rejected for three reasons. It cannot be applied where the
 decision is made: a lock is taken deep inside an executor
-(`crates/executor/src/operators/insert.rs:35,70`), long after the
+(`crates/executor/src/operators/insert.rs:35,72`), long after the
 statement has been dispatched to a worker, so the engine cannot know in
 advance that a statement will block. It fixes the wrong half of the
 problem: even with a worker permanently reserved, a session that holds a

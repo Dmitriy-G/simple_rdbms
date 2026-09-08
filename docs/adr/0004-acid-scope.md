@@ -61,7 +61,7 @@ concurrently on a fixed worker pool
 serialized behind its session mutex.
 
 *Readers take no locks.* Every user statement runs at
-`IsolationLevel::SnapshotIsolation` (`crates/engine/src/runtime.rs:765,843,874`),
+`IsolationLevel::SnapshotIsolation` (`crates/engine/src/runtime.rs:773,852,883`),
 and under it `SeqScanExecutor::init` skips the shared table lock
 (`crates/executor/src/operators/seq_scan.rs:26-29`) while `next` filters
 each tuple through `VersionStore::is_visible_to(rid, txn_id, read_ts)`
@@ -72,13 +72,13 @@ never blocks and never blocks anyone.
 *Writers take exclusive locks and hold them to commit.*
 `InsertExecutor::init` takes an exclusive **table** lock
 (`crates/executor/src/operators/insert.rs:35`) and `next` takes an
-exclusive lock per inserted `Rid` (line 70). Nothing releases a lock
+exclusive lock per inserted `Rid` (line 72). Nothing releases a lock
 early: `TransactionManager::commit` and `abort` call
 `LockManager::release_all` as their last step
 (`crates/txn/src/manager.rs:88,103`). That is strict two-phase locking, so
 two writers against one table serialize; a waiter that would close a
 cycle in the wait-for graph is aborted as a deadlock victim
-(`crates/txn/src/lock_manager.rs:52-67,157-158`), and its wait is bounded
+(`crates/txn/src/lock_manager.rs:52-67,168-169`), and its wait is bounded
 per `docs/adr/0012-bounded-lock-waits.md`.
 
 *The snapshot is per-process and in memory.* `read_ts` is assigned at
