@@ -42,7 +42,7 @@ jobs:
         run: cargo build --workspace
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
       - name: Test (buffer pool concurrency, isolated from other tests' cores)
         run: cargo test -p storage --test buffer_pool_concurrency -- --test-threads=1
