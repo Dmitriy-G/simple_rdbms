@@ -15,11 +15,16 @@ drive a `TransactionManager`.
 `TransactionManager` owns every transaction's lifecycle end to end:
 `begin` opens one against a live `BufferPool` (appending a `Begin` WAL
 record), `commit` force-flushes the log up to its `Commit` record before
-returning, and `abort` walks its WAL chain backward, undoing each record —
+returning, and `begin_abort`/`PendingAbort::undo`/`finish_abort` walk its
+WAL chain backward, undoing each record —
 the same `undo_transaction` path `storage::recovery::recover`'s own Undo
 pass uses on restart, so `ROLLBACK` and crash recovery really are one
 mechanism (`crates/engine/tests/rollback_matches_recovery_undo.rs` proves
-this). `write_checkpoint` writes a fuzzy checkpoint so a future recovery's
+this). That abort is three calls rather than one for the same reason a
+checkpoint is two: the undo in the middle fetches pages and so can write
+and `fsync` the database file, which no lock a statement needs may span
+(`docs/adr/0018-an-abort-is-not-a-quiesce-point.md`).
+`write_checkpoint` writes a fuzzy checkpoint so a future recovery's
 Analysis pass doesn't have to scan the log from the beginning.
 
 Atomicity and durability are real today, built on exactly that WAL
@@ -45,7 +50,9 @@ same path as of M10.3 (see Features).
   table locks under two-phase locking, releasing a transaction's whole
   set at once. See [lock_manager.MD](src/lock_manager.MD).
 - `manager` - `TransactionManager`, owns the lifecycle of every
-  transaction. See [manager.MD](src/manager.MD).
+  transaction, plus `PendingAbort`, the token that carries an abort from
+  its first locked phase to its last across the undo in between. See
+  [manager.MD](src/manager.MD).
 - `mvcc` - `VersionChain`, `VersionEntry`: the MVCC version chain for a
   single logical row. See [mvcc.MD](src/mvcc.MD).
 - `transaction` - `Transaction`, `TransactionState`: a single unit of work

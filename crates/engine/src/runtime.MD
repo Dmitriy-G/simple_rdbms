@@ -32,8 +32,10 @@ and a `CREATE TABLE` are serialized only inside `Catalog` and only for as
 long as each call needs; see
 `docs/adr/0014-catalog-is-a-live-shared-object.md`),
 `txn_manager: Mutex<TransactionManager>` (locked
-only for the brief `begin`/`commit`/`abort`/`get` call itself, never
-across a page fetch or an executor's `next()`), and
+only for the brief `begin`/`commit`/`begin_abort`/`finish_abort`/`get`
+call itself, never
+across a page fetch, an executor's `next()`, a checkpoint's page-0 flush
+or a rollback's undo), and
 `checkpoint: Mutex<CheckpointState>` (the two checkpoint-bookkeeping
 counters, locked only long enough to read or update them). Every lock
 acquisition goes through `common::sync::recover_lock` rather than
@@ -542,12 +544,28 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   after every abort/rollback, since `Catalog::create_table`/`create_index`
   mutate the in-memory catalog immediately rather than waiting for commit,
   and an aborted transaction needs that mutation discarded.
-- `EngineShared::commit_txn(&self, txn_id) -> Result<()>`/`abort_txn(&self,
-  txn_id) -> Result<()>` - private one-line wrappers that lock
-  `txn_manager` just long enough for the underlying `TransactionManager`
-  call; every commit/abort site in this file goes through one of these
-  two rather than locking `txn_manager` itself, so the lock is never held
-  any longer than the single call needs.
+- `EngineShared::commit_txn(&self, txn_id) -> Result<()>` - private. Locks
+  `txn_manager` just long enough for `TransactionManager::commit`; every
+  commit site in this file goes through it rather than locking
+  `txn_manager` itself, so the lock is never held any longer than the
+  single call needs. The log flush `commit` does under that lock is
+  deliberate and permitted - it is log I/O, not database-file I/O.
+- `EngineShared::abort_txn(&self, txn_id) -> Result<()>` - private, and
+  the abort counterpart, in the same three phases
+  `checkpoint_and_flush` uses for a checkpoint's two
+  (`docs/adr/0018-an-abort-is-not-a-quiesce-point.md`). It locks
+  `txn_manager` for `TransactionManager::begin_abort`, **drops the lock**
+  for `PendingAbort::undo`, then retakes it for `finish_abort` on success
+  or `cancel_abort` on failure, returning the undo's error in that case so
+  the transaction stays active and abortable again rather than stranded.
+  The middle phase is the one that matters: undo fetches every page the
+  transaction wrote, and a fetch with no free frame evicts a victim, which
+  writes the database file through the double-write buffer and syncs it.
+  Held across that, this mutex stops every other session's `BEGIN`,
+  `COMMIT` and first statement for the length of one `ROLLBACK`. Every
+  abort site in this file - `handle_rollback`, `handle_commit`'s
+  `Aborted` arm, `execute_non_control_statement`'s autocommit failure
+  path, `expire_idle_session` and `disconnect_session` - goes through it.
 - `EngineShared::txn_for_statement(&self, session) -> Result<(TxnId, bool)>` -
   unchanged in behavior: returns the session's already-open transaction
   (not autocommit) or begins a fresh one, under
@@ -570,8 +588,10 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   private. Clones the `Arc<txn::LockManager>` out of `txn_manager` under a
   brief lock (never holding `txn_manager` across the wait itself) and takes
   `LockMode::Exclusive` on `table_id` for `txn_id`. Nothing releases it
-  here: `TransactionManager::commit`/`abort` call `release_all` as their
-  last step, which is what makes this strict 2PL rather than a latch. A
+  here: `TransactionManager::commit`/`finish_abort` call `release_all` as
+  their last step, which is what makes this strict 2PL rather than a latch
+  - and on the abort path that step comes *after* the undo, so no other
+  writer can take the table while it is half-undone. A
   wait that outlives `DbConfig::lock_wait_timeout_ms` surfaces as a
   retryable `55P03` exactly as an `INSERT`'s would
   (`docs/adr/0012-bounded-lock-waits.md`).

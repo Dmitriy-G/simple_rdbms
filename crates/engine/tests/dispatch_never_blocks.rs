@@ -94,6 +94,12 @@ impl BlockDevice for PausingDevice {
     }
 }
 
+enum ProbeStep {
+    Connected,
+    Begun(Result<ResultSet, common::Error>),
+    Committed(Result<ResultSet, common::Error>),
+}
+
 fn recv_within<T>(rx: &mpsc::Receiver<T>, timeout: Duration, what: &str) -> T {
     rx.recv_timeout(timeout)
         .unwrap_or_else(|_| panic!("timed out after {timeout:?} waiting for {what}"))
@@ -242,6 +248,105 @@ fn a_stalled_checkpoint_does_not_block_an_unrelated_session() -> Result<(), Box<
     let _ = flush_release_tx.send(());
     checkpoint_handle.join().expect("checkpoint thread must not panic")?;
     let (_probe_base, _probe) = probe_handle.join().expect("probe thread must not panic");
+    Ok(())
+}
+
+#[test]
+fn a_stalled_rollback_does_not_block_an_unrelated_session() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    let config = DbConfig { buffer_pool_size: 8, ..DbConfig::new(dir.path().join("test.db")) };
+
+    let write_armed = Arc::new(AtomicBool::new(false));
+    let (evict_reached_tx, evict_reached_rx) = mpsc::sync_channel::<()>(0);
+    let (evict_release_tx, evict_release_rx) = mpsc::sync_channel::<()>(0);
+    let write_slots =
+        VecDeque::from(vec![PauseSlot { reached: evict_reached_tx, release: evict_release_rx }]);
+    let db_device: Box<dyn BlockDevice> = Box::new(PausingDevice::with_write_pause(
+        FileDevice::new(open_file(&dir.path().join("test.db"))?),
+        Arc::clone(&write_armed),
+        write_slots,
+    ));
+    let wal_store: Arc<dyn SegmentStore> =
+        Arc::new(FileSegmentStore::new(wal_base_path(dir.path())));
+    let dwb_device: Box<dyn BlockDevice> =
+        Box::new(FileDevice::new(open_file(&dir.path().join("test.db.dwb"))?));
+    let db1 = Database::open_with_devices(config, db_device, wal_store, 4096, dwb_device)?;
+
+    {
+        let mut setup = db1.connect()?;
+        setup.execute("CREATE TABLE big (a INTEGER, b TEXT)")?;
+        setup.execute("CREATE TABLE small (a INTEGER)")?;
+        setup.execute("INSERT INTO small VALUES (7)")?;
+    }
+
+    let mut writer = db1.connect()?;
+    writer.execute("BEGIN")?;
+    let filler = "x".repeat(1800);
+    for i in 0..40 {
+        writer.execute(&format!("INSERT INTO big VALUES ({i}, '{filler}')"))?;
+    }
+
+    let db_probe_base = db1.connect()?;
+
+    write_armed.store(true, Ordering::SeqCst);
+    let rollback_handle = thread::spawn(move || {
+        let result = writer.execute("ROLLBACK");
+        (writer, result)
+    });
+
+    recv_within(
+        &evict_reached_rx,
+        REACHED_TIMEOUT,
+        "the rollback's undo to reach a stalled page write, which is where a buffer pool \
+         eviction flushes a victim to the database file",
+    );
+
+    let (probe_tx, probe_rx) = mpsc::channel();
+    let probe_handle = thread::spawn(move || {
+        let mut db_probe = db_probe_base.connect().expect("connect must not fail");
+        let _ = probe_tx.send(ProbeStep::Connected);
+        let begun = db_probe.execute("BEGIN");
+        let _ = probe_tx.send(ProbeStep::Begun(begun));
+        let committed = db_probe.execute("COMMIT");
+        let _ = probe_tx.send(ProbeStep::Committed(committed));
+        (db_probe_base, db_probe)
+    });
+    let steps = [
+        "an unrelated session's Connect",
+        "an unrelated session's BEGIN",
+        "an unrelated session's COMMIT",
+    ];
+    for (index, step) in steps.iter().enumerate() {
+        let what = format!(
+            "{step} (probe step {index}) while a ROLLBACK's undo is parked mid-write inside the \
+             worker pool"
+        );
+        match recv_within(&probe_rx, RESPONSIVENESS_BOUND, &what) {
+            ProbeStep::Connected => {}
+            ProbeStep::Begun(begun) => {
+                begun?;
+            }
+            ProbeStep::Committed(committed) => {
+                committed?;
+            }
+        }
+    }
+
+    let _ = evict_release_tx.send(());
+    let (mut writer, rollback) = rollback_handle.join().expect("rollback thread must not panic");
+    rollback?;
+    let (_probe_base, mut probe) = probe_handle.join().expect("probe thread must not panic");
+    assert_eq!(
+        row_count(probe.execute("SELECT * FROM small")?),
+        1,
+        "the probe's session must still be usable once the stalled write is released"
+    );
+
+    assert_eq!(
+        row_count(writer.execute("SELECT * FROM big")?),
+        0,
+        "every row the rolled-back transaction inserted must be gone"
+    );
     Ok(())
 }
 

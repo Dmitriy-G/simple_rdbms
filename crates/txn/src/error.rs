@@ -16,6 +16,9 @@ pub enum TxnError {
     #[error("unknown transaction {0}")]
     UnknownTransaction(u64),
 
+    #[error("transaction {0} is already being aborted")]
+    AbortInProgress(u64),
+
     #[error(transparent)]
     Storage(#[from] storage::StorageError),
 }
@@ -26,9 +29,9 @@ impl From<TxnError> for common::Error {
         match err {
             TxnError::DeadlockVictim(_) => common::Error::DeadlockDetected { detail },
             TxnError::LockTimeout(_) => common::Error::LockTimeout { detail },
-            TxnError::LockAfterUnlock(_) | TxnError::UnknownTransaction(_) => {
-                common::Error::Internal { detail }
-            }
+            TxnError::LockAfterUnlock(_)
+            | TxnError::UnknownTransaction(_)
+            | TxnError::AbortInProgress(_) => common::Error::Internal { detail },
             TxnError::Storage(err) => err.into(),
         }
     }

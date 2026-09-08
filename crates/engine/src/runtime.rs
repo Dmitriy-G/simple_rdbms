@@ -878,9 +878,22 @@ impl EngineShared {
     }
 
     fn abort_txn(&self, txn_id: TxnId) -> Result<()> {
+        let pending = {
+            let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
+            txn_manager.begin_abort(txn_id, &self.buffer_pool)?
+        };
+        let undone = pending.undo(&self.buffer_pool);
         let mut txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
-        txn_manager.abort(txn_id, &self.buffer_pool)?;
-        Ok(())
+        match undone {
+            Ok(()) => {
+                txn_manager.finish_abort(pending)?;
+                Ok(())
+            }
+            Err(err) => {
+                txn_manager.cancel_abort(pending);
+                Err(err.into())
+            }
+        }
     }
 
     fn txn_for_statement(&self, session: &mut SessionState) -> Result<(TxnId, bool)> {

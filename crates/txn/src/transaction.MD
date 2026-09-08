@@ -11,7 +11,13 @@ A single unit of work: the state the `TransactionManager` and
   `Growing` is acquiring locks; may not yet have released any.
   `Shrinking` has released at least one lock; may not acquire any more.
   `Committed` means all of its writes are durable. `Aborted` means all of
-  its writes have been (or are being) undone.
+  its writes have been (or are being) undone: it is the one state anything
+  currently writes, set by `TransactionManager::begin_abort` the moment an
+  abort starts and cleared back to `Growing` by `cancel_abort` if the undo
+  fails. So a transaction found in the active map marked `Aborted` is one
+  whose undo is running right now with the manager's lock released
+  (`manager.MD`, `docs/adr/0018-an-abort-is-not-a-quiesce-point.md`), and
+  neither `commit` nor a second `begin_abort` may touch it.
 - `Transaction` - the struct. `txn_id` is the transaction's unique id,
   assigned at `begin`. `isolation_level` is the isolation level this
   transaction runs under. `state` is the transaction's current position in

@@ -15,7 +15,7 @@ pub use checkpoint::{
 pub use error::TxnError;
 pub use isolation::IsolationLevel;
 pub use lock_manager::{LockManager, LockMode};
-pub use manager::TransactionManager;
+pub use manager::{PendingAbort, TransactionManager};
 pub use mvcc::{VersionChain, VersionEntry};
 pub use transaction::{Transaction, TransactionState};
 pub use version_store::VersionStore;

@@ -10,8 +10,28 @@ use storage::wal::LogRecordKind;
 use crate::error::TxnError;
 use crate::isolation::IsolationLevel;
 use crate::lock_manager::LockManager;
-use crate::transaction::Transaction;
+use crate::transaction::{Transaction, TransactionState};
 use crate::version_store::VersionStore;
+
+#[must_use = "an abort that is never finished leaves the transaction in the active set still holding every lock it took"]
+#[derive(Debug)]
+pub struct PendingAbort {
+    txn_id: TxnId,
+    last_lsn: Option<Lsn>,
+}
+
+impl PendingAbort {
+    pub fn txn_id(&self) -> TxnId {
+        self.txn_id
+    }
+
+    pub fn undo(&self, pool: &BufferPool) -> Result<(), TxnError> {
+        if let Some(last_lsn) = self.last_lsn {
+            recovery::undo_transaction(pool, self.txn_id, last_lsn)?;
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Default)]
 pub struct TransactionManager {
@@ -77,7 +97,10 @@ impl TransactionManager {
 
     #[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]
     pub fn commit(&mut self, txn_id: TxnId, pool: &BufferPool) -> Result<(), TxnError> {
-        self.active.get(&txn_id).ok_or(TxnError::UnknownTransaction(txn_id.0))?;
+        let txn = self.active.get(&txn_id).ok_or(TxnError::UnknownTransaction(txn_id.0))?;
+        if txn.state == TransactionState::Aborted {
+            return Err(TxnError::AbortInProgress(txn_id.0));
+        }
         let commit_lsn = pool.append_log(txn_id, LogRecordKind::Commit)?;
         pool.flush_log(commit_lsn)?;
         let commit_ts = self.next_timestamp();
@@ -92,19 +115,47 @@ impl TransactionManager {
     }
 
     #[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]
-    pub fn abort(&mut self, txn_id: TxnId, pool: &BufferPool) -> Result<(), TxnError> {
-        self.active.get(&txn_id).ok_or(TxnError::UnknownTransaction(txn_id.0))?;
-        tracing::warn!("transaction abort");
-        if let Some(last_lsn) = pool.last_lsn(txn_id) {
-            recovery::undo_transaction(pool, txn_id, last_lsn)?;
+    pub fn begin_abort(
+        &mut self,
+        txn_id: TxnId,
+        pool: &BufferPool,
+    ) -> Result<PendingAbort, TxnError> {
+        let txn = self.active.get_mut(&txn_id).ok_or(TxnError::UnknownTransaction(txn_id.0))?;
+        if txn.state == TransactionState::Aborted {
+            return Err(TxnError::AbortInProgress(txn_id.0));
         }
-        self.active.remove(&txn_id);
+        txn.state = TransactionState::Aborted;
+        tracing::warn!("transaction abort");
+        Ok(PendingAbort { txn_id, last_lsn: pool.last_lsn(txn_id) })
+    }
+
+    #[tracing::instrument(skip_all, fields(txn_id = pending.txn_id.0))]
+    pub fn finish_abort(&mut self, pending: PendingAbort) -> Result<(), TxnError> {
+        let txn_id = pending.txn_id;
+        self.active.remove(&txn_id).ok_or(TxnError::UnknownTransaction(txn_id.0))?;
         self.version_store.abort_versions(txn_id, self.next_ts);
         self.version_store.prune(self.oldest_active_read_ts());
         self.lock_manager.release_all(txn_id);
         self.lock_manager.prune_finished(self.oldest_active_txn_id());
         metrics::counter!("transactions_aborted_total").increment(1);
         Ok(())
+    }
+
+    pub fn cancel_abort(&mut self, pending: PendingAbort) {
+        if let Some(txn) = self.active.get_mut(&pending.txn_id) {
+            txn.state = TransactionState::Growing;
+        }
+    }
+
+    pub fn abort(&mut self, txn_id: TxnId, pool: &BufferPool) -> Result<(), TxnError> {
+        let pending = self.begin_abort(txn_id, pool)?;
+        match pending.undo(pool) {
+            Ok(()) => self.finish_abort(pending),
+            Err(err) => {
+                self.cancel_abort(pending);
+                Err(err)
+            }
+        }
     }
 
     pub fn get(&self, txn_id: TxnId) -> Result<&Transaction, TxnError> {

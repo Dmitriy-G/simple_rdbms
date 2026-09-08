@@ -52,6 +52,22 @@ two halves regressed: `Connect` means the dispatch thread, the `SELECT`
 alone means the transaction manager. Widening its timeout is never the
 answer; the wait it would be tolerating is unbounded, not slow.
 
+It now also covers P-63, which is ADR 0016's defect on the abort path:
+`EngineShared::abort_txn` held `EngineShared.txn_manager` across
+`TransactionManager::abort`, and the undo inside it fetches every page the
+transaction wrote, so a fetch that found no free frame evicted a victim and
+wrote and synced the database file with that mutex still held. Every
+session's `BEGIN`, `COMMIT` and first statement stopped for the length of
+one `ROLLBACK`.
+`docs/adr/0018-an-abort-is-not-a-quiesce-point.md` splits the abort the way
+ADR 0016 split the checkpoint, and
+`a_stalled_rollback_does_not_block_an_unrelated_session` below is the
+regression test. The two stalled-write tests are deliberately the same
+shape, and the difference between them is where the write comes from: the
+checkpoint's is one the test forces directly, the rollback's is an eviction
+the test has to engineer with a small pool and a transaction too large to
+fit in it.
+
 ## Key Components
 
 - `REACHED_TIMEOUT`/`RESPONSIVENESS_BOUND`/`PAUSE_SAFETY_NET` - the three
@@ -65,9 +81,19 @@ answer; the wait it would be tolerating is unbounded, not slow.
   wait so a broken test can't hang the suite forever even if the test
   function itself never reaches its release send. Both tests share all
   three: each probes with in-memory dispatch-thread work only, so
-  `RESPONSIVENESS_BOUND` is the right order of magnitude for either, and
+  `RESPONSIVENESS_BOUND` is the right order of magnitude for any of them,
+  and
   a bound that has to be widened to pass is the signal that the probe is
   waiting on a lock rather than on a scheduler.
+- `ProbeStep` - what
+  `a_stalled_rollback_does_not_block_an_unrelated_session`'s probe thread
+  reports after each of its three requests, so the test waits on each one
+  under its own `RESPONSIVENESS_BOUND` and a timeout says which request
+  blocked. The other two tests send one message carrying every result at
+  once, which is enough for them because each has a single suspect; this
+  one has three and the distinction between them is the whole diagnosis.
+  It is not a refinement worth backporting until one of those tests
+  actually fails.
 - `PauseSlot` - one arming's worth of synchronization: the `reached`
   `SyncSender` the device signals when it parks, and the `release`
   `Receiver` it then blocks on. The device holds a `VecDeque` of these and
@@ -82,10 +108,11 @@ answer; the wait it would be tolerating is unbounded, not slow.
   read pausing live (write pausing disarmed and empty), for
   `a_paused_select_does_not_block_an_unrelated_sessions_request`'s device
   reads; `PausingDevice::with_write_pause(inner, write_armed, write_slots)`
-  is the mirror image for
-  `a_stalled_checkpoint_does_not_block_an_unrelated_session`,
-  which needs to intercept the page write a checkpoint's flush issues, not
-  a read. `pause_if_armed(armed, slots)` is the shared body both `read_at`
+  is the mirror image, used by both
+  `a_stalled_checkpoint_does_not_block_an_unrelated_session` and
+  `a_stalled_rollback_does_not_block_an_unrelated_session`, which need to
+  intercept a page write - a checkpoint's flush in the first, an undo's
+  eviction in the second - rather than a read. `pause_if_armed(armed, slots)` is the shared body both `read_at`
   and `write_at` call: if armed (checked via `swap(false, ...)`, so only
   the *next* call after each arming pauses), it pops the front
   `PauseSlot`, signals that slot's `reached`, and blocks on its `release`
@@ -161,6 +188,46 @@ answer; the wait it would be tolerating is unbounded, not slow.
   only after the release. Finally the pause is released and the checkpoint
   thread is joined on its `Result`, confirming the checkpoint completes
   rather than being abandoned mid-write.
+- `a_stalled_rollback_does_not_block_an_unrelated_session` - the same
+  shape as the checkpoint test above, with the stall moved onto the abort
+  path. It opens through a `PausingDevice::with_write_pause` at
+  `buffer_pool_size` 8, creates `big` and a one-row `small`, then opens an
+  explicit transaction that inserts 80 rows of ~1800 bytes each into `big`
+  - roughly forty pages, five times the pool, so the undo cannot walk its
+  chain backwards without evicting. All of that happens unarmed, so setup's
+  own evictions never pause. The write pause is then armed and `ROLLBACK`
+  runs on its own thread: the undo's first eviction parks in `flush_pages`,
+  and the test waits on `evict_reached_rx` until it knows the rollback is
+  genuinely stuck inside a device write. Only then does a second session's
+  thread `Connect`, `BEGIN` and `COMMIT`, reporting each step on its own
+  `ProbeStep` message so each is waited for under its own
+  `RESPONSIVENESS_BOUND`. `BEGIN` and `COMMIT` are the assertion:
+  `handle_begin` and `commit_txn` both take `EngineShared.txn_manager`,
+  which is the exact mutex P-63 was about, and before the fix `BEGIN` hung
+  on it - unboundedly, not slowly, so widening the bound is never the
+  answer. After the release the rollback thread is joined on its `Result`,
+  the probe's session runs a `SELECT` to show it is still usable, and
+  `big` is re-read: it must be empty, since a fix that let the probe
+  through by weakening the undo would otherwise pass.
+
+  **The probe deliberately runs no data statement inside the timed
+  window, and that is a real limit on what this test can assert.** A
+  `SELECT` was tried there first and timed out at step 2 with `Connect`
+  and `BEGIN` both passing comfortably - which is what identified the
+  cause rather than a flaw in the fix. `BufferPool::flush_pages` holds
+  `BufferPool.flush_sequence` for the whole of its double-write batch,
+  page writes and `sync`, so while *any* device write is stalled no
+  session anywhere can evict a frame. A probe reading a table whose page
+  is not already resident therefore queues behind the very write this test
+  is holding, no matter what the transaction manager is doing. Pinning the
+  page in the pool first does not survive contact with the replacer
+  either: `LruKReplacer` evicts every frame with fewer than `k` recorded
+  accesses before any frame with `k`, so a page read once to warm it is
+  the *first* victim the undo takes, not the last. The checkpoint test
+  above gets away with a `SELECT` only because its default-size pool never
+  needs to evict at all. That serialization is its own property, one layer
+  below this file's, and it belongs to whoever revisits the double-write
+  buffer rather than here.
 - `wal_base_path(dir) -> PathBuf` - private helper, identical in shape to
   `tests/sessions.rs`'s helper of the same name, building the WAL's base
   path for `Database::open_with_devices`.

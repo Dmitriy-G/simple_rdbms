@@ -70,7 +70,8 @@ name a branch:
    ownership), 0010 (waiting for a frame instead of failing), 0014 (no
    catalog lock spans a statement), 0016 (a checkpoint holds no lock
    across its page flush), 0017 (`CREATE INDEX` locks the table it indexes
-   and publishes only a finished index).
+   and publishes only a finished index), 0018 (an abort holds no lock
+   across its undo, and stays in the active set while it runs).
 3. `docs/backlog.md` — the problems this project knows about and has
    decided not to do. Something listed there is not a finding to report
    again; it is a decision already made.
@@ -780,18 +781,30 @@ mistake at review time.
   hold the two halves of this in place.
 - **No lock a statement needs spans a data page flush.** The rule ADR 0014
   set for the catalog holds for `EngineShared.txn_manager` too, and for
-  whatever acquires a long-held lock next: a checkpoint takes it for
-  `txn::write_checkpoint_record` and releases it before
-  `txn::finish_checkpoint` flushes page 0 and syncs the device
-  (`docs/adr/0016-a-checkpoint-is-not-a-quiesce-point.md`). Log I/O under
+  whatever acquires a long-held lock next. Two paths through that mutex
+  have already broken it and both are now split in the same shape: a
+  checkpoint takes it for `txn::write_checkpoint_record` and releases it
+  before `txn::finish_checkpoint` flushes page 0 and syncs the device
+  (`docs/adr/0016-a-checkpoint-is-not-a-quiesce-point.md`), and an abort
+  takes it for `TransactionManager::begin_abort`, releases it for
+  `PendingAbort::undo` — whose page fetches evict, write and `fsync` — and
+  retakes it for `finish_abort`
+  (`docs/adr/0018-an-abort-is-not-a-quiesce-point.md`). Log I/O under
   that mutex is allowed and unchanged — every `COMMIT` already flushes the
   log while holding it — because what has to stay out is the unbounded
-  part, a write to the database file plus its `fsync`. Running both phases
-  under one lock stopped every session in the database for the length of
-  one `fsync`, on the ordinary `maybe_checkpoint` path rather than a rare
-  one, and `crates/engine/tests/dispatch_never_blocks.rs`'s
-  `a_stalled_checkpoint_does_not_block_an_unrelated_session` is what holds
-  it in place.
+  part, a write to the database file plus its `fsync`. Each defect stopped
+  every session in the database for the length of one `fsync`, on the
+  ordinary `maybe_checkpoint` and `ROLLBACK` paths rather than rare ones,
+  and `crates/engine/tests/dispatch_never_blocks.rs`'s
+  `a_stalled_checkpoint_does_not_block_an_unrelated_session` and
+  `a_stalled_rollback_does_not_block_an_unrelated_session` are what hold
+  them in place. This invariant is about engine-level locks and not about
+  the buffer pool's own: while a device write is stalled, no session can
+  evict a frame, because `BufferPool::flush_pages` serializes every flush
+  behind `BufferPool.flush_sequence`. That is a separate property and
+  neither ADR changes it. An aborting transaction stays in the active set for the
+  whole of its undo, because `earliest_active_begin_lsn` is what stops a
+  concurrent checkpoint truncating the log records that undo is reading.
 - **Errors are logged once, at the engine boundary.** See the "Error
   handling" section below rather than duplicating it here.
 

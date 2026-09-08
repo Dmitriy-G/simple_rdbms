@@ -19,7 +19,15 @@ Errors raised by the transaction subsystem.
   commit or abort), so this only fires on a caller bug, never as a normal
   part of the protocol. `UnknownTransaction(u64)` is raised when an
   operation referenced a transaction id the manager has no record of
-  (never began, or already finished and was reaped). `Storage`
+  (never began, or already finished and was reaped).
+  `AbortInProgress(u64)` is raised when a transaction (named by its raw
+  id) is asked to commit, or to abort a second time, while an abort
+  already started for it has not finished: `TransactionManager::begin_abort`
+  leaves the transaction in the active set for the whole of its undo
+  (`docs/adr/0018-an-abort-is-not-a-quiesce-point.md`), so finding an id
+  there is no longer proof it may still be committed or aborted. Like
+  `LockAfterUnlock` it only fires on a caller bug - the engine serializes a
+  session's statements - never as a normal part of the protocol. `Storage`
   transparently wraps a lower-level `storage::StorageError` (WAL
   append/flush, disk I/O) surfaced while logging a transaction's
   lifecycle or undoing its writes.
@@ -30,7 +38,8 @@ Errors raised by the transaction subsystem.
   `LockTimeout` becomes `common::Error::LockTimeout` (SQLSTATE
   `LOCK_NOT_AVAILABLE` `55P03`, retryable - a lock held by another
   transaction is by definition transient);
-  `LockAfterUnlock`/`UnknownTransaction` become `common::Error::Internal`,
+  `LockAfterUnlock`/`UnknownTransaction`/`AbortInProgress` become
+  `common::Error::Internal`,
   since both mean this crate's own bookkeeping was violated rather than
   anything a client's SQL caused; `Storage` delegates to
   `storage::StorageError`'s own conversion. Every arm keeps the original

@@ -5,8 +5,30 @@ transactions, and driving commit/abort — which means writing the
 corresponding log record(s) and, for abort, undoing whatever the
 transaction had already written.
 
+Abort is split into three calls for the same reason `checkpoint.MD` splits
+a checkpoint in two: undoing a transaction fetches every page it wrote,
+and a fetch that finds no free frame evicts a victim, writing the database
+file and syncing it. Holding whatever lock guards this manager across that
+stops every other session for the length of one rollback, which is exactly
+what `CLAUDE.md`'s "No lock a statement needs spans a data page flush"
+forbids. `begin_abort` and `finish_abort` need the manager; `PendingAbort::undo`
+between them needs only the buffer pool
+(`docs/adr/0018-an-abort-is-not-a-quiesce-point.md`).
+
 ## Key Components
 
+- `PendingAbort` - the token the two locked phases hand to each other,
+  carrying `txn_id` and the `last_lsn` the undo chain starts from, read
+  under the lock in `begin_abort` so it cannot be raced by a later append.
+  `#[must_use]`: dropping one leaves its transaction in the active set,
+  marked `Aborted`, still holding every lock it took.
+- `PendingAbort::txn_id(&self) -> TxnId` - the transaction being aborted.
+- `PendingAbort::undo(&self, pool) -> Result<(), TxnError>` - phase two,
+  and the only phase that touches no manager state. Runs
+  `storage::recovery::undo_transaction(pool, txn_id, last_lsn)` - the same
+  routine crash recovery's own Undo pass uses - or nothing at all when the
+  transaction never appended a record. Called with the manager's lock
+  released.
 - `TransactionManager` - the manager. Holds `active`, a map from `TxnId`
   to `Transaction` for every currently in-flight transaction,
   `next_txn_id`, the counter handing out fresh ids, `lock_manager`,
@@ -69,7 +91,11 @@ transaction had already written.
   seeded past every id the log has ever used.
 - `TransactionManager::commit(&mut self, txn_id, pool) -> Result<(), TxnError>` -
   `#[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]`. Commits
-  `txn_id`: logs a `Commit` record and force-flushes the log up to it (so
+  `txn_id`, rejecting it with `TxnError::AbortInProgress` if `begin_abort`
+  has already marked it `TransactionState::Aborted` - a transaction whose
+  undo is running is still in the active set, so being found there is no
+  longer proof it may commit. Otherwise: logs a `Commit` record and
+  force-flushes the log up to it (so
   an acknowledged commit can never be lost to a crash), draws a
   `commit_ts` from `next_timestamp` and calls
   `version_store.commit_versions(txn_id, commit_ts)` — after the flush, so
@@ -84,29 +110,58 @@ transaction had already written.
   the same way `version_store.prune` bounds version chains, then
   increments `transactions_committed_total` (a `metrics` counter - see
   `docs/ROADMAP.md`'s M13 entry).
-- `TransactionManager::abort(&mut self, txn_id, pool) -> Result<(), TxnError>` -
+- `TransactionManager::begin_abort(&mut self, txn_id, pool) -> Result<PendingAbort, TxnError>` -
+  phase one, and the first of the three calls abort is split into.
   `#[tracing::instrument(skip_all, fields(txn_id = txn_id.0))]`, and emits
   a `warn!` as soon as `txn_id` is confirmed active - every abort, crash
   recovery's own Undo pass aside, is an operator-relevant event by
-  definition (see CLAUDE.md's logging section). Aborts `txn_id`: undoes
-  every write it made (via `storage::recovery::undo_transaction`, the
-  same routine crash recovery's own Undo pass uses), removes it from the
+  definition (see CLAUDE.md's logging section). Marks the transaction
+  `TransactionState::Aborted` **without removing it from the active set**,
+  and returns a `PendingAbort` carrying `pool.last_lsn(txn_id)` - the log's
+  own record of this transaction's most recent append, rather than any
+  value cached at `begin` time, since writes made through
+  `PageGuard::write` append directly to the log without going back through
+  this manager. Raises `TxnError::AbortInProgress` if the transaction is
+  already marked, so two threads can never run the same undo chain at once,
+  and `TxnError::UnknownTransaction` if it is not active.
+  Staying active across the undo is deliberate and is what keeps
+  `earliest_active_begin_lsn` low enough that a concurrent checkpoint
+  cannot truncate away the very log records the undo is about to read
+  (`docs/adr/0018-an-abort-is-not-a-quiesce-point.md`).
+- `TransactionManager::finish_abort(&mut self, pending) -> Result<(), TxnError>` -
+  phase three, run once `PendingAbort::undo` has returned successfully and
+  the manager's lock has been retaken.
+  `#[tracing::instrument(skip_all, fields(txn_id = pending.txn_id.0))]`.
+  Removes the transaction from the
   active set, calls `version_store.abort_versions(txn_id, self.next_ts)`
   so none of its uncommitted versions can ever become visible - passing
   `next_ts` **before** it is ever consumed by `next_timestamp`, since that
   is the earliest timestamp every transaction that could still be holding
   the undone row's bytes (all of them active at this moment, therefore
-  with a `read_ts` below it) is guaranteed to have finished by - then
+  with a `read_ts` below it) is guaranteed to have finished by; reading it
+  here rather than in phase one is still correct, and no weaker, because
+  every transaction active at *any* moment has a `read_ts` below whatever
+  `next_ts` then is - then
   calls `version_store.prune(self.oldest_active_read_ts())`, same as
-  `commit`, then releases every lock it held via `lock_manager.release_all`,
-  then calls `lock_manager.prune_finished(self.oldest_active_txn_id())`,
-  same as `commit`.
-  The undo chain starts from `pool.last_lsn(txn_id)` — the log's own
-  record of this transaction's most recent append — rather than any value
-  cached at `begin` time, since writes made through `PageGuard::write`
-  append directly to the log without going back through this manager.
-  Increments `transactions_aborted_total` once the undo chain (and the log
-  records it wrote) is complete.
+  `commit`, then releases every lock it held via `lock_manager.release_all`
+  - which is why the transaction's exclusive table locks are still held for
+  the whole of the undo, so no other writer can observe a half-undone
+  table - then calls
+  `lock_manager.prune_finished(self.oldest_active_txn_id())`,
+  same as `commit`, and increments `transactions_aborted_total`.
+- `TransactionManager::cancel_abort(&mut self, pending)` - the failure
+  counterpart to `finish_abort`: puts the transaction back to
+  `TransactionState::Growing` and leaves it active, still holding its
+  locks, so a caller whose `PendingAbort::undo` returned an error can
+  retry the abort rather than stranding the transaction as permanently
+  un-abortable.
+- `TransactionManager::abort(&mut self, txn_id, pool) -> Result<(), TxnError>` -
+  the three phases in sequence, for callers that hold this manager
+  exclusively for other reasons and have no lock to release between them -
+  `crates/txn/tests/lifecycle.rs` and
+  `crates/executor/tests/index_maintenance.rs`. It mirrors
+  `checkpoint.MD`'s `write_checkpoint` exactly, including that
+  `engine::runtime` no longer calls it.
 - `TransactionManager::get(&self, txn_id) -> Result<&Transaction, TxnError>` -
   looks up the current state of an active transaction.
 - `TransactionManager::active_snapshot(&self, pool) -> Vec<(TxnId, Lsn)>` -
