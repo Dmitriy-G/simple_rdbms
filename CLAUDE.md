@@ -169,7 +169,14 @@ Role: <role name>
    gives, moving each subtask's status to 🚧 In Progress when it starts
    and 👀 Review when it stops — never to ✅ Done, which is the human's.
    Never commit automatically. Don't install heavy tooling (e.g. Python/pip)
-   for investigating — use `bash` instead. If a problem surfaces that
+   for investigating — use `bash` instead. Read files with `Read`, `Grep`
+   and `Glob` and change them with `Edit` and `Write`, never with `cat`,
+   `sed`, `head`, `tail` or `awk` in a shell: a shell command is authorized
+   as a literal string, so each one is a fresh permission prompt for the
+   human, while a path rule is answered once — `.claude/settings.json`
+   already allows the vendored dependency sources under `~/.cargo` for
+   exactly that reason. `bash` is for commands that do something: `cargo`,
+   `git`, `scripts/`. If a problem surfaces that
    isn't part of the current subtask, record it in `.claude/problems.md` rather
    than investigating or fixing it there. If a needed investigation is
    itself large (e.g. testing a hypothesis), ask before doing it — that

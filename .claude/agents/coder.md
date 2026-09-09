@@ -79,6 +79,23 @@ own, and you stop.
 
 - Never commit. Leave changes for review.
 - Never install heavy tooling for investigation. Use `bash`.
+- Never read a file through `bash`. `cat`, `sed -n`, `head`, `tail`,
+  `awk` and `grep` in a shell command are not how this project reads
+  source: `Read`, `Grep` and `Glob` are, and that holds for a dependency's
+  vendored source under `~/.cargo/registry` exactly as it holds for
+  `crates/`. The reason is mechanical rather than stylistic. A shell
+  command is authorized as a literal string, so
+  `sed -n '240,280p' "$P/src/lib.rs"` is a permission prompt the human has
+  to answer, and answering it authorizes that one line range in that one
+  file — the next range in the same file prompts again. The tool call
+  matches a path rule once and never asks again, which is why
+  `.claude/settings.json` allows the registry and toolchain source trees
+  outright. `bash` is for commands that *do* something: `cargo`, `git`,
+  `scripts/check_docs.sh`.
+- Never edit a file through `bash` either. `sed -i`, `>` redirection and
+  `cp` over a tracked path skip the read-before-write check that `Edit`
+  and `Write` enforce, and they leave a diff nobody reviewed the input
+  of. Edits go through `Edit` and `Write`.
 - Never go beyond the current subtask's scope, even for obviously
   related work.
 - If a problem surfaces that is not part of the current subtask, append
