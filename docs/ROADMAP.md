@@ -181,7 +181,7 @@ but nothing yet lets a real `CREATE INDEX` statement build one, or
 `executor::IndexScanExecutor`, and `planner::optimizer::IndexScanRule`
 choosing an index scan over a sequential scan whenever one qualifies.
 
-## M10 — Concurrent transactions without corrupting each other 🚧 In Progress
+## M10 — Concurrent transactions without corrupting each other ✅ Done
 **Problem:** multiple transactions running at once can interleave their
 reads and writes in ways that violate isolation, from lost updates to
 dirty reads, on top of the per-transaction atomicity the write-ahead log
@@ -189,7 +189,6 @@ already guarantees for each one individually.
 **Solution:** in order, a storage layer safe to drive from multiple
 threads, a lock manager enforcing two-phase locking, and then MVCC for
 snapshot isolation so readers stop blocking writers.
-Reviewed: 2026-09-09 — full pass; gating: P-62, P-63; non-gating: P-64, P-65, P-66, P-67, P-68, P-69, P-70
 
 ### M10.1 — A storage layer safe to drive from multiple threads ✅ Done
 **Problem:** locking and MVCC both assume the storage layer underneath can
