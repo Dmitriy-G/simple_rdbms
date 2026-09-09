@@ -192,6 +192,22 @@ get it. That is the finding worth carrying forward: a rule of the form
 "never hold *this* lock across I/O" is not discharged by fixing the caller
 that revealed it, because the lock has other callers. The check that
 generalizes is to enumerate every site that takes the lock and ask what
-each does while holding it — and `EngineShared`'s are `begin`, `commit`,
-`begin_abort`/`finish_abort`, `get`, `active_snapshot` and the two
-`test-util` accessors, which is a short enough list to read in full.
+each does while holding it, and for `EngineShared` that enumeration is one
+command rather than a list to be trusted:
+
+```sh
+grep -n "self.txn_manager.lock()" crates/engine/src/runtime.rs
+```
+
+It returns `begin`, `commit`, `begin_abort`/`finish_abort`,
+`active_snapshot` (through `write_checkpoint_record`), the two `test-util`
+accessors `stats` and `lock_count_for`, and two more that this ADR's first
+version left out: `lock_table_exclusive` and `run`, which also calls
+`get`. Those two are what the check clears rather than what it flags —
+each takes the lock only to clone an `Arc` out of
+`TransactionManager::lock_manager()` or `version_store()`, and drops the
+guard before touching what it cloned, so nothing is held across the lock
+acquisition or the row loop that follows. Writing the grep down instead of
+its output is deliberate: `lock_table_exclusive` arrived one commit before
+this ADR was written and was missed for exactly that reason, and any list
+of call sites is a snapshot that the next caller silently invalidates.
