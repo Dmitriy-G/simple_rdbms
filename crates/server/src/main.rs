@@ -2,6 +2,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
@@ -9,9 +10,10 @@ use common::DbConfig;
 use engine::Database;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use server::health::Readiness;
-use server::{http, signals};
+use server::{http, signals, wire};
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+const PG_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Parser, Debug)]
 #[command(
@@ -24,6 +26,9 @@ struct Args {
 
     #[arg(long, default_value = "0.0.0.0:9090", env = "SIMPLE_RDBMS_METRICS_ADDR")]
     metrics_addr: String,
+
+    #[arg(long, default_value = "0.0.0.0:5432", env = "SIMPLE_RDBMS_PG_ADDR")]
+    pg_addr: String,
 
     #[arg(
         long,
@@ -66,15 +71,28 @@ fn main() -> anyhow::Result<()> {
     });
 
     let config = DbConfig::new(&args.db_path);
-    let db = Database::open(config)?;
+    let db = Arc::new(Database::open(config)?);
     readiness.set_ready();
     tracing::info!("ready to accept statements");
+
+    let pg_runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let pg_listener = pg_runtime.block_on(tokio::net::TcpListener::bind(&args.pg_addr))?;
+    tracing::info!(addr = %args.pg_addr, "pgwire listener listening");
+    let pg_db = Arc::clone(&db);
+    let _pg_handle = pg_runtime.spawn(wire::serve(pg_listener, pg_db));
 
     signals::wait_for_shutdown_signal()?;
 
     readiness.set_not_ready();
     tracing::info!("shutdown signal received, checkpointing and closing");
-    db.close()?;
+    pg_runtime.shutdown_timeout(PG_SHUTDOWN_TIMEOUT);
+    match Arc::try_unwrap(db) {
+        Ok(db) => db.close()?,
+        Err(_still_shared) => tracing::warn!(
+            "a pgwire connection still held the database after shutdown; skipping the final \
+             checkpoint and relying on the best-effort flush on drop"
+        ),
+    }
     Ok(())
 }
 

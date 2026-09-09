@@ -1,4 +1,5 @@
 use catalog::Catalog;
+use engine::Database;
 use storage::buffer::BufferPool;
 use storage::disk::DiskManager;
 use storage::dwb::DoubleWriteBuffer;
@@ -15,4 +16,5 @@ fn storage_types_are_send_and_sync() {
     assert_send_sync::<DoubleWriteBuffer>();
     assert_send_sync::<Catalog>();
     assert_send_sync::<TransactionManager>();
+    assert_send_sync::<Database>();
 }

@@ -38,12 +38,13 @@ dependency) and serves the result itself with a small, synchronous
 `cli` - see `crates/cli/README.md`), so its logic is reachable from
 `tests/` rather than only from an inline `#[cfg(test)]` module.
 
-- `lib` - re-exports `health`, `http`, and `signals` as public modules.
-  See `src/lib.MD`.
+- `lib` - re-exports `health`, `http`, `signals`, and `wire` as public
+  modules. See `src/lib.MD`.
 - `main` - argument parsing and startup/shutdown wiring: install the
-  Prometheus recorder, spawn the HTTP listener, open the `Database`, mark
-  ready, block for a shutdown signal, then checkpoint and close. See
-  `src/main.MD`.
+  Prometheus recorder, spawn the HTTP listener, open the `Database`,
+  mark ready, spawn the `pgwire` listener on a `tokio` runtime, block for
+  a shutdown signal, then shut that runtime down and checkpoint and close
+  the database. See `src/main.MD`.
 - `health` - `Readiness`, the liveness/readiness state shared between
   `main` and the HTTP listener thread. See `src/health.MD`.
 - `http` - the hand-rolled synchronous responder for `/metrics`,
@@ -51,6 +52,10 @@ dependency) and serves the result itself with a small, synchronous
 - `signals` - blocks until `SIGTERM`/`Ctrl-C`, so `main` can run a
   graceful shutdown instead of the process just dying mid-write. See
   `src/signals.MD`.
+- `wire` - the `pgwire`-backed PostgreSQL wire protocol listener: one
+  `engine::Database` session per connection, the startup handshake today
+  (M13.2's later subtasks add the simple query protocol). See
+  `src/wire.MD`.
 
 ## Features
 

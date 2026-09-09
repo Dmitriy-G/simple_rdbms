@@ -291,7 +291,7 @@ distinct from the interactive `cli` REPL; and container packaging
 file on a named volume, and `SIGTERM` handled as a graceful checkpoint
 -and-close instead of every restart paying for a full crash recovery.
 
-## M13 — Speaking SQL over the network ⏸️ Hold
+## M13 — Speaking SQL over the network 🚧 In Progress
 **Problem:** everything built so far requires an in-process `Database`
 handle - `cli`'s REPL and `server`'s metrics/health endpoints both open
 the database directly in the same process that uses it. Nothing external
@@ -321,7 +321,7 @@ and receive results from, each tagged with its session. How those
 statements are then scheduled — serially or concurrently — is the
 execution model's business, not this sub-milestone's.
 
-### M13.2 — PostgreSQL wire protocol, simple query 🆕 New
+### M13.2 — PostgreSQL wire protocol, simple query 🚧 In Progress
 **Problem:** the engine can be reached by message passing from any number
 of connections, but nothing yet speaks the bytes a Postgres client
 actually sends - startup negotiation, parameter/status exchange, and the

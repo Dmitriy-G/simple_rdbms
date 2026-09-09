@@ -10,7 +10,13 @@ the transaction manager - is `Send + Sync`, with no remaining
 `TransactionManager`) live in crates `storage` is not allowed to depend
 on even as a dev-dependency (`storage -> common, types` per
 `CLAUDE.md`'s crate-splitting rule); `engine` is the lowest crate in the
-workspace with a legitimate dependency edge to all six.
+workspace with a legitimate dependency edge to all six. `engine::Database`
+itself joined this check in M13.2: `crates/server/src/wire.rs` shares one
+`Arc<Database>` across every `pgwire` connection task, each calling
+`Database::connect()` concurrently, so `Database` not being `Send + Sync`
+would be a compile error at that call site rather than something this
+test needs to catch - but proving it here, once, is cheaper than
+rediscovering it from a `server` build failure.
 
 ## Key Components
 
@@ -23,8 +29,8 @@ workspace with a legitimate dependency edge to all six.
   compiled.
 - `storage_types_are_send_and_sync` - instantiates `assert_send_sync`
   for `BufferPool`, `DiskManager`, `LogManager`, `DoubleWriteBuffer`,
-  `Catalog`, and `TransactionManager`. Passes (compiles) or the build
-  fails; there is no assertion body to run.
+  `Catalog`, `TransactionManager`, and `Database`. Passes (compiles) or
+  the build fails; there is no assertion body to run.
 
 ## Usage Example
 

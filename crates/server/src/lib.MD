@@ -1,7 +1,8 @@
 # lib
 
 The library half of `server`'s lib/bin split: re-exports `health`, `http`,
-and `signals` as public modules so `crates/server/tests/` can reach them.
+`signals`, and `wire` as public modules so `crates/server/tests/` can reach
+them.
 `main.rs` is left with only argument parsing, the `--health-check`
 short-circuit, logging setup, and the startup/shutdown sequence. See
 `crates/server/Cargo.toml`'s `[lib]`/`[[bin]]` split and
@@ -20,6 +21,10 @@ existed.
 - `signals` - blocks until `SIGTERM`/`Ctrl-C`, so `main` can run a
   graceful shutdown instead of the process just dying mid-write. See
   [signals.MD](signals.MD).
+- `wire` - the `pgwire`-backed PostgreSQL wire protocol listener: accepts
+  TCP connections, opens each one its own `engine::Database` session, and
+  drives the startup handshake and simple query protocol over it. See
+  [wire.MD](wire.MD).
 
 ## Usage Example
 
@@ -34,7 +39,9 @@ http::serve(listener, handle, readiness);
 
 `crates/server/src/main.rs` is this library's only in-workspace consumer:
 it constructs one `Readiness`, spawns `server::http::serve` on its own
-thread, opens the `Database`, and calls `server::signals::wait_for_shutdown_signal`
-to block until shutdown. `crates/server/tests/readiness.rs` and
+thread, opens the `Database`, spawns `server::wire::serve` on a `tokio`
+runtime, and calls `server::signals::wait_for_shutdown_signal` to block
+until shutdown. `crates/server/tests/readiness.rs` and
 `crates/server/tests/endpoints.rs` exercise `health` and `http`
-independently of `main`, through this same public API.
+independently of `main`, through this same public API, and
+`crates/server/tests/wire_startup.rs` does the same for `wire`.

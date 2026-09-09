@@ -19,14 +19,17 @@ integration test to link against, so this crate now ships both
 - `Args` - command-line arguments, parsed by `clap::Parser`: `db_path`
   (positional, defaults to `"simple_rdbms.db"`, same default `cli` uses),
   `--metrics-addr` (defaults to `"0.0.0.0:9090"` - the port
-  `docker-compose.yml` publishes, deliberately separate from any future
-  SQL port so an operator can scrape metrics without going through the
-  database protocol at all; also readable from the `SIMPLE_RDBMS_METRICS_ADDR`
+  `docker-compose.yml` publishes, deliberately separate from the SQL port
+  so an operator can scrape metrics without going through the database
+  protocol at all; also readable from the `SIMPLE_RDBMS_METRICS_ADDR`
   environment variable via clap's `env`, so a `docker-compose.yml` override
   of the listener address and the `HEALTHCHECK`'s own `--health-check`
   probe of it move together instead of the healthcheck silently querying
-  the default port forever - see `docker-compose.yml`), and
-  `--health-check` (a bare flag; see `check_ready` below).
+  the default port forever - see `docker-compose.yml`), `--pg-addr`
+  (defaults to `"0.0.0.0:5432"`, also readable from
+  `SIMPLE_RDBMS_PG_ADDR`, same shape as `--metrics-addr` - the address
+  `server::wire::serve` listens on), and `--health-check` (a bare flag;
+  see `check_ready` below).
 - `main() -> anyhow::Result<()>` - parses `Args` first, before
   `init_logging`, because `--health-check` short-circuits everything else:
   if set, `main` calls `check_ready` against this process's own
@@ -39,25 +42,40 @@ integration test to link against, so this crate now ships both
   (`PrometheusBuilder::install_recorder`),
   bind the metrics/health `TcpListener` and spawn `http::serve` on its own
   thread *before* opening the database, so liveness and a `503` readiness
-  are answerable through the entire recovery window; open the `Database`
-  (this is where crash recovery runs); call `Readiness::set_ready`; then
-  `signals::wait_for_shutdown_signal`, which blocks until `SIGTERM`/`Ctrl-C`.
-  On return from that block, the *first* thing that happens is
-  `Readiness::set_not_ready` - before the "shutdown signal received" log
-  line, before `Database::close` - so `/health/ready` starts returning
-  `503 shutting_down` for the entire checkpoint-and-close window instead
-  of claiming ready right up until the process disappears. Then
-  checkpoints and closes the database via `Database::close` before the
-  process exits - the graceful-shutdown sequence the whole binary exists
-  to provide. The HTTP listener thread's `JoinHandle` is kept (as
-  `_http_handle`, to keep it alive without joining it - joining would
-  block forever, since `http::serve` only returns by exiting its
-  accept loop) but never joined: `http::serve` is wrapped in
-  `std::panic::catch_unwind`, and whether the inner call panics or simply
-  returns, the wrapping closure logs `tracing::error!` before the thread
-  ends. Without that, a panic in the listener would take metrics and
-  health down with no log line at all, and the container would be killed
-  by its own `HEALTHCHECK` with no evidence of why.
+  are answerable through the entire recovery window; open the `Database`,
+  wrapped in an `Arc` (this is where crash recovery runs); call
+  `Readiness::set_ready`; build a multi-thread `tokio` `Runtime`, bind
+  `--pg-addr` on it, and spawn `server::wire::serve` on that runtime with
+  a clone of the `Arc<Database>` - the runtime is built only after the
+  database is open and ready, so a slow recovery never leaves the SQL
+  port accepting connections a `block_in_place` call would have nowhere
+  to run; then `signals::wait_for_shutdown_signal`, which blocks until
+  `SIGTERM`/`Ctrl-C`. On return from that block, the *first* thing that
+  happens is `Readiness::set_not_ready` - before the "shutdown signal
+  received" log line, before the `tokio` runtime is shut down - so
+  `/health/ready` starts returning `503 shutting_down` for the entire
+  checkpoint-and-close window instead of claiming ready right up until the
+  process disappears. `pg_runtime.shutdown_timeout` then stops the `pgwire`
+  listener and every connection task, each of which was holding its own
+  clone of the `Arc<Database>`; once that returns, `main` reclaims the
+  database with `Arc::try_unwrap` and calls `Database::close` on it before
+  the process exits, since `close(self)` takes ownership and an `Arc`
+  cannot give it up while any clone is still alive. If a connection's
+  `block_in_place` call was still running when the shutdown timeout
+  elapsed, `try_unwrap` fails; `main` logs a warning and lets the `Arc`
+  drop instead, which still flushes via `Database`'s own `Drop` impl - a
+  best-effort fallback rather than the ordinary checkpoint-and-close path.
+  The HTTP listener thread's `JoinHandle` is kept (as `_http_handle`, to
+  keep it alive without joining it - joining would block forever, since
+  `http::serve` only returns by exiting its accept loop) but never
+  joined: `http::serve` is wrapped in `std::panic::catch_unwind`, and
+  whether the inner call panics or simply returns, the wrapping closure
+  logs `tracing::error!` before the thread ends. Without that, a panic in
+  the listener would take metrics and health down with no log line at
+  all, and the container would be killed by its own `HEALTHCHECK` with no
+  evidence of why. The `pgwire` listener task's `JoinHandle` (`_pg_handle`)
+  is kept the same way, for the same reason - it is only ever ended by
+  `pg_runtime.shutdown_timeout`, never by returning on its own.
 - `init_logging()` - the same shape as `cli::init_logging`, except this
   one writes JSON to **stdout**, not stderr: this binary has no
   interactive output competing for that stream (unlike `cli`'s REPL - see
@@ -84,9 +102,10 @@ integration test to link against, so this crate now ships both
 ## Usage Example
 
 ```sh
-simple_rdbms_server /data/simple_rdbms.db --metrics-addr 0.0.0.0:9090
+simple_rdbms_server /data/simple_rdbms.db --metrics-addr 0.0.0.0:9090 --pg-addr 0.0.0.0:5432
 curl http://localhost:9090/health/ready
 curl http://localhost:9090/metrics
+psql -h 127.0.0.1 -p 5432
 simple_rdbms_server --health-check; echo "exit code: $?"
 ```
 
@@ -94,4 +113,5 @@ simple_rdbms_server --health-check; echo "exit code: $?"
 against the same container's own `/health/ready`; `docker-compose.yml`
 publishes `--metrics-addr`'s port for a Prometheus scrape target and
 mounts the database file's directory as a `VOLUME` so `docker rm` doesn't
-take the data with it.
+take the data with it. `--pg-addr`'s port is not yet published there -
+that is `docs/ROADMAP.md`'s M13.2 subtask 6.

@@ -26,6 +26,11 @@ tracing-subscriber = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 ctrlc = { workspace = true }
+tokio = { workspace = true }
+pgwire = { workspace = true }
+async-trait = "0.1"
+futures = "0.3"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokio-postgres = "0.7"
