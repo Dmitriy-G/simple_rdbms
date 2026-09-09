@@ -5,8 +5,6 @@ use crate::isolation::IsolationLevel;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionState {
     Growing,
-    Shrinking,
-    Committed,
     Aborted,
 }
 

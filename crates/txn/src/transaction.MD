@@ -5,23 +5,27 @@ A single unit of work: the state the `TransactionManager` and
 
 ## Key Components
 
-- `TransactionState` - a transaction's position in the two-phase locking
-  protocol: it may only acquire new locks while `Growing`, and once it
-  releases any lock (moving to `Shrinking`) it may never acquire another.
-  `Growing` is acquiring locks; may not yet have released any.
-  `Shrinking` has released at least one lock; may not acquire any more.
-  `Committed` means all of its writes are durable. `Aborted` means all of
-  its writes have been (or are being) undone: it is the one state anything
-  currently writes, set by `TransactionManager::begin_abort` the moment an
-  abort starts and cleared back to `Growing` by `cancel_abort` if the undo
-  fails. So a transaction found in the active map marked `Aborted` is one
-  whose undo is running right now with the manager's lock released
-  (`manager.MD`, `docs/adr/0018-an-abort-is-not-a-quiesce-point.md`), and
-  neither `commit` nor a second `begin_abort` may touch it.
+- `TransactionState` - a flag recording whether this transaction's undo is
+  running. `Growing` is the normal state, held from `Transaction::new`
+  through commit and through an ordinary, uninterrupted lifetime.
+  `Aborted` means all of its writes have been (or are being) undone: it is
+  the one state anything currently writes, set by
+  `TransactionManager::begin_abort` the moment an abort starts and cleared
+  back to `Growing` by `cancel_abort` if the undo fails. So a transaction
+  found in the active map marked `Aborted` is one whose undo is running
+  right now with the manager's lock released (`manager.MD`,
+  `docs/adr/0018-an-abort-is-not-a-quiesce-point.md`), and neither
+  `commit` nor a second `begin_abort` may touch it. Strict two-phase
+  locking itself is enforced elsewhere: `LockManager::release_all` inserts
+  a finishing transaction's id into its `finished` set
+  (`crates/txn/src/lock_manager.rs:117`), and `LockManager::acquire`
+  rejects any later lock request from that id with
+  `TxnError::LockAfterUnlock` (`crates/txn/src/lock_manager.rs:140-142`) -
+  this field plays no part in that enforcement.
 - `Transaction` - the struct. `txn_id` is the transaction's unique id,
   assigned at `begin`. `isolation_level` is the isolation level this
-  transaction runs under. `state` is the transaction's current position in
-  the 2PL protocol. `begin_lsn` is the LSN of this transaction's own
+  transaction runs under. `state` reads `Aborted` while this transaction's
+  undo is running and `Growing` otherwise. `begin_lsn` is the LSN of this transaction's own
   `Begin` record - the earliest LSN its undo chain could ever need to
   reach back to, which is what `TransactionManager::earliest_active_begin_lsn`
   reads to keep the write-ahead log from truncating a segment an active
