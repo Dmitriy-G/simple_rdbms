@@ -19,7 +19,20 @@ new page must be brought into memory and no frame is free, and
   list, and in both cases the replacer treating it as evictable would be
   wrong (`docs/adr/0009-buffer-pool-frame-ownership.md`). `evict(&mut self) -> Option<FrameId>` picks a victim frame to
   evict according to the replacement policy, and stops tracking it;
-  returns `None` if no frame is evictable. `remove(&mut self, frame_id)`
+  returns `None` if no frame is evictable.
+  `evict_where(&mut self, accept: &dyn Fn(FrameId) -> bool) -> Option<FrameId>`
+  is the same choice restricted to the candidates `accept` returns `true`
+  for, and is the method an implementation writes: `evict` is a provided
+  method calling it with a predicate that accepts everything. A rejected
+  candidate is left tracked, with its history intact, which is the reason
+  the predicate is passed in rather than the caller evicting and putting
+  back what it does not want - `evict` stops tracking the frame it
+  returns, so a caller re-offering one would throw away the very access
+  history that made it a good victim. The buffer pool uses it to prefer a
+  *clean* victim while a double-write batch is already in flight, so a
+  reader is not enrolled in another session's device queue when the pool
+  has a frame it can reclaim for free
+  (`docs/adr/0019-one-double-write-batch-at-a-time.md`). `remove(&mut self, frame_id)`
   removes a frame from tracking entirely, e.g. because its page was
   deallocated. `size(&self) -> usize` is the number of frames currently
   marked evictable.
@@ -33,7 +46,7 @@ new page must be brought into memory and no frame is free, and
   under sequential-scan workloads, which tend to defeat plain LRU.
   `LruKReplacer::new(capacity, k)` creates a replacer tracking up to
   `capacity` frames, ranking eviction candidates by their `k`-th most
-  recent access. Its `Replacer::evict` ranks candidates as
+  recent access. Its `Replacer::evict_where` ranks candidates as
   `(has_less_than_k_accesses, distance)`: frames with fewer than `k`
   accesses (infinite backward k-distance, so ranked purely by how stale
   their most recent access is) always beat frames with a full history

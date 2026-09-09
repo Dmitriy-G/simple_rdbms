@@ -41,6 +41,17 @@ this does and does not cover, and `docs/adr/0003-index-after-the-log.md`
 for why the B+tree (`btree.rs`) was sequenced after this durability story
 existed rather than before it.
 
+Exactly one such batch runs at a time, because the double-write buffer is
+one file with one header and a second batch would leave the first one's
+backup unreachable while its real write was still in flight. That
+serialization is deliberate, and
+`docs/adr/0019-one-double-write-batch-at-a-time.md` states what the pool
+owes callers in exchange: a fetch that can be served by evicting a *clean*
+frame never queues behind an in-flight batch, and a fetch that must flush
+a dirty victim waits only until its `frame_wait_timeout` deadline before
+failing with `BufferPoolWaitTimedOut` — a slow device costs a statement an
+error, never a thread parked indefinitely.
+
 On open, `recovery::recover_double_write` runs first (repairing anything
 the double-write buffer can), then `recovery::recover` runs ARIES
 Analysis/Redo/Undo against the write-ahead log (`wal.rs`) to bring the

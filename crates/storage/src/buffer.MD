@@ -75,7 +75,9 @@ already follows this structurally; inlining pinning and latching into one
 step would be the same mistake.
 
 **The flush-sequence rule - read this before touching `flush_pages`:**
-`flush_sequence` (a `Mutex<()>`) is acquired *after* `index`'s mutex has
+`flush_sequence` (a `Mutex<bool>` holding "a double-write batch is in
+flight", paired with the `flush_available` `Condvar`) is acquired *after*
+`index`'s mutex has
 already been released and *before* any frame latch the flush needs -
 including the read latch each page's snapshot is cloned under - and is
 held across the whole flush: the per-page snapshot, `log_manager.flush`
@@ -96,6 +98,25 @@ future caller that already holds a frame latch before calling in would
 invert the order every other path in this file assumes. See the poisoning
 paragraph below for what the lock protects and why per-call atomicity of
 `write_batch`/`clear_batch` alone was not enough.
+
+That this lock is held across all three of the flush's `fsync`s is the
+design and not an oversight - `docs/adr/0019-one-double-write-batch-at-a-time.md`
+records why, and it is the file to read before "fixing" the width of this
+critical section, because the same reading has now been reached and
+abandoned by three separate stall investigations. `dwb` is one file with
+one header, so at most one batch's backup images can be described on disk
+at a time; two flushes in flight is not slower, it is wrong. What the ADR
+requires in exchange is the two properties `acquire_free_frame` provides
+and this lock does not: an eviction that needs no flush must not queue
+behind one that does (so a victim is chosen `clean`-first while
+`flush_in_flight` is set), and an eviction that does need a flush waits
+for it only until the caller's `frame_wait_timeout` deadline (so a stalled
+device costs a statement an error, not a worker thread parked forever).
+`flush_in_flight` is a deliberately advisory `AtomicBool` mirror of the
+`bool` inside `flush_sequence`, set and cleared with it: the victim choice
+reads it while holding `index`'s mutex, which the latch-ordering rule
+above forbids doing with `flush_sequence` itself, and losing a race on it
+costs nothing worse than one suboptimal victim.
 
 `try_install` (below) takes one narrow, deliberate exception: it writes a
 freshly-read page's bytes into its frame's `RwLock` *while still holding*
@@ -267,16 +288,23 @@ same thread.
   `disk.MD`, `dwb.MD`, `wal.MD`); `frames` and `index` are described
   above. `frame_available`/`page_installed` are the two `Condvar`s the
   waiting rule above describes, both paired with `index`'s mutex.
-  `frame_wait_timeout` bounds every wait either one performs, set from
+  `frame_wait_timeout` bounds every wait either one performs - and, since
+  `docs/adr/0019-one-double-write-batch-at-a-time.md`, the wait an
+  eviction's own flush makes on `flush_sequence` as well, which is what
+  makes it the bound on `acquire_free_frame` as a whole rather than on
+  one of its two waits. Set from
   `DEFAULT_FRAME_WAIT_TIMEOUT` in `new` and overridable via
   `with_frame_wait_timeout`. `install_hook` (test/`test-util`-only) holds
   the optional `InstallHook` closure `call_install_hook` invokes.
   `flush_poisoned: AtomicBool` starts `false` and is set permanently once
   `flush_pages` fails after handing a batch's images to `dwb` but before
   retiring them - see `flush_pages` below for why that specific window is
-  the one that matters. `flush_sequence: Mutex<()>` serializes the
-  double-write sequence itself (the flush-sequence rule above) so that at
-  most one batch is ever outstanding in `dwb` at a time.
+  the one that matters. `flush_sequence: Mutex<bool>`, its
+  `flush_available` `Condvar` and the advisory `flush_in_flight:
+  AtomicBool` mirror serialize the double-write sequence itself (the
+  flush-sequence rule above) so that at most one batch is ever outstanding
+  in `dwb` at a time, and tell a thread choosing an eviction victim that
+  one is running.
 - `WriteObservation` - test/`test-util`-only. One observed disk write, for
   the WAL-ordering invariant test: at the moment `page_id` was written to
   disk, its `page_lsn` and the log's `durable_lsn` at that instant. The
@@ -309,6 +337,13 @@ same thread.
   process. A concurrency test driving a pool smaller than its thread
   count should see this go non-zero - if it doesn't, the test isn't
   exercising the waiting path it's meant to.
+- `BufferPool::flush_wait_count(&self) -> usize` - test/`test-util`-only
+  introspection: how many times a flush has had to wait for another
+  thread's double-write batch to finish, mirroring
+  `buffer_pool_flush_waits_total`. It is the deterministic form of "this
+  fetch did not queue behind that stalled device write" - a test asserting
+  responsiveness checks this counter rather than timing the call, since a
+  clock reading proves nothing on a loaded machine.
 - `BufferPool::frame_count_for(&self, page_id) -> usize` -
   test/`test-util`-only introspection: how many frames currently list
   `page_id` in `frame_page`. Always `0` or `1` once `try_install`'s
@@ -470,7 +505,16 @@ same thread.
 - `BufferPool::acquire_free_frame(&self) -> Result<FrameId, StorageError>` -
   private. Finds a frame to hold a newly-fetched or newly-allocated page:
   loops trying the free list, then the replacer for an evictable victim,
-  under `index`'s mutex; if neither has anything, checks (debug builds
+  under `index`'s mutex. The victim is asked for `clean`-first - one
+  `Replacer::evict_where` call accepting only frames whose
+  `dirty_since_lsn` is zero, incrementing
+  `buffer_pool_clean_victims_preferred_total` when it finds one - but
+  *only* while `flush_in_flight` says a double-write batch is already
+  running; with no flush in flight the plain `evict` choice is unchanged,
+  so LRU-K still decides and nothing is traded away in the case where the
+  preference would cost hit rate (the flush-sequence rule above,
+  `docs/adr/0019-one-double-write-batch-at-a-time.md`). If neither the
+  free list nor the replacer has anything, checks (debug builds
   only) whether the calling thread itself already holds every frame
   pinned - a guaranteed self-deadlock, returning
   `StorageError::BufferPoolExhausted` immediately - and otherwise waits
@@ -482,7 +526,11 @@ same thread.
   marks the chosen frame `owned` (the ownership rule above, behind a
   `debug_assert!` that it was not already owned); *releases the mutex*,
   and only then flushes the victim if it was dirty (the latch-ordering
-  rule above). A flush failure calls `abort_eviction` and propagates the
+  rule above) - through `flush_pages_before` with the *same* deadline the
+  frame wait uses, so the total time this function can block really is the
+  `frame_wait_timeout` `docs/adr/0010-buffer-pool-waits-for-a-frame.md`
+  claims, rather than that plus an unbounded wait for whichever thread
+  holds `flush_sequence`. A flush failure calls `abort_eviction` and propagates the
   error rather than leaving the frame `owned` forever with no mapping
   restored - the fix for a real frame leak, since every failed eviction
   flush used to cost the pool a frame permanently. A flush success (or a
@@ -574,8 +622,33 @@ same thread.
   `frame_available.notify_one()` - the waiting rule above's other wakeup
   source, alongside `try_install`'s losing branch. Moves the
   `buffer_pool_pinned_frames` gauge down.
-- `BufferPool::flush_pages(&self, pages) -> Result<(), StorageError>` -
-  private. Refuses immediately with `StorageError::FlushPoisoned`, before
+- `BufferPool::begin_flush(&self, deadline) -> Result<FlushLease<'_>, StorageError>` -
+  private. Acquires the exclusive right to run a double-write batch: waits
+  on `flush_available` until the `bool` inside `flush_sequence` is false,
+  sets it and its `flush_in_flight` mirror, and hands back the `FlushLease`
+  whose `Drop` clears both and notifies the next waiter. `deadline` is
+  `None` for every caller that came to write - `flush_page`, `flush_all`,
+  the checkpoint's page-0 flush, recovery, the drop-time best-effort flush
+  - which wait indefinitely, since failing them on a slow device would
+  turn latency into a lost write. `acquire_free_frame` is the one caller
+  that passes `Some(deadline)`, and gets
+  `StorageError::BufferPoolWaitTimedOut { waited_ms }` when it expires -
+  the same error its own frame wait returns, because it means the same
+  thing to the caller. A wait that actually blocks increments
+  `buffer_pool_flush_waits_total`/`flush_wait_count` and records
+  `buffer_pool_flush_wait_seconds`; an uncontended acquisition records
+  nothing, so a nonzero count is exactly "how often a flush had to queue
+  behind another", which is the signal that a pool is undersized for its
+  write rate.
+- `FlushLease` - private. The RAII half of `begin_flush`: holding one
+  *is* the statement that this thread's batch is the one in flight.
+  Clearing the flag on `Drop` rather than at the end of `flush_pages` is
+  what keeps the poisoning window correct on the error paths, which return
+  early from the middle of the sequence.
+- `BufferPool::flush_pages(&self, pages) -> Result<(), StorageError>`/
+  `flush_pages_before(&self, pages, deadline)` -
+  private. `flush_pages` is `flush_pages_before(pages, None)`; everything
+  below describes the shared body. Refuses immediately with `StorageError::FlushPoisoned`, before
   touching the log, `dwb`, or the data file, if `flush_poisoned` is
   already set - see the poisoning paragraph below before assuming this
   check is optional. Otherwise emits a `trace!` naming the batch size

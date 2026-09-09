@@ -79,7 +79,9 @@ pub struct BufferPool {
     page_installed: Condvar,
     frame_wait_timeout: Duration,
     flush_poisoned: AtomicBool,
-    flush_sequence: Mutex<()>,
+    flush_sequence: Mutex<bool>,
+    flush_available: Condvar,
+    flush_in_flight: AtomicBool,
     #[cfg(feature = "test-util")]
     fetch_count: AtomicUsize,
     #[cfg(feature = "test-util")]
@@ -88,6 +90,23 @@ pub struct BufferPool {
     install_hook: Mutex<Option<Box<InstallHook>>>,
     #[cfg(feature = "test-util")]
     frame_wait_count: AtomicUsize,
+    #[cfg(feature = "test-util")]
+    flush_wait_count: AtomicUsize,
+}
+
+struct FlushLease<'a> {
+    pool: &'a BufferPool,
+}
+
+impl Drop for FlushLease<'_> {
+    fn drop(&mut self) {
+        let mut in_flight =
+            recover_lock(self.pool.flush_sequence.lock(), "BufferPool.flush_sequence");
+        *in_flight = false;
+        self.pool.flush_in_flight.store(false, Ordering::Release);
+        drop(in_flight);
+        self.pool.flush_available.notify_one();
+    }
 }
 
 #[cfg(feature = "test-util")]
@@ -137,7 +156,9 @@ impl BufferPool {
             page_installed: Condvar::new(),
             frame_wait_timeout: Self::DEFAULT_FRAME_WAIT_TIMEOUT,
             flush_poisoned: AtomicBool::new(false),
-            flush_sequence: Mutex::new(()),
+            flush_sequence: Mutex::new(false),
+            flush_available: Condvar::new(),
+            flush_in_flight: AtomicBool::new(false),
             #[cfg(feature = "test-util")]
             fetch_count: AtomicUsize::new(0),
             #[cfg(feature = "test-util")]
@@ -146,6 +167,8 @@ impl BufferPool {
             install_hook: Mutex::new(None),
             #[cfg(feature = "test-util")]
             frame_wait_count: AtomicUsize::new(0),
+            #[cfg(feature = "test-util")]
+            flush_wait_count: AtomicUsize::new(0),
         }
     }
 
@@ -167,6 +190,11 @@ impl BufferPool {
     #[cfg(feature = "test-util")]
     pub fn frame_wait_count(&self) -> usize {
         self.frame_wait_count.load(Ordering::Relaxed)
+    }
+
+    #[cfg(feature = "test-util")]
+    pub fn flush_wait_count(&self) -> usize {
+        self.flush_wait_count.load(Ordering::Relaxed)
     }
 
     #[cfg(feature = "test-util")]
@@ -462,7 +490,22 @@ impl BufferPool {
             if let Some(frame_id) = index.free_list.pop() {
                 break (frame_id, None);
             }
-            if let Some(frame_id) = index.replacer.evict() {
+            let clean_victim = if self.flush_in_flight.load(Ordering::Acquire) {
+                let frames = &self.frames;
+                index.replacer.evict_where(&|frame_id: FrameId| {
+                    frames[frame_id.0 as usize].dirty_since_lsn.load(Ordering::Acquire) == 0
+                })
+            } else {
+                None
+            };
+            if clean_victim.is_some() {
+                metrics::counter!("buffer_pool_clean_victims_preferred_total").increment(1);
+            }
+            let victim = match clean_victim {
+                Some(frame_id) => Some(frame_id),
+                None => index.replacer.evict(),
+            };
+            if let Some(frame_id) = victim {
                 let idx = frame_id.0 as usize;
                 let victim_page_id = index.frame_page[idx];
                 if let Some(victim_page_id) = victim_page_id {
@@ -514,7 +557,9 @@ impl BufferPool {
             tracing::trace!(page_id = victim_page_id.0, frame_id = frame_id.0, "evict");
             metrics::counter!("buffer_pool_evictions_total").increment(1);
             if self.frames[frame_id.0 as usize].dirty_since_lsn.load(Ordering::Acquire) != 0 {
-                if let Err(err) = self.flush_pages(&[(frame_id, victim_page_id)]) {
+                if let Err(err) =
+                    self.flush_pages_before(&[(frame_id, victim_page_id)], Some(deadline))
+                {
                     self.abort_eviction(frame_id, victim_page_id);
                     return Err(err);
                 }
@@ -618,7 +663,64 @@ impl BufferPool {
         }
     }
 
+    fn begin_flush(&self, deadline: Option<Instant>) -> Result<FlushLease<'_>, StorageError> {
+        let started = Instant::now();
+        let mut in_flight = recover_lock(self.flush_sequence.lock(), "BufferPool.flush_sequence");
+        let mut waited = false;
+        while *in_flight {
+            if !waited {
+                waited = true;
+                metrics::counter!("buffer_pool_flush_waits_total").increment(1);
+                #[cfg(feature = "test-util")]
+                self.flush_wait_count.fetch_add(1, Ordering::Relaxed);
+            }
+            match deadline {
+                None => {
+                    in_flight = recover_lock(
+                        self.flush_available.wait(in_flight),
+                        "BufferPool.flush_sequence",
+                    );
+                }
+                Some(deadline) => {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        let waited_ms = started.elapsed().as_millis() as u64;
+                        metrics::histogram!("buffer_pool_flush_wait_seconds")
+                            .record(started.elapsed().as_secs_f64());
+                        tracing::warn!(
+                            waited_ms,
+                            "timed out waiting for another thread's page flush to finish"
+                        );
+                        return Err(StorageError::BufferPoolWaitTimedOut { waited_ms });
+                    }
+                    in_flight = recover_lock(
+                        self.flush_available
+                            .wait_timeout(in_flight, deadline.saturating_duration_since(now)),
+                        "BufferPool.flush_sequence",
+                    )
+                    .0;
+                }
+            }
+        }
+        *in_flight = true;
+        self.flush_in_flight.store(true, Ordering::Release);
+        drop(in_flight);
+        if waited {
+            metrics::histogram!("buffer_pool_flush_wait_seconds")
+                .record(started.elapsed().as_secs_f64());
+        }
+        Ok(FlushLease { pool: self })
+    }
+
     fn flush_pages(&self, pages: &[(FrameId, PageId)]) -> Result<(), StorageError> {
+        self.flush_pages_before(pages, None)
+    }
+
+    fn flush_pages_before(
+        &self,
+        pages: &[(FrameId, PageId)],
+        deadline: Option<Instant>,
+    ) -> Result<(), StorageError> {
         if self.flush_poisoned.load(Ordering::Acquire) {
             return Err(StorageError::FlushPoisoned);
         }
@@ -632,7 +734,7 @@ impl BufferPool {
             pages.len()
         );
 
-        let flush_sequence = recover_lock(self.flush_sequence.lock(), "BufferPool.flush_sequence");
+        let _flush_lease = self.begin_flush(deadline)?;
         if self.flush_poisoned.load(Ordering::Acquire) {
             return Err(StorageError::FlushPoisoned);
         }
@@ -694,7 +796,6 @@ impl BufferPool {
                 self.frames[idx].dirty_since_lsn.store(0, Ordering::Release);
             }
         }
-        drop(flush_sequence);
         Ok(())
     }
 

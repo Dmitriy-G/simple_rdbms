@@ -35,14 +35,15 @@ cheapest first, matching R-6's own list.
   `page::PAGE_LSN_RANGE` (`4..12`), so a test payload byte written here
   survives the checksum re-stamping every real disk write performs. Only
   `a_write_during_a_flush_leaves_the_frame_dirty` reads its payload back
-  after a reopen, so it is the only test that needs this; the other
-  tests write a marker byte at offset `0` purely to dirty the page; they
-  never assert on stored content, only on `page_lsn` or on the pool's own
-  bookkeeping.
-- `open_pool`/`open_pool_with_data_device` - open a `BufferPool` over a
-  temp directory's `test.db`/`test.db.dwb`/`test.db.wal`, the latter
-  substituting a caller-supplied data device (a `FailOnceDevice` or
-  `PausingDevice` wrapping a real `FileDevice`) for the fault injection.
+  after a reopen, so it is the only test that needs this; every other test
+  writes a marker byte - at `PAYLOAD_OFFSET` or at offset `0`, it makes no
+  difference to them - purely to dirty the page, and asserts on `page_lsn`
+  or on the pool's own bookkeeping rather than on stored content.
+- `test_support::open_pool` with `PoolOptions::data_device` - opens a
+  `BufferPool` over a temp directory's
+  `test.db`/`test.db.dwb`/`test.db.wal`, substituting a caller-supplied
+  data device (a `FailOnceDevice` or `PausingDevice` wrapping a real
+  `FileDevice`) for the fault injection.
 - `a_failed_eviction_does_not_leak_the_frame` - a one-frame pool holds a
   page, then `new_page` forces its eviction into a `FailOnceDevice`
   primed to fail on the very first write. The pool is opened with a
@@ -86,6 +87,29 @@ cheapest first, matching R-6's own list.
   `page_lsn` recorded right after the dirtying write - checked on
   `page_lsn`, not bytes, since the two threads' relative finishing order
   is not otherwise pinned down.
+- `an_eviction_prefers_a_clean_victim_while_a_flush_is_in_flight` - the
+  first of the two tests holding
+  `docs/adr/0019-one-double-write-batch-at-a-time.md`'s part 3 in place. A
+  two-frame pool holds one dirty page and one clean one, dirtied and
+  fetched in that order so LRU-K alone would pick the *dirty* frame: it is
+  the older of the two and both have fewer than `k` accesses. A background
+  `flush_page` of the dirty page parks mid-write, and the main thread then
+  fetches a third page, which can only be served by an eviction. Asserts
+  the fetch succeeds, that `flush_wait_count()` is still `0` - the
+  deterministic form of "it never queued behind the stalled device write",
+  which a wall-clock reading could not establish - and that the dirty page
+  is still resident while the clean one is gone, which is the part that
+  actually pins down *which* frame was chosen.
+- `a_fetch_needing_a_dirty_victim_gives_up_at_the_frame_wait_timeout` -
+  the other half, and the case the clean preference deliberately does not
+  fix: with every evictable frame dirty there is no free reclaim
+  available, so a fetch genuinely does need the device the parked flush is
+  holding. Asserts it fails with `StorageError::BufferPoolWaitTimedOut`
+  inside a small multiple of `SHORT_FRAME_WAIT_TIMEOUT` rather than
+  waiting on `flush_sequence` forever, that `flush_wait_count()` recorded
+  the wait, and that `assert_frame_accounting()` still passes afterwards -
+  the timeout unwinds through `abort_eviction`, which is a path no other
+  test reaches with the flush lock as the thing that failed.
 - `a_fetch_blocked_on_a_stuck_eviction_times_out_rather_than_hanging` -
   same setup as the previous test, but the pause is never released before
   the foreground `fetch_page_read` call, and the pool is built with

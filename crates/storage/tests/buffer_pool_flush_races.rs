@@ -304,6 +304,169 @@ fn a_fetch_during_an_eviction_flush_never_sees_the_stale_page() -> Result<(), Bo
 }
 
 #[test]
+fn an_eviction_prefers_a_clean_victim_while_a_flush_is_in_flight() -> Result<(), Box<dyn Error>> {
+    let dir = tempfile::tempdir()?;
+    const POOL_SIZE: usize = 2;
+
+    let (dirty_page, clean_page, wanted_page) = {
+        let pool = test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE))?;
+        let mut ids = Vec::new();
+        for txn in 0..3u64 {
+            let (page_id, mut guard) = pool.new_page(TxnId(txn))?;
+            guard.write(TxnId(txn), PAYLOAD_OFFSET, &[txn as u8])?;
+            drop(guard);
+            ids.push(page_id);
+        }
+        pool.flush_all()?;
+        (ids[0], ids[1], ids[2])
+    };
+
+    let db_file = open_file(&dir.path().join("test.db"))?;
+    let (reached_tx, reached_rx) = mpsc::sync_channel::<()>(0);
+    let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
+    let data_device: Box<dyn BlockDevice> = Box::new(PausingDevice::new(
+        Box::new(FileDevice::new(db_file)),
+        page_offset(dirty_page),
+        reached_tx,
+        release_rx,
+    ));
+    let pool =
+        test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE).data_device(data_device))?;
+    let pool = Arc::new(pool.with_frame_wait_timeout(SHORT_FRAME_WAIT_TIMEOUT));
+
+    let mut guard = pool.fetch_page(dirty_page)?;
+    guard.write(TxnId(9), PAYLOAD_OFFSET, &[42])?;
+    drop(guard);
+    drop(pool.fetch_page_read(clean_page)?);
+
+    let (flush_tx, flush_rx) = mpsc::channel();
+    {
+        let pool = Arc::clone(&pool);
+        thread::spawn(move || {
+            let result = pool.flush_page(dirty_page);
+            let _ = flush_tx.send(result);
+        });
+    }
+
+    recv_within(&reached_rx, TEST_TIMEOUT, "the flush's real write to reach the paused offset");
+
+    let fetched = pool.fetch_page_read(wanted_page);
+    match &fetched {
+        Ok(_) => {}
+        Err(err) => panic!(
+            "a fetch that can be served by evicting the clean frame must not queue behind the \
+             in-flight flush of the dirty one, but it failed with: {err}"
+        ),
+    }
+    drop(fetched);
+
+    assert_eq!(
+        pool.flush_wait_count(),
+        0,
+        "the fetch must not have waited on the in-flight double-write batch at all: with a clean \
+         evictable frame in the pool it never needed to flush anything"
+    );
+    assert_eq!(
+        pool.frame_count_for(dirty_page),
+        1,
+        "the dirty page mid-flush must still be resident: it is the older frame, so LRU-K alone \
+         would have chosen it, and choosing it is exactly what enrolls a reader in another \
+         session's device queue"
+    );
+    assert_eq!(
+        pool.frame_count_for(clean_page),
+        0,
+        "the clean frame is the one that must have been evicted"
+    );
+
+    release_tx.send(()).ok();
+    recv_within(&flush_rx, TEST_TIMEOUT, "the paused flush to finish")?;
+    pool.assert_frame_accounting();
+    Ok(())
+}
+
+#[test]
+fn a_fetch_needing_a_dirty_victim_gives_up_at_the_frame_wait_timeout() -> Result<(), Box<dyn Error>>
+{
+    let dir = tempfile::tempdir()?;
+    const POOL_SIZE: usize = 2;
+
+    let (flushing_page, other_page, wanted_page) = {
+        let pool = test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE))?;
+        let mut ids = Vec::new();
+        for txn in 0..3u64 {
+            let (page_id, mut guard) = pool.new_page(TxnId(txn))?;
+            guard.write(TxnId(txn), PAYLOAD_OFFSET, &[txn as u8])?;
+            drop(guard);
+            ids.push(page_id);
+        }
+        pool.flush_all()?;
+        (ids[0], ids[1], ids[2])
+    };
+
+    let db_file = open_file(&dir.path().join("test.db"))?;
+    let (reached_tx, reached_rx) = mpsc::sync_channel::<()>(0);
+    let (release_tx, release_rx) = mpsc::sync_channel::<()>(0);
+    let data_device: Box<dyn BlockDevice> = Box::new(PausingDevice::new(
+        Box::new(FileDevice::new(db_file)),
+        page_offset(flushing_page),
+        reached_tx,
+        release_rx,
+    ));
+    let pool =
+        test_support::open_pool(dir.path(), PoolOptions::new(POOL_SIZE).data_device(data_device))?;
+    let pool = Arc::new(pool.with_frame_wait_timeout(SHORT_FRAME_WAIT_TIMEOUT));
+
+    for (txn, page_id) in [(11u64, flushing_page), (12, other_page)] {
+        let mut guard = pool.fetch_page(page_id)?;
+        guard.write(TxnId(txn), PAYLOAD_OFFSET, &[txn as u8])?;
+        drop(guard);
+    }
+
+    let (flush_tx, flush_rx) = mpsc::channel();
+    {
+        let pool = Arc::clone(&pool);
+        thread::spawn(move || {
+            let result = pool.flush_page(flushing_page);
+            let _ = flush_tx.send(result);
+        });
+    }
+
+    recv_within(&reached_rx, TEST_TIMEOUT, "the flush's real write to reach the paused offset");
+
+    let started = std::time::Instant::now();
+    let fetch_result = pool.fetch_page_read(wanted_page);
+    let elapsed = started.elapsed();
+
+    match &fetch_result {
+        Err(StorageError::BufferPoolWaitTimedOut { .. }) => {}
+        Err(other) => panic!(
+            "with every evictable frame dirty, a fetch must give up on the stalled flush with \
+             BufferPoolWaitTimedOut, got a different error instead: {other}"
+        ),
+        Ok(_) => panic!(
+            "with every evictable frame dirty and the only flush in flight parked at the device, \
+             a fetch cannot legitimately succeed"
+        ),
+    }
+    assert!(
+        pool.flush_wait_count() >= 1,
+        "the fetch must have waited on the in-flight double-write batch before giving up"
+    );
+    assert!(
+        elapsed < SHORT_FRAME_WAIT_TIMEOUT * 10,
+        "the fetch gave up after {elapsed:?}, far longer than the configured \
+         {SHORT_FRAME_WAIT_TIMEOUT:?} window - an unbounded wait here parks a worker thread for \
+         as long as the device is slow"
+    );
+
+    release_tx.send(()).ok();
+    recv_within(&flush_rx, TEST_TIMEOUT, "the paused flush to finish")?;
+    pool.assert_frame_accounting();
+    Ok(())
+}
+
+#[test]
 fn a_fetch_blocked_on_a_stuck_eviction_times_out_rather_than_hanging() -> Result<(), Box<dyn Error>>
 {
     let dir = tempfile::tempdir()?;

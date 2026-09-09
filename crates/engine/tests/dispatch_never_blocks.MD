@@ -216,18 +216,32 @@ fit in it.
   and `BEGIN` both passing comfortably - which is what identified the
   cause rather than a flaw in the fix. `BufferPool::flush_pages` holds
   `BufferPool.flush_sequence` for the whole of its double-write batch,
-  page writes and `sync`, so while *any* device write is stalled no
-  session anywhere can evict a frame. A probe reading a table whose page
-  is not already resident therefore queues behind the very write this test
-  is holding, no matter what the transaction manager is doing. Pinning the
+  page writes and `sync`, so while a device write is stalled no session
+  anywhere can evict a *dirty* frame. This test's writer fills all 8
+  frames with dirty `big` pages before the device is armed, which leaves
+  the pool with nothing to reclaim for free: a probe reading a table whose
+  page is not already resident genuinely needs a page written before it can
+  read one, no matter what the transaction manager is doing. Pinning the
   page in the pool first does not survive contact with the replacer
   either: `LruKReplacer` evicts every frame with fewer than `k` recorded
   accesses before any frame with `k`, so a page read once to warm it is
   the *first* victim the undo takes, not the last. The checkpoint test
   above gets away with a `SELECT` only because its default-size pool never
-  needs to evict at all. That serialization is its own property, one layer
-  below this file's, and it belongs to whoever revisits the double-write
-  buffer rather than here.
+  needs to evict at all.
+
+  That serialization is its own property, one layer below this file's, and
+  `docs/adr/0019-one-double-write-batch-at-a-time.md` is where it is now
+  settled: one batch at a time is the design, and what the pool owes a
+  caller instead is that an eviction needing no flush is never queued
+  behind one that does, and that an eviction that does need one gives up
+  at `frame_wait_timeout`. Neither changes this test. The properties
+  themselves are held by
+  `crates/storage/tests/buffer_pool_flush_races.rs`'s
+  `an_eviction_prefers_a_clean_victim_while_a_flush_is_in_flight` and
+  `a_fetch_needing_a_dirty_victim_gives_up_at_the_frame_wait_timeout`,
+  where the pool's whole dirty set is controllable and the assertion can
+  be a counter rather than a clock - which is why the strong-form probe
+  was not added here.
 - `wal_base_path(dir) -> PathBuf` - private helper, identical in shape to
   `tests/sessions.rs`'s helper of the same name, building the WAL's base
   path for `Database::open_with_devices`.

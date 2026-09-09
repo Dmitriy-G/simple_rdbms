@@ -71,7 +71,8 @@ name a branch:
    catalog lock spans a statement), 0016 (a checkpoint holds no lock
    across its page flush), 0017 (`CREATE INDEX` locks the table it indexes
    and publishes only a finished index), 0018 (an abort holds no lock
-   across its undo, and stays in the active set while it runs).
+   across its undo, and stays in the active set while it runs), 0019 (one
+   double-write batch at a time, and what a page fetch may wait for).
 3. `docs/backlog.md` — the problems this project knows about and has
    decided not to do. Something listed there is not a finding to report
    again; it is a decision already made.
@@ -799,10 +800,26 @@ mistake at review time.
   `a_stalled_checkpoint_does_not_block_an_unrelated_session` and
   `a_stalled_rollback_does_not_block_an_unrelated_session` are what hold
   them in place. This invariant is about engine-level locks and not about
-  the buffer pool's own: while a device write is stalled, no session can
-  evict a frame, because `BufferPool::flush_pages` serializes every flush
-  behind `BufferPool.flush_sequence`. That is a separate property and
-  neither ADR changes it. An aborting transaction stays in the active set for the
+  the buffer pool's own, which is the opposite case and is settled
+  separately in `docs/adr/0019-one-double-write-batch-at-a-time.md`:
+  `BufferPool::flush_pages` holds `BufferPool.flush_sequence` across all
+  three of its `fsync`s **deliberately**, because the double-write buffer
+  is one file with one header and two batches in flight would leave a
+  backup unreachable while its real write is still going. So while a
+  device write is stalled, no session can evict a *dirty* frame; a clean
+  victim needs no flush and is evicted without touching that lock. What
+  ADR 0019 requires in exchange, and what the pool now does, is that
+  `acquire_free_frame` prefer a clean victim while a flush is in flight
+  and bound its wait on that lock by the same `frame_wait_timeout` as
+  every other wait on this path — so a stalled device costs a statement a
+  `BufferPoolWaitTimedOut`, never a worker thread parked indefinitely.
+  `crates/storage/tests/buffer_pool_flush_races.rs`'s
+  `an_eviction_prefers_a_clean_victim_while_a_flush_is_in_flight` and
+  `a_fetch_needing_a_dirty_victim_gives_up_at_the_frame_wait_timeout` hold
+  the two halves. The test that tells this case from the three
+  above: a lock guarding logical state the I/O is incidental to is split;
+  a lock guarding the physical resource the I/O is about is kept and its
+  waits are bounded. An aborting transaction stays in the active set for the
   whole of its undo, because `earliest_active_begin_lsn` is what stops a
   concurrent checkpoint truncating the log records that undo is reading.
 - **Errors are logged once, at the engine boundary.** See the "Error

@@ -7,7 +7,11 @@ pub trait Replacer: Send {
 
     fn set_evictable(&mut self, frame_id: FrameId, evictable: bool);
 
-    fn evict(&mut self) -> Option<FrameId>;
+    fn evict(&mut self) -> Option<FrameId> {
+        self.evict_where(&|_| true)
+    }
+
+    fn evict_where(&mut self, accept: &dyn Fn(FrameId) -> bool) -> Option<FrameId>;
 
     fn remove(&mut self, frame_id: FrameId);
 
@@ -53,10 +57,10 @@ impl Replacer for LruKReplacer {
         }
     }
 
-    fn evict(&mut self) -> Option<FrameId> {
+    fn evict_where(&mut self, accept: &dyn Fn(FrameId) -> bool) -> Option<FrameId> {
         let mut best: Option<(FrameId, bool, u64)> = None;
         for (&frame_id, entry) in self.frames.iter() {
-            if !entry.evictable {
+            if !entry.evictable || !accept(frame_id) {
                 continue;
             }
             let (is_inf, metric) = if entry.history.len() < self.k {
