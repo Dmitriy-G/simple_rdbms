@@ -107,7 +107,7 @@ pages that stores a table's tuples before (or in place of) any index.
   appends `data` as a new tuple, returning its slot number, or `None` if
   the page does not have enough free space. `delete(&mut self, slot)`
   tombstones `slot`, freeing its bytes for future compaction without
-  shifting other slots' numbers (`// TODO(M5): vacuum - reclaim
+  shifting other slots' numbers (`// TODO(M26): vacuum - reclaim
   tombstoned tuple bytes via compaction`). `update_in_place(&mut self,
   slot, offset, bytes) -> Result<(), StorageError>` overwrites `bytes.len()`
   bytes of `slot`'s existing tuple starting at `offset` (relative to the

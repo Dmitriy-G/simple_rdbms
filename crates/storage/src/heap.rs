@@ -167,7 +167,7 @@ impl<'a, 'pool> SlottedPage<'a, 'pool> {
         Ok(Some(slot_count))
     }
 
-    // TODO(M5): vacuum - reclaim tombstoned tuple bytes via compaction.
+    // TODO(M26): vacuum - reclaim tombstoned tuple bytes via compaction.
     pub fn delete(&mut self, slot: u16) -> Result<(), StorageError> {
         let page_id = self.guard.page_id();
         if slotted_slot_entry(self.data(), slot, page_id)?.is_some() {
