@@ -13,6 +13,10 @@ pipeline, against a real (tempfile-backed) database file.
 - `rows_and_columns_of(result) -> (Vec<String>, Vec<Vec<Value>>)` - unwraps
   a `ResultSet::Rows` into its columns and each row's values, panicking on
   `RowsAffected`.
+- `columns_and_types_of(result) -> (Vec<String>, Vec<Option<DataType>>, usize)` -
+  unwraps a `ResultSet::Rows` into its columns, its `column_types`, and its
+  row count (the values themselves don't matter to the one test that uses
+  this), panicking on `RowsAffected`.
 - `create_insert_and_select_star_preserves_insertion_order` - `CREATE
   TABLE`, a multi-row `INSERT`, and `SELECT *` come back in insertion
   order.
@@ -79,6 +83,15 @@ pipeline, against a real (tempfile-backed) database file.
   directly the way `crates/storage/tests/btree.rs` exercises it.
 - `select_from_nonexistent_table_is_an_error` - `SELECT * FROM missing`
   errors rather than panicking or returning an empty result.
+- `select_reports_column_data_types_for_boolean_integer_and_varchar_columns`
+  - `SELECT *` over a `BOOLEAN`/`INTEGER`/`TEXT` table reports exactly
+  `Boolean`/`Integer`/`Varchar(u32::MAX)` (`TEXT` is this grammar's only
+  variable-length string type - there is no `VARCHAR(n)` syntax, see
+  `sql::parser.MD`'s column-type grammar), in column order, in
+  `ResultSet::Rows::column_types` - checked both against an empty result
+  set (before any row is inserted, proving a result with no rows to infer
+  a type from still reports one) and against a one-row result set
+  afterward.
 - `a_parse_error_carries_sqlstate_42601_and_its_byte_offset` - a lexer
   error surfaced through `Database::execute` comes back as
   `common::Error::Syntax { offset, .. }` with `sql_state() ==

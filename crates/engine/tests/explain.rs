@@ -13,7 +13,7 @@ fn open(dir: &tempfile::TempDir) -> Database {
 
 fn plan_lines(result: ResultSet) -> Vec<String> {
     match result {
-        ResultSet::Rows { columns, rows } => {
+        ResultSet::Rows { columns, rows, .. } => {
             assert_eq!(columns, vec!["QUERY PLAN".to_string()]);
             rows.into_iter()
                 .map(|tuple| match &tuple.values()[0] {

@@ -1,6 +1,6 @@
 use common::{DbConfig, Error, SqlState};
 use engine::{Database, ResultSet};
-use types::Value;
+use types::{DataType, Value};
 
 #[cfg(test)]
 fn open(dir: &tempfile::TempDir) -> Database {
@@ -10,9 +10,17 @@ fn open(dir: &tempfile::TempDir) -> Database {
 
 fn rows_and_columns_of(result: ResultSet) -> (Vec<String>, Vec<Vec<Value>>) {
     match result {
-        ResultSet::Rows { columns, rows } => {
+        ResultSet::Rows { columns, rows, .. } => {
             (columns, rows.into_iter().map(|t| t.values().to_vec()).collect())
         }
+        ResultSet::RowsAffected(n) => panic!("expected Rows, got RowsAffected({n})"),
+        ResultSet::RolledBack => panic!("expected Rows, got RolledBack"),
+    }
+}
+
+fn columns_and_types_of(result: ResultSet) -> (Vec<String>, Vec<Option<DataType>>, usize) {
+    match result {
+        ResultSet::Rows { columns, column_types, rows } => (columns, column_types, rows.len()),
         ResultSet::RowsAffected(n) => panic!("expected Rows, got RowsAffected({n})"),
         ResultSet::RolledBack => panic!("expected Rows, got RolledBack"),
     }
@@ -308,6 +316,30 @@ fn select_from_nonexistent_table_is_an_error() {
     let result = db.execute("SELECT * FROM missing");
 
     assert!(result.is_err(), "expected an error, got {result:?}");
+}
+
+#[test]
+fn select_reports_column_data_types_for_boolean_integer_and_varchar_columns() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (flag BOOLEAN, n INTEGER, name TEXT)").expect("create table");
+
+    let expected_types =
+        vec![Some(DataType::Boolean), Some(DataType::Integer), Some(DataType::Varchar(u32::MAX))];
+
+    let (columns, column_types, row_count) =
+        columns_and_types_of(db.execute("SELECT * FROM t").expect("select"));
+    assert_eq!(columns, vec!["flag", "n", "name"]);
+    assert_eq!(column_types, expected_types);
+    assert_eq!(row_count, 0, "an empty result set must still report its column types");
+
+    db.execute("INSERT INTO t VALUES (TRUE, 1, 'ada')").expect("insert");
+    let (columns, column_types, row_count) =
+        columns_and_types_of(db.execute("SELECT * FROM t").expect("select"));
+    assert_eq!(columns, vec!["flag", "n", "name"]);
+    assert_eq!(column_types, expected_types);
+    assert_eq!(row_count, 1);
 }
 
 #[test]

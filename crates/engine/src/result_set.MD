@@ -10,16 +10,23 @@ can tell the client asked to keep its work and got the opposite.
 
 ## Key Components
 
-- `ResultSet` - `Rows { columns: Vec<String>, rows: Vec<Tuple> }` for a
-  query's output (column names in projection order, and the rows produced
-  in the order they were produced); `RowsAffected(usize)` for a statement
-  with no output rows: the number of rows it inserted, updated, or deleted
-  (`0` for DDL like `CREATE TABLE`, and for an ordinary `BEGIN`/`COMMIT`/
-  `ROLLBACK`); `RolledBack` for the one case where a statement's visible
-  outcome doesn't match what it asked for - see `database.MD`'s
-  `handle_commit` entry.
-- `ResultSet::rows(columns, rows) -> Self` - builds a `Rows` result set
-  from its output column names and rows.
+- `ResultSet` - `Rows { columns: Vec<String>, column_types:
+  Vec<Option<DataType>>, rows: Vec<Tuple> }` for a query's output (column
+  names in projection order, each entry's resolved type in the same
+  order - `planner::binder::BoundSelect::column_types`, `None` only for a
+  projection with no static type such as a bare `NULL` literal - and the
+  rows produced in the order they were produced); `RowsAffected(usize)`
+  for a statement with no output rows: the number of rows it inserted,
+  updated, or deleted (`0` for DDL like `CREATE TABLE`, and for an
+  ordinary `BEGIN`/`COMMIT`/`ROLLBACK`); `RolledBack` for the one case
+  where a statement's visible outcome doesn't match what it asked for -
+  see `database.MD`'s `handle_commit` entry. `column_types` exists so a
+  caller has a type to report even for a result set with no rows to infer
+  one from - `server::wire`'s `RowDescription` (M13.2) is the reason it
+  was added; `cli`'s table formatter ignores it today.
+- `ResultSet::rows(columns, column_types, rows) -> Self` - builds a
+  `Rows` result set from its output column names, their resolved types,
+  and rows.
 - `ResultSet::rows_affected(count) -> Self` - builds a `RowsAffected`
   result set.
 

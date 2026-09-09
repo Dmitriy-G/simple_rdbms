@@ -24,7 +24,7 @@ use storage::wal::LogManager;
 use txn::{
     IsolationLevel, LockMode, TransactionManager, finish_checkpoint, write_checkpoint_record,
 };
-use types::{MemcomparableEncode, Tuple, Value};
+use types::{DataType, MemcomparableEncode, Tuple, Value};
 
 use crate::executor_factory::build_executor;
 use crate::result_set::ResultSet;
@@ -855,7 +855,11 @@ impl EngineShared {
         lines.extend(explain_physical(&physical, catalog, verbose));
 
         let rows = lines.into_iter().map(|line| Tuple::new(vec![Value::Varchar(line)])).collect();
-        Ok(ResultSet::rows(vec!["QUERY PLAN".to_string()], rows))
+        Ok(ResultSet::rows(
+            vec!["QUERY PLAN".to_string()],
+            vec![Some(DataType::Varchar(u32::MAX))],
+            rows,
+        ))
     }
 
     fn reload_catalog(&self) -> Result<()> {
@@ -939,13 +943,14 @@ impl EngineShared {
             }
             BoundStatement::Select(select) => {
                 let column_names = select.column_names.clone();
+                let column_types = select.column_types.clone();
                 let logical = planner::plan(BoundStatement::Select(select))?;
                 let optimized =
                     Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &self.catalog);
                 let physical = to_physical(optimized);
                 tracing::debug!(plan = ?physical, "executing plan");
                 let rows = self.run(physical, txn_id)?;
-                Ok(ResultSet::rows(column_names, rows))
+                Ok(ResultSet::rows(column_names, column_types, rows))
             }
             BoundStatement::CreateIndex(create) => {
                 self.lock_table_exclusive(txn_id, create.table_id)?;

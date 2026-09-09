@@ -23,7 +23,15 @@ becomes "semantically valid against this database's schema".
   the same order: the source column's name for a bare column reference
   (including each column a `*` expands to), or a positional `columnN`
   name for any other expression, which has no name of its own to report.
-  `predicate` is the optional, type-checked filter predicate.
+  `column_types` is `bind_expr`'s resolved `Option<DataType>` for each
+  entry of `projections`, in the same order - `Some` for every ordinary
+  projection (a `*`-expanded column always carries its schema type), and
+  `None` only for a projection with no static type of its own, such as a
+  bare `NULL` literal. `engine::ResultSet::Rows` carries this straight
+  through so a caller - `cli`'s formatter today, `server::wire`'s
+  `RowDescription` from M13.2 onward - has a type to report for an empty
+  result set, which has no rows to infer one from. `predicate` is the
+  optional, type-checked filter predicate.
 - `BoundInsert` - an `INSERT` after binding. `table_id` is the resolved
   destination table. `rows` are each row's values, one bound expression
   per column of the target table's schema (in schema order); columns not

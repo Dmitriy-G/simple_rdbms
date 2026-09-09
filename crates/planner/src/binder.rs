@@ -18,6 +18,7 @@ pub struct BoundSelect {
     pub table_id: TableId,
     pub projections: Vec<BoundExpr>,
     pub column_names: Vec<String>,
+    pub column_types: Vec<Option<DataType>>,
     pub predicate: Option<BoundExpr>,
 }
 
@@ -114,6 +115,7 @@ impl<'a> Binder<'a> {
 
         let mut projections = Vec::new();
         let mut column_names = Vec::new();
+        let mut column_types = Vec::new();
         for item in &select.items {
             match item {
                 sql::SelectItem::Wildcard => {
@@ -121,14 +123,16 @@ impl<'a> Binder<'a> {
                         projections
                             .push(BoundExpr::ColumnRef { index, data_type: column.data_type });
                         column_names.push(column.name.clone());
+                        column_types.push(Some(column.data_type));
                     }
                 }
                 sql::SelectItem::Expr(expr) => {
-                    let (bound, _) = self.bind_expr(expr, schema, Some(table_scope))?;
+                    let (bound, data_type) = self.bind_expr(expr, schema, Some(table_scope))?;
                     column_names.push(match expr {
                         sql::Expr::Column { name, .. } => name.clone(),
                         _ => format!("column{}", column_names.len() + 1),
                     });
+                    column_types.push(data_type);
                     projections.push(bound);
                 }
             }
@@ -149,7 +153,7 @@ impl<'a> Binder<'a> {
             None => None,
         };
 
-        Ok(BoundSelect { table_id, projections, column_names, predicate })
+        Ok(BoundSelect { table_id, projections, column_names, column_types, predicate })
     }
 
     fn bind_insert(&self, insert: sql::InsertStatement) -> Result<BoundInsert, PlannerError> {

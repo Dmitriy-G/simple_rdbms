@@ -118,7 +118,7 @@ fn format_data_type(data_type: DataType) -> String {
 
 pub fn format_result(result_set: &ResultSet) -> String {
     match result_set {
-        ResultSet::Rows { columns, rows } => format_table(columns, rows),
+        ResultSet::Rows { columns, rows, .. } => format_table(columns, rows),
         ResultSet::RowsAffected(0) => "OK\n".to_string(),
         ResultSet::RowsAffected(count) => {
             format!("OK ({count} row{})\n", if *count == 1 { "" } else { "s" })

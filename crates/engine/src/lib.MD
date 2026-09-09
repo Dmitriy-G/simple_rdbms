@@ -45,7 +45,7 @@ use engine::{Database, ResultSet};
 
 let mut db = Database::open(DbConfig::new("example.db"))?;
 match db.execute("SELECT * FROM t")? {
-    ResultSet::Rows { columns, rows } => { /* ... */ }
+    ResultSet::Rows { columns, rows, .. } => { /* ... */ }
     ResultSet::RowsAffected(n) => { /* ... */ }
 }
 db.close()?;
