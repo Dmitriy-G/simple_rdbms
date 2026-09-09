@@ -28,15 +28,15 @@ behaviour tied to the deleted park queue, so the documentation promised a
 `55P03` the engine could not raise.
 
 **An untimed wait plus a fixed pool is a wedge.**
-`crates/engine/src/runtime.rs:34` fixes `WORKER_POOL_SIZE = 8`, and every
-statement runs on that pool (`runtime.rs:179`,
-`crates/engine/src/worker_pool.rs`); requests queue behind it in an
+`crates/engine/src/runtime.rs` fixed `WORKER_POOL_SIZE = 8`, and every
+statement ran on that pool (`crates/engine/src/worker_pool.rs`); requests
+queued behind it in an
 `mpsc::sync_channel`. Eight sessions blocked on a table lock held by a
 ninth occupy all eight workers. The ninth session's `COMMIT` — the one
 statement that would release the lock — is queued behind them and can
 never be dispatched. No cycle exists in the wait-for graph, so nothing is
 aborted, and the engine recovers only when `expire_idle_transaction`
-(`runtime.rs:384`, called from the 50 ms tick at line 361) reaches the
+(`runtime.rs`, called from the engine thread's 50 ms tick) reaches the
 holder after `idle_in_transaction_timeout_ms` (60 s by default) — after
 which the queued `COMMIT` finally runs, against a transaction that was
 aborted underneath it. Today this needs nine in-process
@@ -54,7 +54,7 @@ The alternative considered seriously was **admission control** — never
 letting the last free worker be occupied by a statement that is about to
 block. It was rejected for three reasons. It cannot be applied where the
 decision is made: a lock is taken deep inside an executor
-(`crates/executor/src/operators/insert.rs:35,72`), long after the
+(`crates/executor/src/operators/insert.rs`), long after the
 statement has been dispatched to a worker, so the engine cannot know in
 advance that a statement will block. It fixes the wrong half of the
 problem: even with a worker permanently reserved, a session that holds a

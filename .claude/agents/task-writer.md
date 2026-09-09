@@ -206,6 +206,19 @@ change instead of being found by a milestone review three commits later.
 `CLAUDE.md` is Architect-owned, so a Coder subtask discharges this by
 naming the bullet in its reply rather than editing the file.
 
+**A milestone's last task ends with the citation sweep, as its own Order
+Plan line.** When the sub-milestone you are scheduling is the last one
+under its parent, add a final subtask running
+`grep -rn "\.rs:[0-9]" docs CLAUDE.md` over the whole tree and
+re-pointing every hit that no longer resolves to what its sentence
+claims, per `CLAUDE.md`'s "Citing code by line number". It is a line with
+a status marker rather than a paragraph somebody is expected to
+remember — which is how it was missed at the end of M10, leaving stale
+citations in three ADRs for P-68 to find. Nearly every hit is in an
+Architect-owned file, so the sweep is usually its own `For: Architect`
+task; if it lands in a Coder task, the subtask says to run the grep and
+file what it finds, since the Coder may not re-point an ADR.
+
 **Grep every identifier you write into the file.** A subtask that names a
 function, field or type must name one that exists and does what the
 subtask claims. This is not pedantry: a spec once said "delete `waiters`"

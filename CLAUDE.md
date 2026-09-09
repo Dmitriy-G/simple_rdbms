@@ -876,10 +876,14 @@ shipped capability is missing, which is worse than not listing it at all.
 Milestone numbers here are the roadmap's, and a roadmap number is a
 priority in natural numeric order: an unstarted milestone is renumbered
 when priorities change, while anything with shipped work under it keeps
-its number. There is no M11 entry — an `M11` in a `.MD` file or a
-`// TODO(M11):` marker is stale and means M23.1 (joins) or M23.2
-(statistics, cost and composite keys). Retarget one when its file is
-open.
+its number. So an `Mx` written anywhere outside `docs/ROADMAP.md` — a
+bullet above, a sentence in a `.MD`, a `// TODO(Mx):` marker — is a
+reference that renumbering can silently invalidate. **Resolve one
+against `docs/ROADMAP.md` before trusting it**, and when the milestone it
+names is Done but the work it describes plainly is not, the marker is
+stale: retarget it to the milestone that will actually do the work, in
+whatever task next has that file open. A marker naming a Done milestone
+reads as "already shipped" to every session after it.
 
 ## Commands
 
@@ -1044,10 +1048,23 @@ tree, not just over what it touched, and every hit that no longer
 resolves to what its sentence claims is re-pointed before the milestone
 is handed to the Milestone Reviewer. Resolving a hit means opening the
 file at the line and checking the sentence, not checking that the file
-still exists. Every site P-48 repaired — three in
+still exists.
+
+**That sweep is a subtask, not a thing to remember.** A rule stated only
+as a paragraph here is a rule nobody is assigned, and it has already been
+missed once: it did not run at the end of M10, and P-68 later found stale
+citations in three ADRs. So when the Task writer writes the task for a
+milestone's **last** sub-milestone, it adds a final Order Plan line for
+the sweep — "run the `.rs:` citation sweep over `docs` and `CLAUDE.md`" —
+so it is a line with a status marker that somebody has to move. Almost
+every hit lands in a file only the Architect may write, which makes the
+sweep normally a `For: Architect` subtask; when it falls inside a Coder
+task instead, the Coder runs the grep and files what it finds, since it
+may not re-point an ADR itself. Every site P-48 repaired — three in
 `docs/adr/0004-acid-scope.md`, one in `docs/adr/0012-bounded-lock-waits.md`
 and two in `docs/adr/0013-version-identity-and-lifetime.md` — was correct
-when written and stale by the end of M10.
+when written and stale by the end of M10, and P-68 repaired the same
+files again for the same reason.
 
 **A historical passage carries no line numbers.** An ADR's Context
 describes the tree as it was when the decision was taken, and once the

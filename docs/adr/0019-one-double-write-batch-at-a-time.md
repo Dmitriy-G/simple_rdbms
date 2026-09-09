@@ -6,16 +6,20 @@ Status: Accepted
 
 ## Context
 
-`BufferPool::flush_pages` takes `BufferPool.flush_sequence`
-(`crates/storage/src/buffer.rs:635`) and holds it to the end of the
-function (`:697`): the per-page snapshot clone, the log flush to the
-batch's highest `page_lsn`, `dwb.write_batch` and its `sync_all`, every
-real `write_page`, `disk_manager.sync()`, `dwb.clear_batch` and its
+**This section describes `crates/storage` as it stood before this
+decision was implemented**; the Decision below is what the code does now,
+so its line numbers are omitted — a historical account is not a map of
+the current tree, and a citation that resolves to something else is worse
+than none.
+
+`BufferPool::flush_pages` took `BufferPool.flush_sequence` and held it to
+the end of the function: the per-page snapshot clone, the log flush to
+the batch's highest `page_lsn`, `dwb.write_batch` and its `sync_all`,
+every real `write_page`, `disk_manager.sync()`, `dwb.clear_batch` and its
 `sync_all`, and the loop that clears each frame's `dirty_since_lsn`.
 Three device syncs, none of them bounded by anything. `acquire_free_frame`
-calls it inline when the victim it picked is dirty
-(`crates/storage/src/buffer.rs:513-523`), so it sits on the ordinary
-page-fetch path, not on a background one.
+called it inline when the victim it picked was dirty, so it sat on the
+ordinary page-fetch path, not on a background one.
 
 This looks exactly like the defect ADR 0014, ADR 0016 and ADR 0018 each
 fixed one layer above: a lock taken for a short logical operation and held
@@ -102,9 +106,9 @@ what `flush_sequence` may cost a caller.
 **(a) A fetch that did not come to write does not queue behind one that
 did — while the pool has a clean frame to give it.** Half of this already
 holds: a clean victim is evicted with no flush and no
-`flush_sequence` at all (`crates/storage/src/buffer.rs:516`). What does not
-hold is victim *choice*. `LruKReplacer::evict`
-(`crates/storage/src/replacer.rs:56-80`) ranks purely by LRU-K recency, so
+`flush_sequence` at all (`crates/storage/src/buffer.rs:559-566`). What
+does not hold is victim *choice*. `LruKReplacer::evict_where`
+(`crates/storage/src/replacer.rs:60-80`) ranks purely by LRU-K recency, so
 a reader can be enrolled into another session's device queue while clean
 evictable frames sit in the pool untouched — and worse, a page read once
 to warm it has fewer than `k` recorded accesses and is therefore picked
@@ -123,20 +127,21 @@ checkpoint threshold.
 
 **(b) A fetch that does need a flush waits for it, but not forever.**
 ADR 0010 states that `fetch_page`/`fetch_page_read`/`new_page` may block
-"for up to `frame_wait_timeout`". That is false today: `acquire_free_frame`
-computes a deadline (`crates/storage/src/buffer.rs:458`) and honours it
-throughout its own wait loop, then leaves the loop and calls `flush_pages`,
-which waits on `flush_sequence` with no deadline at all.
+"for up to `frame_wait_timeout`". That was false when this was written:
+`acquire_free_frame` computed a deadline
+(`crates/storage/src/buffer.rs:486`) and honoured it throughout its own
+wait loop, then left the loop and called `flush_pages`, which waited on
+`flush_sequence` with no deadline at all.
 
 Decision: **the eviction path passes its remaining budget into the flush,
 and a wait that exhausts it returns `StorageError::BufferPoolWaitTimedOut
 { waited_ms }`** — the same error the frame wait itself returns
-(`crates/storage/src/buffer.rs:492`), because it means the same thing to a
+(`crates/storage/src/buffer.rs:535`), because it means the same thing to a
 caller: the pool could not give you a frame inside the window. This
 restores ADR 0010's stated bound rather than inventing a new one, and no
 new SQLSTATE is introduced. Whether that error class should be retryable —
 it maps to `OUT_OF_MEMORY` (`crates/common/src/error.rs:145`) and
-`Error::is_retryable` (`:218-226`) is false for it — is one open question
+`Error::is_retryable` (`:218-225`) is false for it — is one open question
 about one error, and both of its cases answer it the same way; it is not
 settled here.
 
@@ -155,7 +160,7 @@ argument ADR 0012 made for bounded lock waits, one layer down.
 A session that must write to a stalled device waits for that device. In
 `dispatch_never_blocks.rs`'s rollback test the pool is 8 frames
 (`crates/engine/tests/dispatch_never_blocks.rs:257`) and 40 inserts of a
-1800-byte row (`:284-287`) leave every one of them dirty, so the probe
+1800-byte row (`:283-286`) leave every one of them dirty, so the probe
 `SELECT` genuinely needs a page written before it can read one. Part 3(a)
 does not change that and is not meant to. The strong-form probe P-71
 wanted — a real `SELECT` inside the timed window — is meaningful only with

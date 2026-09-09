@@ -130,7 +130,7 @@ everyone.
 The write set belongs to the store and **not** to `txn::Transaction`,
 beside the `read_ts` and `begin_lsn` it already carries, even though that
 is the more natural home: `EngineShared::run`
-(`crates/engine/src/runtime.rs:994-1001`) hands the executors a *clone* of
+(`crates/engine/src/runtime.rs:1006-1014`) hands the executors a *clone* of
 the `Transaction`, so anything `InsertExecutor`
 (`crates/executor/src/operators/insert.rs:69-71`) recorded on
 `ExecutorContext::txn` (`crates/executor/src/context.rs:8`) would be
@@ -140,7 +140,7 @@ set for every real statement.
 **The prune rule is one watermark.** `TransactionManager` exposes the
 oldest `read_ts` among active transactions — the exact analogue of the
 `earliest_active_begin_lsn` it already computes
-(`crates/txn/src/manager.rs:121`) — and when there is no active
+(`crates/txn/src/manager.rs:172-174`) — and when there is no active
 transaction the watermark is the next timestamp to be issued, which
 prunes everything prunable. Against that watermark:
 
@@ -158,11 +158,13 @@ prunes everything prunable. Against that watermark:
   remove it on the spot, however empty it is: a scan copies a tuple's
   bytes out from under the page latch and only *then* asks `is_visible_to`
   (`crates/executor/src/operators/seq_scan.rs:38-51`; the index scan
-  checks visibility *before* reading the heap, `index_scan.rs:66-85`, so
+  checks visibility *before* reading the heap, `index_scan.rs:74-81`, so
   there the same window surfaces as a `CorruptTuple` error over a row the
   undo has already removed), while `TransactionManager::abort` undoes the
-  pages first and empties the chains after
-  (`crates/txn/src/manager.rs:94-106`), so a reader can be holding the
+  pages first and empties the chains after — `PendingAbort::undo` runs
+  between `begin_abort` and the `finish_abort` that calls
+  `abort_versions` (`crates/txn/src/manager.rs:150-159`, `:136`) — so a
+  reader can be holding the
   bytes of a row whose undo has already run. The empty chain is what makes
   that reader drop the row; "no chain" would make it yield a rolled-back
   one. The chain becomes prunable once the watermark reaches the timestamp
