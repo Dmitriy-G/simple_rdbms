@@ -30,15 +30,69 @@ wait on the engine's own worker-pool thread over an `mpsc` channel
 directly; the listener is only usable on the multi-thread `tokio` runtime
 `block_in_place` requires, which is what `main` builds it as.
 
-This subtask (M13.2 subtask 1) wires up only the startup handshake:
+This subtask (M13.2 subtask 1) wired up the startup handshake:
 `AuthenticationOk`, the fixed `ParameterStatus` set `NoopStartupHandler`'s
 default `DefaultServerParameterProvider` already sends (`server_version`,
 `client_encoding`, `DateStyle`, `TimeZone`, `integer_datetimes`,
 `standard_conforming_strings`, and a few more), `BackendKeyData`, and
-`ReadyForQuery`. `do_query` is a placeholder that answers every query
-with `Response::EmptyQuery` regardless of its text; real `RowDescription`/
-`DataRow`/`CommandComplete` handling over this same session is M13.2's
-subtask 3.
+`ReadyForQuery`.
+
+M13.2 subtask 3 fills in `do_query`: every query string runs through this
+connection's session exactly like `cli` or a `#[test]` would call
+`Database::execute`, and the resulting `engine::ResultSet` becomes
+`RowDescription`/`DataRow`/`CommandComplete` (for `Rows`) or a bare
+`CommandComplete` (for `RowsAffected`/`RolledBack`).
+`engine::ResultSet` does not say which statement produced it
+(`crates/engine/src/result_set.rs`), so `statement_keyword` reads the
+query's own leading token(s) - `"CREATE"` looks one word further, so
+`CREATE TABLE` and `CREATE INDEX` are told apart from a bare `CREATE` -
+and `to_response` uses that keyword together with the `ResultSet` variant
+to pick a tag: `INSERT 0 <n>` for `RowsAffected` after an `INSERT`, the
+keyword itself verbatim for every other `RowsAffected` (`BEGIN`, `COMMIT`,
+`CREATE TABLE`, `CREATE INDEX`), `ROLLBACK` for `ResultSet::RolledBack`,
+and `SELECT`/`EXPLAIN` for `Rows` depending on whether the leading keyword
+was `EXPLAIN`. For `Rows`, `pgwire`'s own `send_query_response`
+(`pgwire::api::query`) always appends the number of `DataRow`s actually
+streamed to whatever command tag `QueryResponse::set_command_tag` was
+given, which is exactly right for `SELECT <n>` but means an `EXPLAIN`'s
+`CommandComplete` also carries a row count - unlike real PostgreSQL, whose
+`EXPLAIN` tag has no count at all. Matching that exactly would mean
+bypassing `pgwire`'s default `on_query` and rebuilding its message
+sequence by hand; this module accepts the extra number as a known,
+harmless deviation instead.
+
+Column types ride on `engine::ResultSet::Rows`'s `column_types`
+(`crates/engine/src/result_set.rs`, plumbed from the binder in M13.2
+subtask 2) and `field_info` maps each to the fixed PostgreSQL OID the
+task called for: `Boolean` to `Type::BOOL` (16), `Integer` to `Type::INT4`
+(23), `BigInt` to `Type::INT8` (20), `Double` to `Type::FLOAT8` (701), and
+`Varchar(_)`/`None` to `Type::VARCHAR` (25) - `None` (a projection with no
+static type, e.g. a bare `NULL` literal) gets the same OID a real `NULL`
+literal column gets in PostgreSQL itself. Every field is always reported
+in **text** format (`FieldFormat::Text`): no type modifier is plumbed
+through, so a `VARCHAR`'s declared length is invisible on the wire - only
+its OID says "this is text". `encode_data_row` builds each `DataRow`'s
+bytes directly (length-prefixed UTF-8, or `-1` for a SQL `NULL`) rather
+than going through `pgwire`'s `DataRowEncoder`, since that encoder wants
+values that implement `postgres_types::ToSql`/`ToSqlText` and
+`types::Value` implements neither. `encode_value_text` is the text
+encoding for each `types::Value`: `Boolean` as `t`/`f` (PostgreSQL's own
+text booleans, not `true`/`false`), `Integer`/`BigInt`/`Double` through
+their `Display` impl, `Varchar` verbatim, and `Null` as `None` - which
+`encode_data_row` turns into the protocol's `-1`-length null marker
+rather than an empty string.
+
+A simple query carries exactly one statement:
+`sql::Parser::parse` (`crates/sql/src/parser.rs`) accepts one optional
+trailing semicolon and rejects anything after it, so a multi-statement
+simple query (`SELECT 1; SELECT 2;`) surfaces to the client as a syntax
+error rather than running both statements. This is a known limitation,
+also called out in `crates/server/README.md`.
+
+Any `common::Error` `Database::execute` returns is still wrapped in a
+generic `PgWireError::UserError` with SQLSTATE `XX000` here - the real
+per-error SQLSTATE, severity and `ReadyForQuery` transaction status are
+M13.2 subtask 4's job, not this one's.
 
 ## Key Components
 
@@ -53,9 +107,26 @@ subtask 3.
 - `ConnectionState` - private. Holds this connection's session
   (`Mutex<engine::Database>`) and implements the two `pgwire` traits that
   do the actual protocol work: `NoopStartupHandler` (no overrides - the
-  default no-authentication handshake is exactly what this subtask
-  wants) and `SimpleQueryHandler::do_query` (the `Response::EmptyQuery`
-  placeholder above).
+  default no-authentication handshake is exactly what subtask 1 wants)
+  and `SimpleQueryHandler::do_query`, which runs the query string through
+  the session (via `block_in_place`) and turns its `Result<ResultSet>`
+  into a `Vec<Response>` with `to_response`, or a generic
+  `PgWireError::UserError` on failure.
+- `to_response(query, result_set) -> Response` - private. Builds the
+  `pgwire::api::results::Response` a `ResultSet` becomes: `Response::Query`
+  (`RowDescription` + one `DataRow` per row, via `field_info` and
+  `encode_data_row`) for `Rows`, `Response::Execution` with a tag from
+  `statement_keyword` otherwise.
+- `statement_keyword(sql) -> String` - private. The query's leading
+  keyword, upper-cased; `CREATE` looks one further word ahead so
+  `CREATE TABLE`/`CREATE INDEX` read as two-word keywords.
+- `field_info(name, data_type) -> FieldInfo` - private. Maps an
+  `Option<types::DataType>` to the `FieldInfo` `RowDescription` needs,
+  always in text format.
+- `encode_data_row(tuple) -> DataRow` - private. Encodes one `types::Tuple`
+  as a wire `DataRow`, via `encode_value_text`.
+- `encode_value_text(value) -> Option<String>` - private. The text-format
+  encoding of one `types::Value`; `None` means SQL `NULL`.
 - `ConnectionHandlers` - private. The `pgwire::api::PgWireServerHandlers`
   a connection is served with; both of its methods return a clone of the
   same `Arc<ConnectionState>`, so `startup_handler` and
@@ -82,3 +153,7 @@ it, and spawns `serve` as a task on that runtime; `crates/server/tests/wire_star
 drives the same function against an ephemeral `127.0.0.1:0` listener and
 a `tempfile` database, and proves the handshake completed by connecting
 with `tokio_postgres` and observing a successful `connect()`.
+`crates/server/tests/wire_simple_query.rs` drives the same listener with
+`tokio_postgres::Client::simple_query`, proving `CREATE TABLE`, `INSERT`,
+`SELECT`, `BEGIN`/`COMMIT` and `EXPLAIN` all round-trip through this
+module's `RowDescription`/`DataRow`/`CommandComplete` handling.
