@@ -4,12 +4,16 @@ A single open connection to a database. This used to own the catalog,
 buffer pool, and transaction manager directly and run every statement
 itself; as of M13.1 (`docs/ROADMAP.md`) it is a thin, ergonomic wrapper
 around `runtime::EngineHandle`/`runtime::SessionHandle` (`runtime.MD`),
-which do the real work on one dedicated engine thread reached by message
-passing. `Database`'s own public surface - every method's signature and
-observable behavior - is unchanged from before the split: `cli`, both
-crash-injection harnesses, `flush_poisoning.rs`, `database_lock.rs`, and
-every other `crates/engine/tests/*` file construct and drive it exactly
-as they always have, with no idea an engine thread exists underneath.
+reached by message passing. A dedicated dispatch thread routes those
+messages, but the statement itself runs on `runtime::worker_pool::WorkerPool`'s
+fixed eight-thread pool (M10.2, `runtime.MD`/`worker_pool.MD`), so two
+sessions' statements genuinely run at the same time rather than being
+serialized behind one thread. `Database`'s own public surface - every
+method's signature and observable behavior - is unchanged from before
+the split: `cli`, both crash-injection harnesses, `flush_poisoning.rs`,
+`database_lock.rs`, and every other `crates/engine/tests/*` file
+construct and drive it exactly as they always have, with no idea a
+dispatch thread or a worker pool exists underneath.
 
 ## Key Components
 
@@ -40,20 +44,26 @@ as they always have, with no idea an engine thread exists underneath.
   the crash-injection harness (`crash_injection.MD`) and
   `flush_poisoning.MD`.
 - `Database::execute(&mut self, sql) -> Result<ResultSet>` - forwards to
-  `SessionHandle::execute`, which sends the statement to the engine
-  thread and blocks on its reply. Still takes `&mut self` even though
+  `SessionHandle::execute`, which sends the statement to the engine as an
+  `EngineMessage::Execute` and blocks on its reply; the dispatch thread
+  only routes that message, submitting the actual work to
+  `worker_pool::WorkerPool` so a worker thread runs it (M10.2,
+  `runtime.MD`/`worker_pool.MD`). Still takes `&mut self` even though
   nothing here is mutated directly anymore (all the state `execute` used
-  to touch now lives on the engine thread) - changing the signature would
-  violate this module's one hard rule, so the receiver stays `&mut` for a
-  binding compatibility that no longer reflects an actual borrow need.
+  to touch now lives in the engine's shared, thread-safe state
+  (`EngineShared`), reached by whichever worker thread runs the
+  statement) - changing the signature would violate this module's one
+  hard rule, so the receiver stays `&mut` for a binding compatibility
+  that no longer reflects an actual borrow need.
 - `Database::close(self) -> Result<()>` - forwards to
   `SessionHandle::checkpoint_and_flush`: a final checkpoint, every
   write-ahead log record forced to disk, every dirty page flushed, and
-  the file synced, run on the engine thread and awaited here so errors
-  are still reported to the caller exactly as before - see
-  `runtime.MD`'s `EngineState::checkpoint_and_flush`.
+  the file synced, run on a worker pool thread (the dispatch thread only
+  submits the `Checkpoint` message's work) and awaited here so errors are
+  still reported to the caller exactly as before - see `runtime.MD`'s
+  `EngineState::checkpoint_and_flush`.
 - `Database::connect(&self) -> Result<Self>` - opens a second session on
-  the same engine thread via `SessionHandle::connect`, sharing the same
+  the same engine via `SessionHandle::connect`, sharing the same
   `Arc<runtime::EngineHandle>` and therefore the same catalog, buffer pool,
   and transaction manager. This is how `crates/engine/tests/sessions.rs`
   drives more than one connection against one database without exposing
@@ -69,8 +79,10 @@ as they always have, with no idea an engine thread exists underneath.
   `execute`'s own `EngineUnavailable` would have surfaced first on any real
   workload.
 - `impl Drop for Database` - forwards to `SessionHandle::best_effort_flush`,
-  which blocks on the engine thread's reply so the flush this used to do
-  synchronously (before any thread existed to hand it to) still completes
+  which blocks on the engine's reply (the flush itself runs on a worker
+  pool thread, submitted the same way `close`'s checkpoint is) so the
+  flush this used to do synchronously (before any thread existed to hand
+  it to) still completes
   before `Database::drop` returns. Skips the flush entirely once the pool
   is poisoned, and swallows any other error - there is nowhere to report
   one from `Drop` - matching the pre-split behavior exactly; see
@@ -137,5 +149,5 @@ per statement the REPL reads; `crates/engine/tests/*` drive the same
 public API against real and fault-injecting devices to prove the
 transaction, recovery, and checkpoint behavior `runtime.MD` documents
 actually holds. Every one of them still only ever sees `Database` - the
-engine thread and its message-passing protocol are entirely internal to
-this crate.
+dispatch thread, the worker pool, and the message-passing protocol
+between them are entirely internal to this crate.

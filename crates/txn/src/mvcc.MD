@@ -97,4 +97,4 @@ let visible = chain.visible_version(1);
 `version_store::VersionStore` is the only caller: every `VersionChain` a
 running process holds lives inside one of its per-`Rid` map entries, and
 `executor`'s scan operators reach this type only indirectly, through
-`VersionStore::is_visible`/`is_visible_to`.
+`VersionStore::is_visible_to`.

@@ -35,7 +35,7 @@ built `ExecutorContext`.
   A inserts a row and rolls back; neither a later statement on the same
   session nor a fresh session ever sees it. `TransactionManager::abort`'s
   WAL undo removes the row from the heap page itself, so this does not
-  depend on `VersionStore::is_visible`'s "no chain for this `Rid`" default
+  depend on `VersionStore::is_visible_to`'s "no chain for this `Rid`" default
   ever being asked about a `Rid` with no physical tuple behind it
   (`txn::version_store.MD`'s open question on `abort_versions` - moot here
   because the row is gone from the heap entirely, not merely absent from

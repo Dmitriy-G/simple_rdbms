@@ -31,8 +31,10 @@ A single unit of work: the state the `TransactionManager` and
   `TransactionManager`'s shared timestamp counter at the moment it began,
   so it sees exactly the versions committed before it started and nothing
   committed after - a snapshot-isolation scan
-  (`txn::VersionStore::is_visible`) is driven by this field, not by
-  `begin_lsn`, which is a WAL position rather than an MVCC timestamp.
+  (`txn::VersionStore::is_visible_to`, which also takes the reader's own
+  `txn_id` so a writer sees its own uncommitted rows) is driven by this
+  field, not by `begin_lsn`, which is a WAL position rather than an MVCC
+  timestamp.
 - `Transaction::new(txn_id, isolation_level, begin_lsn, read_ts) -> Self` -
   begins a new transaction with the given id, isolation level, `Begin`
   LSN, and snapshot timestamp, in the `Growing` state.

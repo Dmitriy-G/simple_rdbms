@@ -12,17 +12,22 @@ about `planner`); `engine` is the only place that does.
 ## Key Components
 
 - `Database` - a thin, ergonomic wrapper around one session of the engine
-  thread described below; opens, closes, and executes SQL against a
-  single database with a public surface unchanged since before M13.1
-  split the engine out onto its own thread. See `database.MD`.
+  described below; opens, closes, and executes SQL against a single
+  database with a public surface unchanged since before M13.1 split the
+  engine out behind its own dispatch thread. See `database.MD`.
 - `runtime` - private module. `EngineHandle`/`SessionHandle` and the
   message-passing protocol between them: the engine-wide state (catalog,
   buffer pool, transaction manager) and per-session state (the explicit
   transaction slot, its span, the statement counter) that used to live
-  together on `Database` now run on one dedicated engine thread reached
-  by message passing, so that a future multi-connection frontend can
+  together on `Database` now live behind a dedicated dispatch thread
+  reached by message passing - so that a multi-connection frontend can
   drive many sessions through one engine without sharing mutable state
-  across real threads. See `runtime.MD`.
+  across real threads directly - with each statement itself run on
+  `worker_pool::WorkerPool`'s fixed eight-thread pool rather than on the
+  dispatch thread (M10.2, `docs/ROADMAP.md`), so two sessions' statements
+  genuinely execute concurrently. `Database::connect` is that future
+  arrived: every `crates/engine/tests/sessions.rs` test drives more than
+  one session through the same engine today. See `runtime.MD`.
 - `ResultSet` - the result of executing one SQL statement. See
   `result_set.MD`.
 - `build_executor` - lowers a `planner::PhysicalPlan` into an `executor`

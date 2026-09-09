@@ -17,13 +17,18 @@ exactly once at the boundary it owns (`Database::open`/`Database::execute`
 - see CLAUDE.md's "log at the boundary" rule).
 
 As of M13.1 (`docs/ROADMAP.md`), `Database` is a thin wrapper around one
-session of a dedicated engine thread (`runtime.rs`) reached by message
-passing, rather than doing the work itself on whatever thread calls it -
-see `runtime.MD` for the full design and why it's a thread, not a lock,
-that makes this safe. `Database`'s own public surface is unchanged by
-this; the three-step open sequence below now runs inside
-`runtime::EngineHandle::open`/`open_with_devices`, still synchronously on
-the calling thread, before the engine thread is ever spawned.
+session of the engine (`runtime.rs`) reached by message passing, rather
+than doing the work itself on whatever thread calls it - see `runtime.MD`
+for the full design and why it's a thread, not a lock, that makes this
+safe. A dedicated dispatch thread routes those messages, but since M10.2
+(`docs/ROADMAP.md`) each statement's actual work runs on
+`worker_pool::WorkerPool`'s fixed eight-thread pool instead of on the
+dispatch thread itself, so two sessions' statements execute concurrently
+rather than being serialized behind one thread. `Database`'s own public
+surface is unchanged by this; the three-step open sequence below now runs
+inside `runtime::EngineHandle::open`/`open_with_devices`, still
+synchronously on the calling thread, before the dispatch thread is ever
+spawned.
 
 `Database::open` runs a fixed three-step sequence, in this order, and the
 order is forced rather than incidental:
@@ -77,14 +82,16 @@ was (`Database::handle_explain`, `database.MD`).
 ## Key Components
 
 - `database` - `Database`, a thin wrapper around one session of the
-  engine thread; opens, closes, and executes SQL against a single
-  database with a public surface unchanged since before the M13.1 split.
-  See [database.MD](src/database.MD).
-- `runtime` - `EngineHandle`/`SessionHandle` and the engine thread they
+  engine; opens, closes, and executes SQL against a single database with
+  a public surface unchanged since before the M13.1 split. See
+  [database.MD](src/database.MD).
+- `runtime` - `EngineHandle`/`SessionHandle` and the dispatch thread they
   reach by message passing; owns the catalog, buffer pool, and
   transaction manager (engine-wide) plus one `SessionState` per
   connection (the explicit-transaction slot, its span, the statement
-  counter). Private to the crate. See [runtime.MD](src/runtime.MD).
+  counter). The dispatch thread only routes messages - each statement's
+  work is submitted to `worker_pool::WorkerPool` and runs on one of its
+  worker threads. Private to the crate. See [runtime.MD](src/runtime.MD).
 - `result_set` - `ResultSet`, the result of executing one SQL statement.
   See [result_set.MD](src/result_set.MD).
 - `executor_factory` - `build_executor`, lowers a `planner::PhysicalPlan`
@@ -129,7 +136,7 @@ mostly inherited from the layers `engine` assembles, not added here: no
 no composite/multi-column indexes, and no cost-based optimization
 choosing *among* multiple viable access paths (M23.2 - `IndexScanRule`
 picks an index whenever one applies, but has no cost model for picking
-among several). M13.1's engine thread (`runtime.MD`) lets multiple
+among several). M13.1's dispatch thread (`runtime.MD`) lets multiple
 sessions connect; M10.2 lets their statements execute concurrently on a
 worker pool rather than one at a time: the one-transaction-at-a-time
 restriction and its FIFO park queue are gone, along with `55P03` from a

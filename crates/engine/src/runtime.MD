@@ -181,7 +181,9 @@ level, so this is every transaction's level; a writer (`InsertExecutor`)
 is unaffected, since it takes its table and row locks unconditionally
 regardless of isolation level (`executor::operators::insert.MD`), but a
 reader (`SeqScanExecutor`/`IndexScanExecutor`) now takes none at all and
-instead checks `txn::VersionStore::is_visible` against its own `read_ts`
+instead checks `txn::VersionStore::is_visible_to` against its own
+`read_ts`, passing its own `reader_txn_id` as well so a writer sees its
+own uncommitted rows
 (`executor::operators::seq_scan.MD`/`index_scan.MD`,
 `crates/executor/tests/snapshot_visibility.MD`). `run` (below) is what
 threads the shared `Arc<txn::VersionStore>` a scan needs into its
@@ -209,19 +211,23 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `None` - see `EngineShared::execute_impl`).
   `TxnSlot::txn_id(self) -> Option<TxnId>` - private; `None` and
   `TimedOut` both answer `None`, `Active`/`Aborted` both answer `Some`.
-- `SessionState` - private. Everything per-connection: `session_id` (a
-  copy of this session's own key), `txn_slot`, `txn_span:
-  Option<tracing::Span>` (the current explicit transaction's span - `None`
-  under autocommit), `conn_span: tracing::Span` (this session's own span -
-  a plain `Span`, not an entered guard, since more than one worker thread
-  services sessions over time and none can hold a span-stack entered
-  continuously; see `EngineShared::execute` for how it gets (re-)entered
-  per request), `next_stmt_id` (per-connection, not process-wide), and
-  `idle_since: Option<Instant>` (when this session's current explicit
-  transaction last went quiet - `Some` only while `txn_slot` holds an
-  active transaction and no statement is in flight; set at the end of
-  every `EngineShared::execute` call, read by `expire_idle_transaction`).
-  `SessionState::new(session_id, conn_span)` - starts with `txn_slot:
+- `SessionState` - private. Everything per-connection: `txn_slot`,
+  `txn_span: Option<tracing::Span>` (the current explicit transaction's
+  span - `None` under autocommit), `conn_span: tracing::Span` (this
+  session's own span - a plain `Span`, not an entered guard, since more
+  than one worker thread services sessions over time and none can hold a
+  span-stack entered continuously; see `EngineShared::execute` for how it
+  gets (re-)entered per request), `next_stmt_id` (per-connection, not
+  process-wide), and `idle_since: Option<Instant>` (when this session's
+  current explicit transaction last went quiet - `Some` only while
+  `txn_slot` holds an active transaction and no statement is in flight;
+  set at the end of every `EngineShared::execute` call, read by
+  `expire_idle_transaction`). It carries no `session_id` field of its
+  own - the dispatch thread's session table keys each `SessionState` by
+  its `SessionId`, and callers that need the id (`expire_idle_session`,
+  `disconnect_session`) take it as a separate argument alongside the
+  state.
+  `SessionState::new(conn_span)` - starts with `txn_slot:
   TxnSlot::None`, no `txn_span`, `next_stmt_id: 1`, and no `idle_since`.
   Every live `SessionState` is reached through an `Arc<Mutex<SessionState>>`
   in the dispatch thread's session table, since a worker thread running
@@ -614,9 +620,12 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   manager, and cloning each `Arc` is just a refcount bump, so together
   they're the *only* borrow the executor ever needs - this is what keeps
   a possibly-long-running scan from holding `txn_manager` for its whole
-  duration), then takes a `catalog` read lock spanning `ExecutorContext`
-  construction and the entire `init`/`next` loop, since `ExecutorContext`
-  borrows `&Catalog` for as long as the executor runs. The same shared
+  duration), then passes `&self.catalog` straight into `ExecutorContext::new`
+  alongside them - no engine-level lock is taken or held across
+  `ExecutorContext` construction or the `init`/`next` loop; `Catalog` is
+  a live, internally synchronized object for the `Database`'s whole
+  lifetime, not something a statement locks for its duration
+  (`docs/adr/0014-catalog-is-a-live-shared-object.md`). The same shared
   `LockManager` every transaction against this database locks and unlocks
   through is what lets one session's
   `SeqScanExecutor`/`IndexScanExecutor`/`InsertExecutor` (`executor`'s own
