@@ -14,7 +14,7 @@ carry a query string (and, for the extended protocol, bound parameter
 values) to and a result set back from this module.
 
 Each accepted TCP connection gets its own `engine::Database` session, via
-`Database::connect()` (`crates/engine/src/database.rs:47`) on the shared
+`Database::connect()` (`crates/engine/src/database.rs:49`) on the shared
 `Arc<Database>` `main` hands to `serve`. A session is not `Clone` and its
 `execute` takes `&mut self`, but the `pgwire` handler traits this module
 implements are called through `&self` - the same shared handler instance

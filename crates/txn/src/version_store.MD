@@ -74,7 +74,7 @@ which executors actually call it.
   process's MVCC bookkeeping and is visible to everyone; if an aborted-
   and-emptied chain were dropped here, a reader could still be holding a
   copy of the row's bytes it read from the heap before
-  `TransactionManager::abort`'s undo ran (`crates/txn/src/manager.rs:86-97`,
+  `TransactionManager::abort`'s undo ran (`crates/txn/src/manager.rs:150-159`,
   `crates/executor/src/operators/seq_scan.rs:38-51`), and would then find
   no chain at all for that `Rid` and treat the row as visible to
   everyone. Keeping the (now empty) chain means
