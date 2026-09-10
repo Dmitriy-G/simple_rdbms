@@ -109,7 +109,10 @@ was (`Database::handle_explain`, `database.MD`).
 re-exported from `types` rather than duplicated, so `cli` — which may
 depend only on `engine` and `common` per the workspace's dependency-edge
 rules — can name the types `ResultSet`'s rows are made of without
-depending on `types` directly.
+depending on `types` directly. `Column` and `Schema` (M13.4) are
+re-exported from `catalog` the same way, so `server` (also `engine`- and
+`common`-only) can name the types `Database::table_schema` returns
+without a disallowed `server -> catalog` edge.
 
 ## Features
 

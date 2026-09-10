@@ -21,6 +21,9 @@ as `wire_simple_query.rs`.
 - `only_row(messages) -> &SimpleQueryRow` - private. Asserts a
   `simple_query` response carries exactly one `SimpleQueryMessage::Row`
   and returns it, for tests that expect a single-row answer.
+- `row_count(messages) -> usize` - private. Counts the
+  `SimpleQueryMessage::Row` entries in a `simple_query` response, for
+  tests that only need to know how many rows came back.
 - `select_version_lowercase_answers_a_postgresql_version_string` -
   `select version()` answers one row whose `version` column starts with
   `PostgreSQL `.
@@ -33,6 +36,23 @@ as `wire_simple_query.rs`.
   and fails with its ordinary `42601 syntax_error`, exactly as it would
   without this module in the path at all; a version-like answer is never
   invented for something that wasn't actually recognized.
+- `pg_class_lists_a_created_table` - after `CREATE TABLE t (a INTEGER)`, a
+  `pg_class` query returns exactly one row naming `t`, `relkind = 'r'`,
+  and `relnamespace = '2200'` (the fixed `public` oid).
+- `pg_class_filtered_by_a_missing_relname_returns_zero_rows` - the same
+  table, but `SELECT relname FROM pg_catalog.pg_class WHERE relname =
+  'missing'` (using the `pg_catalog.`-prefixed relation name, proving
+  `relation_matches` accepts both forms) returns zero rows rather than an
+  error or a fabricated one.
+- `pg_namespace_lists_public_and_pg_catalog` - `SELECT oid, nspname FROM
+  pg_namespace` with no table created at all still answers exactly two
+  rows, `public` and `pg_catalog`, since the two fixed namespaces always
+  exist regardless of what tables this database has.
+- `pg_class_reports_the_same_oid_for_a_table_across_two_queries` - two
+  separate `pg_class` queries for the same table's `oid` (in two separate
+  `simple_query` round trips) return the same value, proving
+  `table_oid`'s hash-based oid is deterministic per name rather than
+  computed differently each time.
 
 ## Usage Example
 

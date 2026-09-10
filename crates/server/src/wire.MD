@@ -113,7 +113,10 @@ under the same session lock every other query path takes, before
 `pg_type` in later M13.4 subtasks) never reaches `sql::Parser` at all -
 that grammar has no notion of any `pg_*` relation and would fail every one
 of them with `42P01 undefined_table`, which is exactly what killed a real
-client's connection before this subtask. `answer`'s `Some(Introspection)`
+client's connection before this subtask. `db.table_names()`/
+`db.table_schema` reach `pg_catalog::answer` through the same
+`&Database` the caller already holds under the session lock - no second
+lock, no reentrant call into `Database::execute`. `answer`'s `Some(Introspection)`
 becomes a `Response::Query` via `introspection_response`, built the same
 way `to_response` builds an ordinary `SELECT`'s response - `FieldInfo` per
 `Introspection::columns` entry (`FieldFormat::Text`, since the simple

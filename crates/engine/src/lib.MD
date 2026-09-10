@@ -39,6 +39,15 @@ about `planner`); `engine` is the only place that does.
   may depend only on `engine` and `common`, per the workspace's
   dependency-edge rules) can name the types `ResultSet`'s rows are made of
   without depending on `types` directly.
+- `Column`, `Schema` - re-exported from `catalog` (M13.4), so `server`
+  (which may depend only on `engine` and `common`) can name the types
+  `Database::table_schema` returns - `Schema::columns() -> &[Column]`,
+  each `Column { name, data_type, nullable }` - without a disallowed
+  `server -> catalog` dependency edge. Added alongside M13.4 subtask 2's
+  `pg_namespace`/`pg_class` recognizers so the one crate-boundary change
+  is reviewed once; `server::pg_catalog`'s subtask-3 `pg_attribute`
+  recognizer is the first caller that actually reads a table's columns
+  through it.
 
 ## Usage Example
 

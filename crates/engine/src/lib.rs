@@ -7,6 +7,7 @@ mod runtime;
 mod statement_description;
 mod worker_pool;
 
+pub use catalog::{Column, Schema};
 pub use database::Database;
 pub use result_set::ResultSet;
 #[cfg(feature = "test-util")]
