@@ -398,6 +398,88 @@ fn answer_pg_type(normalized: &str) -> Option<Introspection> {
     })
 }
 
+fn is_pg_relation(token: &str) -> bool {
+    token.strip_prefix("pg_catalog.").unwrap_or(token).starts_with("pg_")
+}
+
+fn select_list(normalized: &str) -> Option<&str> {
+    let rest = normalized.strip_prefix("select ")?;
+    let idx = rest.find(" from ")?;
+    Some(rest[..idx].trim())
+}
+
+fn split_select_items(select_list: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut start = 0;
+    for (idx, c) in select_list.char_indices() {
+        if in_string {
+            if c == '\'' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '\'' => in_string = true,
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                items.push(select_list[start..idx].trim());
+                start = idx + 1;
+            }
+            _ => {}
+        }
+    }
+    items.push(select_list[start..].trim());
+    items
+}
+
+fn is_simple_identifier(item: &str) -> bool {
+    !item.is_empty()
+        && item.split('.').all(|part| {
+            !part.is_empty()
+                && part.chars().enumerate().all(|(idx, c)| {
+                    if idx == 0 {
+                        c.is_ascii_alphabetic() || c == '_'
+                    } else {
+                        c.is_ascii_alphanumeric() || c == '_'
+                    }
+                })
+        })
+}
+
+fn select_item_name(item: &str) -> String {
+    if let Some(pos) = item.rfind(" as ") {
+        let alias = item[pos + " as ".len()..].trim();
+        if !alias.is_empty() {
+            return alias.to_string();
+        }
+    }
+    if item != "*" && is_simple_identifier(item) {
+        return item.rsplit('.').next().unwrap_or(item).to_string();
+    }
+    "?column?".to_string()
+}
+
+fn select_list_columns(normalized: &str) -> Vec<(String, Type)> {
+    let Some(list) = select_list(normalized) else {
+        return vec![("?column?".to_string(), Type::VARCHAR)];
+    };
+    split_select_items(list)
+        .into_iter()
+        .map(|item| (select_item_name(item), Type::VARCHAR))
+        .collect()
+}
+
+fn answer_unrecognized_pg_relation(normalized: &str) -> Option<Introspection> {
+    let relation = relation_after_from(normalized)?;
+    if !is_pg_relation(relation) {
+        return None;
+    }
+    Some(Introspection { columns: select_list_columns(normalized), rows: Vec::new() })
+}
+
 pub fn answer(db: &Database, sql: &str) -> Option<Introspection> {
     let normalized = normalize(sql);
     if is_select_version(&normalized) {
@@ -416,6 +498,9 @@ pub fn answer(db: &Database, sql: &str) -> Option<Introspection> {
         return Some(introspection);
     }
     if let Some(introspection) = answer_pg_type(&normalized) {
+        return Some(introspection);
+    }
+    if let Some(introspection) = answer_unrecognized_pg_relation(&normalized) {
         return Some(introspection);
     }
     None

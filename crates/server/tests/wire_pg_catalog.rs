@@ -222,3 +222,41 @@ async fn pg_type_reports_int4_and_zero_rows_for_an_unknown_typname() {
         .expect("pg_type query succeeds");
     assert_eq!(row_count(&unknown), 0);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unrecognized_pg_relation_answers_zero_rows_with_its_own_select_list_columns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_unrecognized.db").await;
+
+    let indexes = client
+        .simple_query("SELECT indexrelid, indisunique FROM pg_index WHERE indrelid = 1")
+        .await
+        .expect("pg_index query succeeds without reaching the engine");
+    let SimpleQueryMessage::RowDescription(columns) = &indexes[0] else {
+        panic!("expected a RowDescription first, got {:?}", indexes[0]);
+    };
+    assert_eq!(
+        columns.iter().map(|c| c.name()).collect::<Vec<_>>(),
+        vec!["indexrelid", "indisunique"]
+    );
+    assert_eq!(row_count(&indexes), 0);
+
+    let settings = client
+        .simple_query("SELECT * FROM pg_catalog.pg_settings")
+        .await
+        .expect("pg_settings query succeeds without erroring");
+    assert_eq!(row_count(&settings), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_query_against_a_real_missing_table_still_fails_as_undefined() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_missing_table.db").await;
+
+    let err = client
+        .simple_query("SELECT * FROM nosuchtable")
+        .await
+        .expect_err("a non pg_ relation that does not exist must still be a real error");
+    let db_error = err.as_db_error().expect("expected a database error, not a connection failure");
+    assert_eq!(db_error.code().code(), "42P01");
+}

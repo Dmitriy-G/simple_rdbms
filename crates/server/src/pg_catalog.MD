@@ -3,16 +3,18 @@
 Intercepts the introspection queries a real PostgreSQL client library sends
 before it will trust a connection - `select version()`, `pg_namespace`,
 `pg_class` (M13.4 subtask 2), `pg_attribute` and `pg_type` (M13.4
-subtask 3), and (a later subtask of `docs/ROADMAP.md`'s M13.4) anything
-else starting `pg_` - and answers them from this engine's own live
-catalog rather than letting them reach `sql::Parser`, which knows nothing
-about any relation named `pg_*` and would fail every one of them with
-`42P01 undefined_table`, killing the client's connection before its first
-real statement. `crates/server/src/wire.rs` calls `answer` at the very
-front of `SimpleQueryHandler::do_query`, ahead of
-`intercept_set_show_reset`, so a recognized introspection query never
-reaches `engine::Database::execute` at all; an unrecognized query falls
-through unchanged.
+subtask 3), and any other `pg_`-named relation at all (M13.4 subtask 4) -
+and answers them from this engine's own live catalog rather than letting
+them reach `sql::Parser`, which knows nothing about any relation named
+`pg_*` and would fail every one of them with `42P01 undefined_table`,
+killing the client's connection before its first real statement.
+`crates/server/src/wire.rs` calls `answer` at the very front of
+`SimpleQueryHandler::do_query`, ahead of `intercept_set_show_reset`, so a
+recognized introspection query never reaches `engine::Database::execute`
+at all; a query whose `FROM` names something that is neither `pg_`-prefixed
+nor one of this module's own recognized shapes falls through unchanged -
+`SELECT * FROM nosuchtable` still reaches the engine and still fails with
+a real `42P01`, exactly as it would if this module did not exist.
 
 This module also carries `pg_type_of`/`field_info` (moved here from
 `wire.rs` in M13.4 subtask 3, `pub(crate)` since `wire.rs`'s own
@@ -23,12 +25,19 @@ every recognizer that reports a real column's type reuses, so
 can never disagree about what oid a given `DataType` maps to.
 
 This module never fabricates a row for data the engine doesn't have:
-where nothing backs an answer, the answer is zero rows (M13.4 subtask 4),
-never an invented value. It is deliberately brittle text matching against
-a normalized query string, not a real SQL parser - `sql`'s own grammar
-has no notion of `pg_catalog` relations at all, and teaching it one is out
-of scope here (`docs/ROADMAP.md`'s M24 is where real `pg_catalog` tables,
-answered through actual joins, eventually replace this module).
+where nothing backs an answer, the answer is zero rows - the general
+fallback `answer_unrecognized_pg_relation` (M13.4 subtask 4) is where that
+principle is most visible, since it recognizes the *shape* of any
+`pg_`-prefixed relation without knowing anything at all about what it
+means, and answers zero rows of whatever columns the query itself asked
+for rather than guessing at either. It is deliberately brittle text
+matching against a normalized query string, not a real SQL parser -
+`sql`'s own grammar has no notion of `pg_catalog` relations at all, and
+teaching it one is out of scope here (`docs/ROADMAP.md`'s M24 is where
+real `pg_catalog` tables, answered through actual joins, eventually
+replace this module - `answer_unrecognized_pg_relation` most of all, since
+it is the one recognizer here that answers correctly only by coincidence
+of always saying "nothing").
 
 ## Key Components
 
@@ -54,7 +63,8 @@ answered through actual joins, eventually replace this module).
   is sufficient for every recognized shape this module matches.
 - `answer(db, sql) -> Option<Introspection>` - normalizes `sql` and tries
   each recognizer in turn (`select version()`, then `pg_namespace`, then
-  `pg_class`, then `pg_attribute`, then `pg_type`), returning the first
+  `pg_class`, then `pg_attribute`, then `pg_type`, then the
+  `answer_unrecognized_pg_relation` catch-all), returning the first
   match's `Introspection` or `None` when nothing recognizes it, in which
   case the caller runs the query through the engine exactly as before.
 - `is_select_version(normalized)` - private, pure. `true` for
@@ -186,6 +196,50 @@ answered through actual joins, eventually replace this module).
   real PostgreSQL type name this engine doesn't model - answers zero rows
   rather than an error, exactly like `answer_pg_class`'s `relname` filter
   does for a table that doesn't exist.
+- `is_pg_relation(token) -> bool` - private, pure. `true` for a `FROM`
+  token that is `pg_`-prefixed, either bare (`pg_index`) or
+  `pg_catalog.`-prefixed (`pg_catalog.pg_settings`); the guard for
+  `answer_unrecognized_pg_relation` below, run only after every specific
+  recognizer above has already had first refusal.
+- `select_list(normalized) -> Option<&str>` - private, pure. The raw text
+  between a leading `select ` and the first ` from `, trimmed; `None` for
+  a query this module's `normalize` didn't produce in that shape (there
+  is always one here, since every caller of this function already matched
+  a `FROM`, but the type stays honest about it).
+- `split_select_items(select_list) -> Vec<&str>` - private, pure. Splits a
+  select list on top-level commas - tracking `(`/`)` depth and
+  single-quoted strings so a comma inside a function call's argument list
+  or a string literal is not mistaken for an item separator - and trims
+  each resulting item.
+- `is_simple_identifier(item) -> bool` - private, pure. `true` for one or
+  more `.`-joined identifier segments (`oid`, `t.relname`), each starting
+  with a letter or underscore and continuing with letters, digits or
+  underscores; `false` for anything with an operator, a function call, a
+  literal, or `*` in it.
+- `select_item_name(item) -> String` - private, pure. The column name this
+  module reports for one select-list item, per the fixed rule the module
+  header describes: an ` as <alias>` suffix names the alias; otherwise a
+  plain identifier `x` or a qualified `t.x` names `x` (the part after the
+  last `.`); anything else, `*` included, names the literal string
+  `?column?` - real PostgreSQL's own label for an unnamed projection.
+- `select_list_columns(normalized) -> Vec<(String, Type)>` - private,
+  pure. Maps every item `split_select_items` finds through
+  `select_item_name`, each column reported as `Type::VARCHAR` - the
+  column *names* matter for a driver's `RowDescription` bookkeeping, but
+  since every row set from this recognizer is empty, no cell is ever
+  actually encoded in that type.
+- `answer_unrecognized_pg_relation(normalized) -> Option<Introspection>` -
+  private. The M13.4 subtask 4 catch-all: once every specific recognizer
+  above has passed, a `FROM` naming any other `is_pg_relation` token -
+  `pg_index`, `pg_constraint`, `pg_description`, `pg_proc`,
+  `pg_settings`, or anything else starting `pg_` - answers zero rows with
+  columns named from the query's own select list
+  (`select_list_columns`), rather than reaching `sql::Parser` and failing
+  with `42P01 undefined_table`. A relation name that is *not* `pg_`-prefixed
+  (an ordinary missing table, `nosuchtable`) is not this recognizer's
+  concern at all - `is_pg_relation` returns `false` and `answer` falls
+  through to the engine, which reports the real `42P01` exactly as if this
+  module were not in the path.
 
 ## Usage Example
 

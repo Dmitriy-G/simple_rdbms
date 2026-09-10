@@ -68,6 +68,18 @@ as `wire_simple_query.rs`.
   row whose `oid` matches `tokio_postgres::types::Type::INT4.oid()`, and
   the same shape with `typname = 'lo'` (a real PostgreSQL type this engine
   has no `DataType` for) returns zero rows rather than an error.
+- `an_unrecognized_pg_relation_answers_zero_rows_with_its_own_select_list_columns` -
+  `SELECT indexrelid, indisunique FROM pg_index WHERE indrelid = 1`
+  answers a `RowDescription` naming exactly `indexrelid`/`indisunique`
+  (from the query's own select list, per `select_item_name`) and zero
+  rows, never reaching the engine at all; `SELECT * FROM
+  pg_catalog.pg_settings` (the `pg_catalog.`-prefixed form, with `*`)
+  likewise answers zero rows without erroring.
+- `a_query_against_a_real_missing_table_still_fails_as_undefined` -
+  `SELECT * FROM nosuchtable` is not `pg_`-prefixed, so
+  `answer_unrecognized_pg_relation` never claims it, and it still reaches
+  `sql::Parser`/the engine and fails with a real `42P01`, exactly as it
+  would if `pg_catalog` did not intercept anything.
 
 ## Usage Example
 
