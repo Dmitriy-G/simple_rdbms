@@ -9,6 +9,11 @@ services:
       # so only the host itself (or something it explicitly proxies for)
       # can reach them, not every interface the host has.
       - "127.0.0.1:9090:9090"
+      # The PostgreSQL wire listener (crates/server/src/wire.MD). Bound to
+      # loopback only, exactly like the metrics port above: there is no
+      # authentication at all until M22, so anything this port is reachable
+      # from can run arbitrary SQL as a superuser-equivalent session.
+      - "127.0.0.1:5432:5432"
     volumes:
       - simple_rdbms_data:/data
     environment:
@@ -19,6 +24,9 @@ services:
       # both together instead of the healthcheck silently probing the
       # default port forever.
       SIMPLE_RDBMS_METRICS_ADDR: ${SIMPLE_RDBMS_METRICS_ADDR:-0.0.0.0:9090}
+      # Read as a fallback by the `pgwire` listener's `--pg-addr` clap
+      # `env`, the same shape as the metrics address above.
+      SIMPLE_RDBMS_PG_ADDR: ${SIMPLE_RDBMS_PG_ADDR:-0.0.0.0:5432}
     stop_grace_period: 10s
     # The image's own filesystem is never written to at runtime - the
     # only state is /data, already a separate writable volume mount - so

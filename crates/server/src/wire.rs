@@ -160,7 +160,8 @@ fn to_response(query: &str, result_set: ResultSet) -> Response {
 }
 
 fn statement_keyword(sql: &str) -> String {
-    let mut words = sql.split_whitespace();
+    let trimmed = sql.trim().trim_end_matches(';').trim();
+    let mut words = trimmed.split_whitespace();
     let first = words.next().unwrap_or("").to_uppercase();
     if first == "CREATE" {
         if let Some(second) = words.next() {

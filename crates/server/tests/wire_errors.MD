@@ -40,6 +40,15 @@ succeeds or fails, which is the observable a client actually depends on.
   without ever reaching the engine's own table lookup; `ROLLBACK` still
   succeeds, and a `SELECT` afterward proves the connection is usable
   again.
+- `a_semicolon_terminated_begin_still_tracks_transaction_status` - the
+  same shape as the test above, but every statement carries the trailing
+  `;` a real client like `psql` always sends and `tokio_postgres`'s own
+  `simple_query` calls elsewhere in this suite never do. Proves
+  `statement_keyword`'s semicolon trim (`wire.MD`): without it, `"BEGIN;"`
+  falls through to a bare `Response::Execution` instead of
+  `Response::TransactionStart`, `ReadyForQuery`'s transaction status never
+  moves off idle, and the in-transaction failure this test checks for
+  would not be reported at all.
 
 ## Usage Example
 

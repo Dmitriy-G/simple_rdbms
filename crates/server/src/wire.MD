@@ -46,7 +46,15 @@ connection's session exactly like `cli` or a `#[test]` would call
 (`crates/engine/src/result_set.rs`), so `statement_keyword` reads the
 query's own leading token(s) - `"CREATE"` looks one word further, so
 `CREATE TABLE` and `CREATE INDEX` are told apart from a bare `CREATE` -
-and `to_response` uses that keyword together with the `ResultSet` variant
+after first trimming a single trailing `;` (and the whitespace around
+it), since `sql::Parser::parse` only ever accepts a query that reaches
+`to_response` with at most one, trailing, and a real client like `psql`
+routinely sends one (`BEGIN;`, not `BEGIN`) where `tokio_postgres`'s
+`simple_query` in this crate's own tests does not - without the trim,
+`"BEGIN;"` never matches the `"BEGIN"` arm below and is misreported as a
+bare `Response::Execution` instead of `Response::TransactionStart`, which
+also leaves `ReadyForQuery`'s transaction status wrong. `to_response`
+uses that keyword together with the `ResultSet` variant
 to pick a tag: `INSERT 0 <n>` for `RowsAffected` after an `INSERT`, the
 keyword itself verbatim for every other `RowsAffected` (`BEGIN`, `COMMIT`,
 `CREATE TABLE`, `CREATE INDEX` - `BEGIN` and `COMMIT` carry that same tag
@@ -208,8 +216,9 @@ error while in one moves it to failed" - draws no exception for it.
   `RolledBack` too, whichever of `ROLLBACK` or an aborted `COMMIT`
   produced it.
 - `statement_keyword(sql) -> String` - private. The query's leading
-  keyword, upper-cased; `CREATE` looks one further word ahead so
-  `CREATE TABLE`/`CREATE INDEX` read as two-word keywords.
+  keyword, upper-cased, after trimming a single trailing `;`; `CREATE`
+  looks one further word ahead so `CREATE TABLE`/`CREATE INDEX` read as
+  two-word keywords.
 - `field_info(name, data_type) -> FieldInfo` - private. Maps an
   `Option<types::DataType>` to the `FieldInfo` `RowDescription` needs,
   always in text format.

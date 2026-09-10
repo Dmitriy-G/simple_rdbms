@@ -16,21 +16,37 @@ database, and blocks waiting for a shutdown signal. Forcing both into one
 binary would mean those two loops fighting over what "the main loop"
 even means.
 
-There is no SQL wire protocol yet (that's `docs/ROADMAP.md`'s M13.2,
-which this crate is an explicit skeleton for) — today `server` opens a
-`Database` purely so its metrics reflect a real, running engine and its
-readiness check reflects a real, completed recovery, not because anything
-external can submit it a statement yet.
+`server` now speaks the real PostgreSQL wire protocol
+(`docs/adr/0007-postgres-wire-protocol.md`, `docs/ROADMAP.md`'s M13.2): a
+`pgwire`-backed listener on `--pg-addr` gives every accepted connection
+its own `engine::Database` session, and any client that speaks the
+protocol — `psql`, `tokio_postgres`, a JDBC driver — can run real SQL
+against it. See `src/wire.MD` for the message flow and
+`## Testing`/"Verify, don't assume" below for the automated and manual
+proof.
 
-No async runtime: this workspace has none anywhere (see the root
-`README.md`), and `metrics-exporter-prometheus`'s own built-in HTTP
-listener needs one (its `http-listener` Cargo feature pulls in `tokio`).
-Pulling in an entire async runtime for three trivial routes would be a
-far larger architectural change than the routes themselves justify, so
-this crate uses the exporter in manual-render mode
-(`PrometheusBuilder::install_recorder`, `default-features = false` on the
-dependency) and serves the result itself with a small, synchronous
-`std::net::TcpListener` loop — see `src/http.MD`.
+This crate does pull in an async runtime — `tokio`, for the `pgwire`
+listener above — which the rest of this workspace still has none of
+(`metrics-exporter-prometheus`'s own HTTP listener is deliberately kept
+on a synchronous `std::net::TcpListener` loop instead, exactly as before;
+see below). `main` builds one multi-thread `tokio::runtime::Runtime` after
+`Database::open` succeeds, spawns the `pgwire` listener on it, and shuts
+that runtime down before the final checkpoint and close — see
+`src/main.MD`. `Database::connect`/`Database::execute` are both blocking
+calls, so every handler in `src/wire.rs` that calls into the engine does
+so through `tokio::task::block_in_place`, never by blocking an async
+worker thread directly.
+
+`metrics-exporter-prometheus`'s own built-in HTTP listener needs an async
+runtime too (its `http-listener` Cargo feature pulls in `tokio`), but
+pulling one in for three trivial routes would have been a far larger
+architectural change than the routes themselves justified back when this
+crate had no other reason to need one. So this crate still uses the
+exporter in manual-render mode (`PrometheusBuilder::install_recorder`,
+`default-features = false` on the dependency) and serves the result
+itself with the same small, synchronous `std::net::TcpListener` loop —
+see `src/http.MD`. The `pgwire` listener's `tokio` runtime and this
+loop's own thread are independent of each other by design.
 
 ## Key Components
 
@@ -53,8 +69,11 @@ dependency) and serves the result itself with a small, synchronous
   graceful shutdown instead of the process just dying mid-write. See
   `src/signals.MD`.
 - `wire` - the `pgwire`-backed PostgreSQL wire protocol listener: one
-  `engine::Database` session per connection, the startup handshake today
-  (M13.2's later subtasks add the simple query protocol). See
+  `engine::Database` session per connection, the startup handshake,
+  `SELECT`/`INSERT`/`CREATE TABLE`/`CREATE INDEX`/`BEGIN`/`COMMIT`/
+  `ROLLBACK`/`EXPLAIN` over the simple query protocol,
+  `SET`/`SHOW`/`RESET` accepted before a query ever reaches the engine,
+  and a real per-error SQLSTATE and transaction status on every reply. See
   `src/wire.MD`.
 
 ## Features
@@ -64,9 +83,18 @@ writes, WAL bytes/fsyncs, double-write batches/pages restored, checkpoint
 duration/LSN, transactions committed/aborted, recovery duration/losers,
 query duration by statement kind — see `docs/ROADMAP.md`'s M13 entry),
 liveness, readiness, and graceful `SIGTERM`/`Ctrl-C` shutdown all work
-today. What doesn't: anything that lets an external client actually run a
-statement against the `Database` this binary opens — no wire protocol, no
-other network-facing route. That's M13.2, deliberately out of scope here.
+today, and so does the PostgreSQL wire protocol on `--pg-addr`: any
+`pgwire`-speaking client can open a connection, get a real
+`AuthenticationOk`/`ParameterStatus`/`ReadyForQuery` handshake (no actual
+authentication yet — that's M22), and run `CREATE TABLE`, `INSERT`,
+`SELECT`, `CREATE INDEX`, `BEGIN`/`COMMIT`/`ROLLBACK`, `EXPLAIN`, and
+`SET`/`SHOW`/`RESET` over the simple query protocol, with a real
+per-statement SQLSTATE on error and an accurate transaction status on
+every `ReadyForQuery`. See `src/wire.MD` for exactly what each message
+carries and its one known limitation (one statement per simple query
+message). What doesn't work yet: `DELETE`/`UPDATE`, multi-table joins,
+the extended query protocol (prepared statements/portals), and any
+authentication at all — see `docs/ROADMAP.md`.
 
 ## Dependencies
 
@@ -75,16 +103,22 @@ parsing, same as `cli`); `tracing`/`tracing-subscriber` (JSON logging to
 stdout — see `src/main.MD` for why stdout here and not `cli`'s stderr);
 `metrics` (the facade every instrumented crate below this one already
 calls into); `metrics-exporter-prometheus` with `default-features = false`
-(no `tokio` — see Architecture); `ctrlc` with its `termination` feature
-(catches `SIGTERM` on Unix in addition to `SIGINT`/`Ctrl-C` everywhere).
-Dev-only: `tempfile`.
+(the HTTP metrics/health listener still needs no `tokio` of its own — see
+Architecture); `ctrlc` with its `termination` feature (catches `SIGTERM`
+on Unix in addition to `SIGINT`/`Ctrl-C` everywhere); `tokio` (`rt-multi-thread`,
+`net`, `macros`, `signal` — the runtime the `pgwire` listener runs on);
+`pgwire` (wire framing and the startup/simple-query message flow; see
+`src/wire.MD`). Dev-only: `tempfile`, `tokio-postgres` (the test client
+`tests/wire_*.rs` drive the listener with).
 
 ## Configuration
 
 `--metrics-addr` (default `0.0.0.0:9090`, also readable from the
 `SIMPLE_RDBMS_METRICS_ADDR` environment variable as a fallback via clap's
-`env`) and `--health-check` (a bare flag; queries this process's own
-`/health/ready` and exits `0`/`1` - see `src/main.MD`) are the two flags
+`env`), `--pg-addr` (default `0.0.0.0:5432`, same shape via
+`SIMPLE_RDBMS_PG_ADDR` - the `pgwire` listener's address), and
+`--health-check` (a bare flag; queries this process's own
+`/health/ready` and exits `0`/`1` - see `src/main.MD`) are the flags
 beyond `cli`'s own `db_path` positional argument. The environment-variable
 fallback exists so `docker-compose.yml` can override the listener address
 and have the `HEALTHCHECK`'s own `--health-check` invocation (which reads
@@ -102,14 +136,16 @@ binary does not yet expose flags for them. Logging is controlled by
 a hand-rolled stub-crate dependency-caching stage: an eleven-crate
 workspace makes per-crate stubs fiddly to keep in sync, where cargo-chef
 computes the dependency-only build plan from `Cargo.lock` alone. The
-builder (`rust:1.85.0-slim-bookworm`) and runtime (`debian:bookworm-slim`)
+builder (`rust:1.90.0-slim-bookworm`) and runtime (`debian:bookworm-slim`)
 images are both pinned to explicit tags rather than the floating `rust:1`/
 `debian:stable-slim` aliases the Dockerfile used before, and deliberately
 share the `bookworm` Debian release so the runtime's glibc is never older
-than what the binary was linked against. `1.85.0` matches this
-workspace's `rust-version` (`Cargo.toml`, driven by `edition = "2024"`'s
-minimum supported compiler). Bump both together, deliberately, on
-purpose - not because either image floated out from under the build.
+than what the binary was linked against. `1.90.0` matches this
+workspace's `rust-version` (`Cargo.toml`) - bumped up from `1.85` in
+M13.2 because `pgwire` and one of its own dependencies require rustc
+1.89, past `edition = "2024"`'s own minimum. Bump both together,
+deliberately, on purpose - not because either image floated out from
+under the build.
 
 ## Testing
 
@@ -122,10 +158,21 @@ back when this crate had only a `[[bin]]` target and nothing under
 `tests/` could `use server::...` at all. A `#[cfg(test)]` unit test in
 `src/` is reserved for the rare case that needs access to something that
 should stay private (see CLAUDE.md's testing section); nothing in `health`
-or `http` does. Neither of these deterministic, in-process checks proves
-the container works end to end - that's what spawning the compiled binary
-as a subprocess would be for, the way `crates/cli/tests/crash_recovery.rs`
-does it, but this crate has no equivalent test today (see "Verify, don't
+or `http` does.
+
+`tests/wire_startup.rs`, `tests/wire_simple_query.rs`,
+`tests/wire_errors.rs` and `tests/wire_set_show_reset.rs` drive
+`server::wire::serve` end to end over `tokio_postgres` against an
+ephemeral `127.0.0.1:0` listener and a `tempfile`-backed
+`engine::Database`: the startup handshake, `CREATE TABLE`/`INSERT`/
+`SELECT`/`BEGIN`/`COMMIT`/`EXPLAIN` over the simple query protocol, the
+real SQLSTATE and transaction-status handling on error, and
+`SET`/`SHOW`/`RESET` respectively - see each file's own `.MD` for exactly
+what it asserts. These, together with the HTTP tests above, are
+deterministic, in-process checks; none of them proves the container works
+end to end - that's what spawning the compiled binary as a subprocess
+would be for, the way `crates/cli/tests/crash_recovery.rs` does it, but
+this crate has no equivalent automated test today (see "Verify, don't
 assume" below for the manual real-container check that fills that gap in
 the meantime). Run this crate's tests with:
 
@@ -150,3 +197,71 @@ curl http://localhost:9090/health/ready
 ```
 
 <!-- Transcript of the above, from the pinned bookworm-based images, goes here. -->
+
+The wire listener needs the same real-container proof: a unit or
+integration test only shows `tokio_postgres` round-tripping through it,
+never that an actual `psql` binary - a separate implementation of the
+client side of the protocol - is happy with what this crate sends. With
+the container above already up (`docker compose up -d`), connect from
+the host with:
+
+```sh
+psql -h 127.0.0.1 -p 5432 -U simple_rdbms -d simple_rdbms
+```
+
+This environment had no `psql` installed locally, so the run below used
+a throwaway `postgres:16-alpine` client container on the same
+`docker compose` network instead - reaching the server by its compose
+service name rather than the published loopback port, but the identical
+wire protocol either way:
+
+```sh
+docker run --rm -i --network simple_rdbms_default postgres:16-alpine \
+  psql -e -h simple_rdbms -p 5432 -U simple_rdbms -d simple_rdbms
+```
+
+(`-e` echoes each statement before its result, since `psql` only prints
+its interactive banner and prompt when standard input is itself a
+terminal, which piping the statements below into `docker run -i` does
+not provide.) Real transcript, against the image this `Dockerfile` and
+`docker-compose.yml` now build:
+
+```
+CREATE TABLE t (a INTEGER, b TEXT);
+CREATE TABLE
+INSERT INTO t VALUES (1, 'ada'), (2, 'bob');
+INSERT 0 2
+SELECT * FROM t;
+ a |  b
+---+-----
+ 1 | ada
+ 2 | bob
+(2 rows)
+
+BEGIN;
+BEGIN
+INSERT INTO t VALUES (3, 'cy');
+INSERT 0 1
+COMMIT;
+COMMIT
+SELECT * FROM t;
+ a |  b
+---+-----
+ 1 | ada
+ 2 | bob
+ 3 | cy
+(3 rows)
+
+\q
+```
+
+This run is also what caught a real bug: `wire.rs`'s `statement_keyword`
+split the query on whitespace only, so a semicolon-terminated `BEGIN;` -
+exactly what `psql` sends and what this crate's own `tokio_postgres`
+tests, which never add the semicolon, do not - never matched the
+`"BEGIN"` arm, was tagged as a bare `Response::Execution` instead of
+`Response::TransactionStart`, and left `ReadyForQuery` reporting `idle`
+through an entire transaction. Fixed by trimming a single trailing `;`
+before reading the keyword, since `sql::Parser::parse` never lets more
+than one reach this code; see `src/wire.MD` and
+`tests/wire_errors.rs`'s `a_semicolon_terminated_begin_still_tracks_transaction_status`.

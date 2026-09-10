@@ -8,7 +8,7 @@
 # `Cargo.lock`/every `Cargo.toml` alone, so it doesn't need a stub kept in
 # sync by hand for each of the eleven members, which is exactly the
 # "fiddly... sharp edges" the manual approach has at this crate count.
-ARG RUST_VERSION=1.85.0
+ARG RUST_VERSION=1.90.0
 
 FROM rust:${RUST_VERSION}-slim-bookworm AS chef
 WORKDIR /app
@@ -19,10 +19,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 # Pinned rather than latest: cargo-chef's own dependencies have crept
-# past what rustc 1.85.0 (this stage's pinned toolchain, matched to the
+# past what rustc 1.90.0 (this stage's pinned toolchain, matched to the
 # workspace's rust-version - see crates/server/README.md) can compile.
 # 0.1.71 predates Rust 1.85's release, so its published Cargo.lock still
-# resolves to dependency versions built for that era.
+# resolves to dependency versions built for that era, and still installs
+# cleanly under the newer pin.
 RUN cargo install cargo-chef --locked --version 0.1.71
 
 FROM chef AS planner
@@ -68,6 +69,7 @@ VOLUME ["/data"]
 USER simple_rdbms
 
 EXPOSE 9090
+EXPOSE 5432
 
 # Long start period: ARIES recovery on a large log can take minutes, and
 # readiness must stay false (503) for the whole window rather than the
