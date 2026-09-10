@@ -251,6 +251,33 @@ here is exactly what a suspended portal later resumes from
 encoded in the format the client was told to expect, since no second
 `RowDescription` is sent once `Execute` starts streaming `DataRow`s.
 
+M13.3 subtask 6 adds fetch limits: `Execute` carries a `max_rows`, and
+when a portal has more rows than that limit, the backend must answer
+`PortalSuspended` instead of `CommandComplete`, resuming from the same
+portal - without re-running the statement - on the next `Execute`.
+`ExtendedQueryHandler::do_query` here still ignores its own `max_rows`
+argument and always returns the full `QueryResponse` for the statement,
+because `pgwire`'s own default `_on_execute` (`pgwire::api::query`) is
+what does the actual pacing: it calls `do_query` exactly once per portal,
+on the `Execute` that finds `Portal::state()` still `PortalExecutionState::Initial`,
+and transitions it to `Suspended(response)` via `Portal::start`; every
+later `Execute` against that same portal name skips `do_query` entirely
+and calls `Portal::fetch(max_rows)` again on the stored `QueryResponse`,
+which is why the response `do_query` returns has to be self-contained -
+this module was already doing that (`to_response`'s rows are collected
+into a `Vec<DataRow>` up front and wrapped in `stream::iter`, never a
+stream tied to a live engine cursor), so subtask 6 needed no change to
+`do_query`/`to_response` at all. `Portal::fetch` pulls up to `max_rows`
+items from that stream, moves the portal to `Finished` only once the
+stream is actually exhausted, and reports whether it is still suspended;
+`_on_execute` sends `PortalSuspended` when it is and `CommandComplete`
+(with the row count of just that fetch) only once it is not - so the
+command tag reaches the client exactly once, on the final `Execute` for
+that portal, and `crates/server/tests/wire_extended_query.rs`'s
+`a_portal_suspends_and_resumes_across_fetch_limited_executes` and
+`a_fetch_limit_larger_than_the_row_count_completes_in_one_execute` are
+what prove it end to end over `tokio_postgres::Transaction::query_portal`.
+
 `decode_param` picks the concrete Rust type to decode into from the
 *server's own* inferred type (`pg_type_of` on `description.param_types[idx]`,
 or `Type::VARCHAR` past the end of that list), never from
@@ -429,6 +456,9 @@ proving `ExtendedQueryHandler`/`QueryParser`: bound `bool`/`i32`/`i64`/
 `f64`/`&str` parameters round-trip through `decode_param`, a `NULL`
 parameter stores a real SQL `NULL`, one prepared statement runs
 repeatedly with different values, `BEGIN`/`COMMIT` (over `simple_query`)
-wrap a prepared `INSERT` on the same session, and a parameter whose bytes
+wrap a prepared `INSERT` on the same session, a parameter whose bytes
 don't decode as the server's own inferred type comes back as an `08P01`
-error rather than a dropped connection.
+error rather than a dropped connection, and (M13.3 subtask 6) a portal
+fetched in limited batches via `Transaction::query_portal` suspends and
+resumes correctly, returning the same rows exactly once and completing in
+a single `Execute` when the limit exceeds the row count.

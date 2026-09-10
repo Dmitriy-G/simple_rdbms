@@ -152,3 +152,57 @@ async fn a_wrong_typed_parameter_is_reported_as_an_error_not_a_dropped_connectio
     let select = client.simple_query("SELECT n FROM t").await.expect("connection still usable");
     assert_eq!(row_count(&select), 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_portal_suspends_and_resumes_across_fetch_limited_executes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut client = open(&dir, "wire_extended_portal_suspend.db").await;
+
+    client.simple_query("CREATE TABLE t (a INTEGER)").await.expect("create table succeeds");
+    for value in 1..=5i32 {
+        client.execute("INSERT INTO t VALUES ($1)", &[&value]).await.expect("insert succeeds");
+    }
+
+    let txn = client.transaction().await.expect("begin transaction succeeds");
+    let stmt = txn.prepare("SELECT a FROM t").await.expect("prepare succeeds");
+    let portal = txn.bind(&stmt, &[]).await.expect("bind succeeds");
+
+    let first = txn.query_portal(&portal, 2).await.expect("first fetch succeeds");
+    let second = txn.query_portal(&portal, 2).await.expect("second fetch succeeds");
+    let third = txn.query_portal(&portal, 2).await.expect("third fetch succeeds");
+
+    assert_eq!(first.len(), 2);
+    assert_eq!(second.len(), 2);
+    assert_eq!(third.len(), 1);
+
+    let values: Vec<i32> = first
+        .iter()
+        .chain(second.iter())
+        .chain(third.iter())
+        .map(|row| row.get::<_, i32>("a"))
+        .collect();
+    assert_eq!(values, vec![1, 2, 3, 4, 5]);
+
+    txn.commit().await.expect("commit succeeds");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fetch_limit_larger_than_the_row_count_completes_in_one_execute() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut client = open(&dir, "wire_extended_portal_no_suspend.db").await;
+
+    client.simple_query("CREATE TABLE t (a INTEGER)").await.expect("create table succeeds");
+    for value in 1..=5i32 {
+        client.execute("INSERT INTO t VALUES ($1)", &[&value]).await.expect("insert succeeds");
+    }
+
+    let txn = client.transaction().await.expect("begin transaction succeeds");
+    let stmt = txn.prepare("SELECT a FROM t").await.expect("prepare succeeds");
+    let portal = txn.bind(&stmt, &[]).await.expect("bind succeeds");
+
+    let rows = txn.query_portal(&portal, 10).await.expect("fetch succeeds");
+    let values: Vec<i32> = rows.iter().map(|row| row.get::<_, i32>("a")).collect();
+    assert_eq!(values, vec![1, 2, 3, 4, 5]);
+
+    txn.commit().await.expect("commit succeeds");
+}

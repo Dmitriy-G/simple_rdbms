@@ -99,11 +99,15 @@ sending raw SQL text as a simple query — gets a real `ParameterDescription`
 and `RowDescription` from `Describe` (typed from `planner::infer_parameter_types`/
 `Database::describe`, never by actually running the statement), and
 `Execute` binds `$n` placeholders in either text or binary format before
-calling `Database::execute_with_params`. See `src/wire.MD` for exactly
-what each message carries and its one known limitation (one statement per
-simple query message). What doesn't work yet: `DELETE`/`UPDATE`,
-multi-table joins, fetch limits/`PortalSuspended` on the extended
-protocol, and any authentication at all — see `docs/ROADMAP.md`.
+calling `Database::execute_with_params`. `Execute`'s fetch limit also
+works (M13.3 subtask 6): a portal `Execute`d with a smaller `max_rows`
+than it has remaining rows answers `PortalSuspended` and resumes from the
+same portal — without re-running the statement — on the next `Execute`
+against it, and the command tag reaches the client exactly once, on the
+`Execute` that actually exhausts the portal. See `src/wire.MD` for
+exactly what each message carries and its one known limitation (one
+statement per simple query message). What doesn't work yet:
+`DELETE`/`UPDATE`, multi-table joins, and any authentication at all — see `docs/ROADMAP.md`.
 
 ## Dependencies
 
@@ -179,9 +183,11 @@ protocol, the real SQLSTATE and transaction-status handling on error,
 `SET`/`SHOW`/`RESET`, and (M13.3) `Client::prepare`/`prepare_typed`/
 `query`/`execute` over the extended protocol - bound `bool`/`i32`/`i64`/
 `f64`/`&str`/`NULL` parameters, a statement reused with different values,
-a transaction wrapping a prepared `INSERT`, and a parameter whose bytes
+a transaction wrapping a prepared `INSERT`, a parameter whose bytes
 don't decode as the server's own inferred type reported as a real error
-rather than a dropped connection - respectively - see each file's own
+rather than a dropped connection, and (M13.3 subtask 6) a portal fetched
+in limited batches via `Transaction::query_portal` suspending and
+resuming correctly - respectively - see each file's own
 `.MD` for exactly what it asserts. These, together with the HTTP tests above, are
 deterministic, in-process checks; none of them proves the container works
 end to end - that's what spawning the compiled binary as a subprocess

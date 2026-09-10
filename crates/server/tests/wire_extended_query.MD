@@ -46,6 +46,21 @@ database, in the same shape as `wire_simple_query.rs`.
   and comes back as a `PgWireError` carrying `08P01` - a real error the
   client can read (`DbError::code`), not a severed connection - and the
   same connection still answers an ordinary `simple_query` afterward.
+- `a_portal_suspends_and_resumes_across_fetch_limited_executes` - inserts
+  five rows, then over a `tokio_postgres::Transaction` binds a portal on
+  `SELECT a FROM t` and calls `query_portal(&portal, 2)` three times,
+  asserting 2, 2 and 1 rows back and that the five values seen across all
+  three calls are the inserted rows in order with none repeated or
+  skipped - proving `ExtendedQueryHandler::do_query` runs the statement
+  exactly once (on the first `Execute`, while the portal is still
+  `PortalExecutionState::Initial`) and every later `Execute` against the
+  same portal resumes the same `QueryResponse` via `pgwire`'s own
+  `Portal::fetch` instead of re-running the query.
+- `a_fetch_limit_larger_than_the_row_count_completes_in_one_execute` - the
+  same five-row table and portal, but `query_portal(&portal, 10)` in a
+  single call returns all five rows - `max_rows` exceeding the remaining
+  row count never triggers `PortalSuspended`, since `Portal::fetch`'s
+  underlying stream runs out before the requested limit does.
 
 ## Usage Example
 
