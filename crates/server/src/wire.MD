@@ -105,6 +105,24 @@ exactly why `field_info` needed a format parameter at all: `DataRowEncoder`
 reads it off the schema it was built with, not off anything
 `encode_data_row` passes explicitly per call.
 
+M13.4 subtask 1 intercepts real clients' introspection queries even
+earlier than that: `do_query` calls `pg_catalog::answer` (`src/pg_catalog.MD`)
+under the same session lock every other query path takes, before
+`intercept_set_show_reset` ever runs, so a recognized `pg_catalog` query
+(`select version()` today; `pg_namespace`/`pg_class`/`pg_attribute`/
+`pg_type` in later M13.4 subtasks) never reaches `sql::Parser` at all -
+that grammar has no notion of any `pg_*` relation and would fail every one
+of them with `42P01 undefined_table`, which is exactly what killed a real
+client's connection before this subtask. `answer`'s `Some(Introspection)`
+becomes a `Response::Query` via `introspection_response`, built the same
+way `to_response` builds an ordinary `SELECT`'s response - `FieldInfo` per
+`Introspection::columns` entry (`FieldFormat::Text`, since the simple
+query protocol always answers in text) and one `DataRow` per
+`Introspection::rows` entry via `encode_introspection_row`, which encodes
+a `None` cell as `None::<&str>` exactly like `encode_field` does for a
+`types::Value::Null`. `answer` returning `None` falls through to
+`intercept_set_show_reset` and then the engine, unchanged.
+
 M13.2 subtask 5 intercepts `SET`, `RESET` and `SHOW` before a query string
 ever reaches `engine::Database::execute` - pgjdbc sends
 `SET extra_float_digits` during its own handshake, and none of the three
@@ -378,6 +396,16 @@ SQL statement raised.
   from `pgwire`'s own `DefaultServerParameterProvider::default()` table -
   the same one the startup handshake's `ParameterStatus` messages use -
   or an empty string when `name` is not in it.
+- `introspection_response(introspection) -> Response` (M13.4) - private.
+  Builds the `Response::Query` a `pg_catalog::Introspection` becomes: one
+  `FieldInfo` per `Introspection::columns` entry (always `FieldFormat::Text`)
+  and one `DataRow` per `Introspection::rows` entry via
+  `encode_introspection_row`, with the command tag fixed at `SELECT` -
+  every recognized introspection query is a `SELECT`.
+- `encode_introspection_row(encoder, row) -> PgWireResult<DataRow>` (M13.4) -
+  private. Encodes one `Introspection` row cell by cell: `Some(value)`
+  through `DataRowEncoder::encode_field`, `None` as `None::<&str>` (a SQL
+  `NULL`), mirroring `encode_field`'s own `Value::Null` arm.
 - `to_response(query, result_set, result_format) -> Response` - private.
   Builds the `pgwire::api::results::Response` a `ResultSet` becomes:
   `Response::Query` (`RowDescription` + one `DataRow` per row, via
@@ -462,3 +490,7 @@ error rather than a dropped connection, and (M13.3 subtask 6) a portal
 fetched in limited batches via `Transaction::query_portal` suspends and
 resumes correctly, returning the same rows exactly once and completing in
 a single `Execute` when the limit exceeds the row count.
+`crates/server/tests/wire_pg_catalog.rs` proves `pg_catalog::answer`'s
+interception (M13.4): `select version()` and `SELECT VERSION();` both
+answer one row starting with `PostgreSQL `, and an ordinary `SELECT 1` is
+unaffected.

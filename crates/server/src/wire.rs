@@ -7,6 +7,8 @@ use common::{Error, Severity, SqlState};
 use engine::{DataType, Database, ResultSet, StatementDescription, Tuple, Value};
 use futures::{Sink, stream};
 use pgwire::api::Type;
+
+use crate::pg_catalog::{self, Introspection};
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::{DefaultServerParameterProvider, ServerParameterProvider, StartupHandler};
 use pgwire::api::portal::{Format, Portal};
@@ -126,6 +128,13 @@ impl SimpleQueryHandler for ConnectionState {
         C: ClientInfo + ClientPortalStore + Unpin + Send + Sync,
         C::PortalStore: PortalStore,
     {
+        let introspection = {
+            let session = self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            pg_catalog::answer(&session, query)
+        };
+        if let Some(introspection) = introspection {
+            return Ok(vec![introspection_response(introspection)]);
+        }
         if let Some(response) = intercept_set_show_reset(&*client, query) {
             return Ok(vec![response]);
         }
@@ -272,6 +281,37 @@ fn to_response(query: &str, result_set: ResultSet, result_format: &Format) -> Re
             Response::Query(query_response)
         }
     }
+}
+
+fn introspection_response(introspection: Introspection) -> Response {
+    let fields: Vec<FieldInfo> = introspection
+        .columns
+        .iter()
+        .map(|(name, data_type)| {
+            FieldInfo::new(name.clone(), None, None, data_type.clone(), FieldFormat::Text)
+        })
+        .collect();
+    let schema = Arc::new(fields);
+    let mut encoder = DataRowEncoder::new(Arc::clone(&schema));
+    let data_rows: Vec<PgWireResult<DataRow>> =
+        introspection.rows.iter().map(|row| encode_introspection_row(&mut encoder, row)).collect();
+    let data_rows = stream::iter(data_rows);
+    let mut query_response = QueryResponse::new(schema, data_rows);
+    query_response.set_command_tag("SELECT");
+    Response::Query(query_response)
+}
+
+fn encode_introspection_row(
+    encoder: &mut DataRowEncoder,
+    row: &[Option<String>],
+) -> PgWireResult<DataRow> {
+    for cell in row {
+        match cell {
+            Some(value) => encoder.encode_field(value)?,
+            None => encoder.encode_field(&None::<&str>)?,
+        }
+    }
+    Ok(encoder.take_row())
 }
 
 fn statement_keyword(sql: &str) -> String {

@@ -65,6 +65,10 @@ loop's own thread are independent of each other by design.
   `main` and the HTTP listener thread. See `src/health.MD`.
 - `http` - the hand-rolled synchronous responder for `/metrics`,
   `/health/live`, and `/health/ready`. See `src/http.MD`.
+- `pg_catalog` - intercepts `pg_catalog` introspection queries a real
+  client sends before its first statement (`select version()`, and more
+  to come under M13.4) and answers them from the live catalog rather than
+  letting them fail as an undefined table. See `src/pg_catalog.MD`.
 - `signals` - blocks until `SIGTERM`/`Ctrl-C`, so `main` can run a
   graceful shutdown instead of the process just dying mid-write. See
   `src/signals.MD`.

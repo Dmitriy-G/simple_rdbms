@@ -344,7 +344,7 @@ either accept a documented concurrency limit of eight simultaneously
 blocked statements or stop a blocked statement from holding a worker.
 Decide which, and say so in this entry, before the listener ships.
 
-### M13.3 — Extended query protocol 🚧 In Progress
+### M13.3 — Extended query protocol ✅ Done
 **Problem:** simple query (M13.2) inlines literals into full SQL text on
 every execution, which is what `psql` does but not what real drivers do -
 JDBC and most connection-pooled clients prepare a statement once and
@@ -355,7 +355,7 @@ as a new grammar element, parameter type inference, binary format for
 numerics, and `PortalSuspended` for fetch limits. Target: pgjdbc
 `PreparedStatement` works. Simple query alone gets a demo, not a driver.
 
-### M13.4 — `pg_catalog` for real SQL clients 🆕 New
+### M13.4 — `pg_catalog` for real SQL clients 🚧 In Progress
 **Problem:** ODBC needs no separate driver work - psqlODBC speaks the
 same protocol as M13.2/M13.3 - but every real SQL client, ODBC or
 otherwise, runs introspection queries against `pg_class`, `pg_namespace`,
