@@ -260,3 +260,21 @@ async fn a_query_against_a_real_missing_table_still_fails_as_undefined() {
     let db_error = err.as_db_error().expect("expected a database error, not a connection failure");
     assert_eq!(db_error.code().code(), "42P01");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_class_over_the_extended_protocol_sees_a_table_created_after_parse() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_extended.db").await;
+
+    let stmt = client
+        .prepare("SELECT relname FROM pg_class WHERE relname = 't'")
+        .await
+        .expect("prepare succeeds without ever reaching the engine");
+    assert_eq!(stmt.params().len(), 0);
+
+    client.simple_query("CREATE TABLE t (a INTEGER)").await.expect("create table succeeds");
+
+    let rows = client.query(&stmt, &[]).await.expect("query succeeds");
+    assert_eq!(rows.len(), 1, "the table created after Parse must still show up at Execute");
+    assert_eq!(rows[0].get::<_, &str>("relname"), "t");
+}

@@ -14,7 +14,16 @@ recognized introspection query never reaches `engine::Database::execute`
 at all; a query whose `FROM` names something that is neither `pg_`-prefixed
 nor one of this module's own recognized shapes falls through unchanged -
 `SELECT * FROM nosuchtable` still reaches the engine and still fails with
-a real `42P01`, exactly as it would if this module did not exist.
+a real `42P01`, exactly as it would if this module did not exist. The
+extended query protocol (M13.4 subtask 5) calls `answer` twice for the
+same statement, deliberately: once in `StatementParser::parse_sql` at
+`Parse` time, purely to learn the column shape `Describe` needs to report
+without ever calling `Database::describe` (which would fail a `pg_class`
+query the same way `Database::execute` would), and again in
+`ExtendedQueryHandler::do_query` at `Execute` time, to compute the actual
+rows against whatever the catalog looks like *then* - so a table created
+between `Parse` and `Execute` still shows up, exactly as it would for an
+ordinary `SELECT` reaching the real engine.
 
 This module also carries `pg_type_of`/`field_info` (moved here from
 `wire.rs` in M13.4 subtask 3, `pub(crate)` since `wire.rs`'s own
@@ -261,5 +270,10 @@ builds an ordinary `SELECT`'s `Response::Query`, via `FieldInfo` and
 `pgwire::api::results::DataRowEncoder`, but keyed off `Introspection`'s
 own `(String, Type)` columns rather than `engine::DataType`, since an
 introspection answer's columns don't come from this engine's own SQL
-type system. `crates/server/tests/wire_pg_catalog.rs` drives this end to
-end over `tokio_postgres::Client::simple_query`.
+type system. The extended query protocol (M13.4 subtask 5) calls `answer`
+from two different places in `wire.rs`: `StatementParser::parse_sql`
+(caching only the columns, in a `PreparedStatement::Introspection`) and
+`ExtendedQueryHandler::do_query` (recomputing the full answer at `Execute`
+time). `crates/server/tests/wire_pg_catalog.rs` drives both protocols end
+to end, the simple query protocol over `tokio_postgres::Client::simple_query`
+and the extended one over `Client::prepare`/`Client::query`.

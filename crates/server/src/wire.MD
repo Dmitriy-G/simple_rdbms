@@ -229,50 +229,91 @@ never overrides `do_describe_statement`/`do_describe_portal` itself**,
 since the default implementations already do exactly what M13.3 needs
 once `QueryParser` reports correct types.
 
-A `PreparedStatement` (`ExtendedQueryHandler::Statement`) carries the
-original SQL text and the `engine::StatementDescription`
-`Database::describe` returned for it at `Parse` time - the type
-`StatementParser` (`ExtendedQueryHandler::QueryParser`) produces.
-`StatementParser::parse_sql` calls `Database::describe` under
-`block_in_place`, exactly like `SimpleQueryHandler::do_query` calls
-`execute`, and folds a `common::Error` into a `PgWireError` via
-`to_pg_error` on failure - so a syntax error in a `Parse` message is
-reported the same way a syntax error in a simple query is.
-`StatementParser::get_parameter_types` maps each `Option<types::DataType>`
-in `description.param_types` through `pg_catalog::pg_type_of`, which is
-the same `DataType` -> `pgwire::api::Type` mapping `field_info` already
-used, factored out so both share it; `None` (a placeholder
+A `PreparedStatement` (`ExtendedQueryHandler::Statement`) is an enum with
+two variants (M13.4 subtask 5 turned it from a plain struct into one):
+`Ordinary { sql, description }`, carrying the original SQL text and the
+`engine::StatementDescription` `Database::describe` returned for it at
+`Parse` time - the shape every statement had before M13.4 - and
+`Introspection { sql, columns }`, carrying the SQL text and the column
+list a `pg_catalog::answer` recognized it as having, with no
+`StatementDescription` at all, since an introspection query never reaches
+`Database::describe`. `StatementParser::parse_sql` tries
+`pg_catalog::answer` first, under the same session lock and
+`block_in_place` call it already needed for `Database::describe`: a
+recognized query becomes `Introspection` immediately, and only an
+unrecognized one falls through to `Database::describe` and `Ordinary` -
+exactly mirroring `SimpleQueryHandler::do_query`'s own
+`pg_catalog::answer`-before-`execute` ordering, and for the same reason:
+`pg_class`/`pg_namespace`/etc. have no meaning to `sql::Parser`, so
+`Database::describe` would fail them the same way `Database::execute`
+would. A `common::Error` from `Database::describe` still folds into a
+`PgWireError` via `to_pg_error` - so a syntax error in a `Parse` message
+is reported the same way a syntax error in a simple query is.
+`StatementParser::get_parameter_types` returns an empty `Vec` for
+`Introspection` (no recognized shape here ever takes a `$n` placeholder)
+and, for `Ordinary`, maps each `Option<types::DataType>` in
+`description.param_types` through `pg_catalog::pg_type_of`, which is the
+same `DataType` -> `pgwire::api::Type` mapping `field_info` already used,
+factored out so both share it; `None` (a placeholder
 `planner::infer_parameter_types` couldn't resolve) becomes `Type::VARCHAR`,
 the same fallback `field_info` already gave an untyped result column.
-`get_result_schema` builds one `FieldInfo` per `description.columns`
-entry, in the caller-supplied `Format` (`None` for `do_describe_statement`,
-which has no portal and therefore no result format yet; `Some(&target.result_column_format)`
-for `do_describe_portal`, per `Format::format_for(idx)`) - `column_format`
-being `None` falls back to `FieldFormat::Text`, matching
-`DescribeStatementResponse`'s own job of describing a statement in the
-abstract, before any `Bind` has chosen a format.
+`get_result_schema` builds one `FieldInfo` per column - from
+`description.columns` for `Ordinary` (via `field_info`), or straight from
+the already-typed `columns` for `Introspection` (via a bare
+`FieldInfo::new`, since those columns are already `pgwire::api::Type`,
+not `types::DataType`) - in the caller-supplied `Format` (`None` for
+`do_describe_statement`, which has no portal and therefore no result
+format yet; `Some(&target.result_column_format)` for `do_describe_portal`,
+per `Format::format_for(idx)`) - `column_format` being `None` falls back
+to `FieldFormat::Text`, matching `DescribeStatementResponse`'s own job of
+describing a statement in the abstract, before any `Bind` has chosen a
+format. Crucially, none of this touches `self.session` beyond the one
+`pg_catalog::answer`/`Database::describe` call already made at `Parse`
+time - `get_parameter_types`/`get_result_schema` read only the cached
+`PreparedStatement`, so a `pg_class` query can be `Describe`d before the
+table it will eventually report even exists.
 
 `ExtendedQueryHandler::do_query` is the one required method with no
-default: it reads the SQL text and `param_types` off
-`portal.statement.statement` (`Portal<S>.statement: Arc<StoredStatement<S>>`,
-`StoredStatement<S>.statement: S`, so `.statement.statement` reaches our
-own `PreparedStatement` through two levels of the framework's own
-wrapping), decodes each of the portal's actual bound parameters
+default: it matches on `&portal.statement.statement`
+(`Portal<S>.statement: Arc<StoredStatement<S>>`, `StoredStatement<S>.statement: S`,
+so `.statement.statement` reaches our own `PreparedStatement` through two
+levels of the framework's own wrapping). For `Introspection { sql, columns }`
+(M13.4 subtask 5), it calls `pg_catalog::answer(&session, sql)` again,
+fresh, right here at `Execute` time rather than reusing anything computed
+at `Parse` - that is the whole point: a table created between `Parse` and
+`Execute` must show up, and the only way to guarantee that is to never
+cache the *rows*, only the column shape `get_result_schema` needed. Since
+the same SQL text is deterministically recognized the same way every
+time, `pg_catalog::answer` returning `None` here (the statement was
+recognized at `Parse` but not at `Execute`) cannot actually happen; the
+defensive fallback, `unwrap_or_else` to the `Parse`-time `columns` with
+zero rows rather than `.expect`/`.unwrap`, exists only so a change to
+`pg_catalog`'s recognizers can never turn a should-be-impossible case into
+a panicked connection - `unwrap_used`/`expect_used` are workspace-`warn`
+lints promoted to errors by `-D warnings` for exactly this reason. For
+`Ordinary { sql, description }`, the path is exactly what M13.3 shipped:
+`param_types` comes from `description.param_types` mapped through
+`pg_catalog::pg_type_of`, each of the portal's actual bound parameters
 (`portal.parameter_len()`, not `param_types.len()` - the two can disagree
 if a client binds a different number of values than the statement
 declares, and the engine's own `common::Error::ParameterCountMismatch`
-check is what should catch that, not a `Vec` index panic here) via
-`decode_param`, and calls `Database::execute_with_params` under
+check is what should catch that, not a `Vec` index panic here) is decoded
+via `decode_param`, and `Database::execute_with_params` runs under
 `block_in_place` exactly as `SimpleQueryHandler::do_query` calls
-`execute`. The `Response` comes from the same `to_response` the simple
-query path uses, now given `&portal.result_column_format` instead of the
-simple query path's fixed `&Format::UnifiedText` - see `to_response`'s
-own entry below for why a per-column format has to reach the
-`DataRowEncoder`, not just `RowDescription`: the `QueryResponse` returned
-here is exactly what a suspended portal later resumes from
+`execute`. The `Response` for `Ordinary` comes from the same `to_response`
+the simple query path uses, now given `&portal.result_column_format`
+instead of the simple query path's fixed `&Format::UnifiedText` - see
+`to_response`'s own entry below for why a per-column format has to reach
+the `DataRowEncoder`, not just `RowDescription`: the `QueryResponse`
+returned here is exactly what a suspended portal later resumes from
 (`pgwire::api::portal::Portal::fetch`), so its rows must already be
 encoded in the format the client was told to expect, since no second
-`RowDescription` is sent once `Execute` starts streaming `DataRow`s.
+`RowDescription` is sent once `Execute` starts streaming `DataRow`s. The
+`Introspection` branch reuses the same `introspection_response` the
+simple-query path built for M13.4 subtask 1, which always encodes in
+text - every recognized introspection query is answered the same way
+regardless of protocol, since none of them are typed enough for a client
+to meaningfully request binary.
 
 M13.3 subtask 6 adds fetch limits: `Execute` carries a `max_rows`, and
 when a portal has more rows than that limit, the backend must answer
@@ -350,22 +391,32 @@ SQL statement raised.
   `to_pg_error`; and `ExtendedQueryHandler` (M13.3, see above) -
   `type Statement = PreparedStatement`, `type QueryParser = StatementParser`,
   `query_parser` clones `session` into a fresh `StatementParser`, and
-  `do_query` decodes the portal's bound parameters and calls
-  `Database::execute_with_params`.
+  `do_query` either re-answers an `Introspection` statement fresh from
+  `pg_catalog::answer` (M13.4 subtask 5) or decodes an `Ordinary`
+  statement's bound parameters and calls `Database::execute_with_params`.
 - `PreparedStatement` - private, `Clone` (required by
-  `ExtendedQueryHandler::Statement`). `sql: String` (the original text) and
-  `description: engine::StatementDescription` (`Database::describe`'s
-  result for it), computed once at `Parse` time and reused by every later
-  `Bind`/`Describe`/`Execute` against the same statement name.
+  `ExtendedQueryHandler::Statement`). An enum (M13.4 subtask 5) with two
+  variants: `Ordinary { sql: String, description: engine::StatementDescription }`
+  (`Database::describe`'s result, computed once at `Parse` time and
+  reused by every later `Bind`/`Describe`/`Execute` against the same
+  statement name - every statement before M13.4), and
+  `Introspection { sql: String, columns: Vec<(String, pgwire::api::Type)> }`
+  (a `pg_catalog::answer`-recognized query's column shape, with no
+  `StatementDescription` at all).
 - `StatementParser` - private. Holds a clone of `ConnectionState`'s own
   `Arc<Mutex<engine::Database>>` and implements
   `pgwire::api::stmt::QueryParser<Statement = PreparedStatement>`:
-  `parse_sql` calls `Database::describe` (via `block_in_place`) and wraps
-  the result in a `PreparedStatement`, mapping a `common::Error` through
-  `to_pg_error` on failure; `get_parameter_types` maps
-  `description.param_types` through `pg_type_of`; `get_result_schema`
-  maps `description.columns` through `field_info`, in the caller-supplied
-  `Format` (falling back to `FieldFormat::Text` when `None`).
+  `parse_sql` tries `pg_catalog::answer` first (building `Introspection`
+  on a match) and falls back to `Database::describe` (building `Ordinary`)
+  otherwise, both under one `block_in_place` call, mapping a
+  `common::Error` from `Database::describe` through `to_pg_error` on
+  failure; `get_parameter_types` returns an empty `Vec` for
+  `Introspection` or maps `Ordinary`'s `description.param_types` through
+  `pg_catalog::pg_type_of`; `get_result_schema` builds each `FieldInfo`
+  from `Introspection`'s own already-typed `columns` or from `Ordinary`'s
+  `description.columns` through `field_info`, in the caller-supplied
+  `Format` (falling back to `FieldFormat::Text` when `None`) - neither
+  branch of either method ever calls back into `self.session`.
 - `decode_param(portal, idx, pg_type) -> PgWireResult<Value>` - private.
   Calls `decode_param_bytes`, remapping any error through
   `parameter_decode_error` so a decode failure always carries `08P01`
@@ -489,6 +540,11 @@ fetched in limited batches via `Transaction::query_portal` suspends and
 resumes correctly, returning the same rows exactly once and completing in
 a single `Execute` when the limit exceeds the row count.
 `crates/server/tests/wire_pg_catalog.rs` proves `pg_catalog::answer`'s
-interception (M13.4): `select version()` and `SELECT VERSION();` both
-answer one row starting with `PostgreSQL `, and an ordinary `SELECT 1` is
-unaffected.
+interception (M13.4) over both protocols: `select version()`,
+`pg_namespace`, `pg_class`, `pg_attribute`, `pg_type` and any other
+`pg_`-prefixed relation all answer correctly over `simple_query`, an
+ordinary `SELECT` is unaffected, and (subtask 5) preparing a `pg_class`
+query over the extended protocol succeeds with zero reported parameters
+and still sees a table created *after* `Parse`, proving
+`ExtendedQueryHandler::do_query`'s `Introspection` branch recomputes its
+answer at `Execute` time rather than reusing anything cached at `Parse`.

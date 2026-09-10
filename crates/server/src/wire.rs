@@ -64,9 +64,9 @@ impl ConnectionState {
 }
 
 #[derive(Debug, Clone)]
-struct PreparedStatement {
-    sql: String,
-    description: StatementDescription,
+enum PreparedStatement {
+    Ordinary { sql: String, description: StatementDescription },
+    Introspection { sql: String, columns: Vec<(String, Type)> },
 }
 
 struct StatementParser {
@@ -86,18 +86,34 @@ impl QueryParser for StatementParser {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let description = {
+        let outcome = {
             let session = self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            tokio::task::block_in_place(|| session.describe(sql))
+            tokio::task::block_in_place(|| {
+                if let Some(introspection) = pg_catalog::answer(&session, sql) {
+                    return Ok(PreparedStatement::Introspection {
+                        sql: sql.to_string(),
+                        columns: introspection.columns,
+                    });
+                }
+                session.describe(sql).map(|description| PreparedStatement::Ordinary {
+                    sql: sql.to_string(),
+                    description,
+                })
+            })
         };
-        match description {
-            Ok(description) => Ok(Some(PreparedStatement { sql: sql.to_string(), description })),
+        match outcome {
+            Ok(stmt) => Ok(Some(stmt)),
             Err(err) => Err(to_pg_error(&err)),
         }
     }
 
     fn get_parameter_types(&self, stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
-        Ok(stmt.description.param_types.iter().map(|t| pg_type_of(t.as_ref())).collect())
+        match stmt {
+            PreparedStatement::Ordinary { description, .. } => {
+                Ok(description.param_types.iter().map(|t| pg_type_of(t.as_ref())).collect())
+            }
+            PreparedStatement::Introspection { .. } => Ok(Vec::new()),
+        }
     }
 
     fn get_result_schema(
@@ -105,17 +121,29 @@ impl QueryParser for StatementParser {
         stmt: &Self::Statement,
         column_format: Option<&Format>,
     ) -> PgWireResult<Vec<FieldInfo>> {
-        Ok(stmt
-            .description
-            .columns
-            .iter()
-            .enumerate()
-            .map(|(idx, (name, data_type))| {
-                let format =
-                    column_format.map(|format| format.format_for(idx)).unwrap_or(FieldFormat::Text);
-                field_info(name, data_type.as_ref(), format)
-            })
-            .collect())
+        match stmt {
+            PreparedStatement::Ordinary { description, .. } => Ok(description
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(idx, (name, data_type))| {
+                    let format = column_format
+                        .map(|format| format.format_for(idx))
+                        .unwrap_or(FieldFormat::Text);
+                    field_info(name, data_type.as_ref(), format)
+                })
+                .collect()),
+            PreparedStatement::Introspection { columns, .. } => Ok(columns
+                .iter()
+                .enumerate()
+                .map(|(idx, (name, data_type))| {
+                    let format = column_format
+                        .map(|format| format.format_for(idx))
+                        .unwrap_or(FieldFormat::Text);
+                    FieldInfo::new(name.clone(), None, None, data_type.clone(), format)
+                })
+                .collect()),
+        }
     }
 }
 
@@ -171,30 +199,45 @@ impl ExtendedQueryHandler for ConnectionState {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let sql = portal.statement.statement.sql.clone();
-        let param_types: Vec<Type> = portal
-            .statement
-            .statement
-            .description
-            .param_types
-            .iter()
-            .map(|data_type| pg_type_of(data_type.as_ref()))
-            .collect();
+        match &portal.statement.statement {
+            PreparedStatement::Introspection { sql, columns } => {
+                let introspection = {
+                    let session =
+                        self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    tokio::task::block_in_place(|| pg_catalog::answer(&session, sql))
+                };
+                let introspection = introspection.unwrap_or_else(|| Introspection {
+                    columns: columns.clone(),
+                    rows: Vec::new(),
+                });
+                Ok(introspection_response(introspection))
+            }
+            PreparedStatement::Ordinary { sql, description } => {
+                let sql = sql.clone();
+                let param_types: Vec<Type> = description
+                    .param_types
+                    .iter()
+                    .map(|data_type| pg_type_of(data_type.as_ref()))
+                    .collect();
 
-        let mut params = Vec::with_capacity(portal.parameter_len());
-        for idx in 0..portal.parameter_len() {
-            let pg_type = param_types.get(idx).cloned().unwrap_or(Type::VARCHAR);
-            params.push(decode_param(portal, idx, &pg_type)?);
-        }
+                let mut params = Vec::with_capacity(portal.parameter_len());
+                for idx in 0..portal.parameter_len() {
+                    let pg_type = param_types.get(idx).cloned().unwrap_or(Type::VARCHAR);
+                    params.push(decode_param(portal, idx, &pg_type)?);
+                }
 
-        let result = {
-            let mut session =
-                self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            tokio::task::block_in_place(|| session.execute_with_params(&sql, &params))
-        };
-        match result {
-            Ok(result_set) => Ok(to_response(&sql, result_set, &portal.result_column_format)),
-            Err(err) => Err(to_pg_error(&err)),
+                let result = {
+                    let mut session =
+                        self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    tokio::task::block_in_place(|| session.execute_with_params(&sql, &params))
+                };
+                match result {
+                    Ok(result_set) => {
+                        Ok(to_response(&sql, result_set, &portal.result_column_format))
+                    }
+                    Err(err) => Err(to_pg_error(&err)),
+                }
+            }
         }
     }
 }

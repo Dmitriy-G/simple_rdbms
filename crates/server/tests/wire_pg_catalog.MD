@@ -2,9 +2,11 @@
 
 End-to-end tests of `server::pg_catalog`'s interception of introspection
 queries (`docs/ROADMAP.md`'s M13.4), driving `server::wire::serve` over
-`tokio_postgres::Client::simple_query` against an ephemeral
-`127.0.0.1:0` listener and a `tempfile`-backed database, in the same shape
-as `wire_simple_query.rs`.
+`tokio_postgres::Client::simple_query` (the simple query protocol) and,
+for the extended-query interception of M13.4 subtask 5,
+`Client::prepare`/`Client::query`, against an ephemeral `127.0.0.1:0`
+listener and a `tempfile`-backed database, in the same shape as
+`wire_simple_query.rs`/`wire_extended_query.rs`.
 
 ## Key Components
 
@@ -80,6 +82,16 @@ as `wire_simple_query.rs`.
   `answer_unrecognized_pg_relation` never claims it, and it still reaches
   `sql::Parser`/the engine and fails with a real `42P01`, exactly as it
   would if `pg_catalog` did not intercept anything.
+- `pg_class_over_the_extended_protocol_sees_a_table_created_after_parse` -
+  `client.prepare("SELECT relname FROM pg_class WHERE relname = 't'")`
+  succeeds with zero reported parameters *before* table `t` exists (proving
+  `StatementParser::parse_sql`/`get_parameter_types`/`get_result_schema`
+  never call `Database::describe` for a recognized introspection query),
+  then `CREATE TABLE t (...)` runs over `simple_query`, then
+  `client.query(&stmt, &[])` on the already-prepared statement returns the
+  one row naming `t` - proving `ExtendedQueryHandler::do_query` recomputes
+  the `pg_class` answer at `Execute` time rather than reusing whatever it
+  saw (nothing) at `Parse` time.
 
 ## Usage Example
 
@@ -88,6 +100,7 @@ let result = client.simple_query("select version()").await?;
 ```
 
 Run as part of `cargo test --workspace`; this is the crate's coverage for
-`pg_catalog::answer`'s interception in `SimpleQueryHandler::do_query`,
-complementing `wire_simple_query.rs`'s coverage of the ordinary simple
-query path.
+`pg_catalog::answer`'s interception in both `SimpleQueryHandler::do_query`
+and `ExtendedQueryHandler`/`QueryParser`, complementing
+`wire_simple_query.rs`'s and `wire_extended_query.rs`'s coverage of the
+two protocols' ordinary paths.
