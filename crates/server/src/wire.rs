@@ -1,18 +1,22 @@
+use std::fmt::Debug;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
-use common::{Error, Severity};
-use engine::{DataType, Database, ResultSet, Tuple, Value};
-use futures::stream;
+use common::{Error, Severity, SqlState};
+use engine::{DataType, Database, ResultSet, StatementDescription, Tuple, Value};
+use futures::{Sink, stream};
 use pgwire::api::Type;
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::{DefaultServerParameterProvider, ServerParameterProvider, StartupHandler};
-use pgwire::api::query::SimpleQueryHandler;
+use pgwire::api::portal::{Format, Portal};
+use pgwire::api::query::{ExtendedQueryHandler, SimpleQueryHandler};
 use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response, Tag};
+use pgwire::api::stmt::QueryParser;
 use pgwire::api::store::PortalStore;
 use pgwire::api::{ClientInfo, ClientPortalStore, PgWireServerHandlers};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
+use pgwire::messages::PgWireBackendMessage;
 use pgwire::messages::data::DataRow;
 use pgwire::tokio::process_socket;
 use tokio::net::TcpListener;
@@ -48,12 +52,68 @@ pub async fn serve(listener: TcpListener, db: Arc<Database>) {
 }
 
 struct ConnectionState {
-    session: Mutex<Database>,
+    session: Arc<Mutex<Database>>,
 }
 
 impl ConnectionState {
     fn new(session: Database) -> Self {
-        Self { session: Mutex::new(session) }
+        Self { session: Arc::new(Mutex::new(session)) }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PreparedStatement {
+    sql: String,
+    description: StatementDescription,
+}
+
+struct StatementParser {
+    session: Arc<Mutex<Database>>,
+}
+
+#[async_trait]
+impl QueryParser for StatementParser {
+    type Statement = PreparedStatement;
+
+    async fn parse_sql<C>(
+        &self,
+        _client: &C,
+        sql: &str,
+        _types: &[Option<Type>],
+    ) -> PgWireResult<Option<Self::Statement>>
+    where
+        C: ClientInfo + Unpin + Send + Sync,
+    {
+        let description = {
+            let session = self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            tokio::task::block_in_place(|| session.describe(sql))
+        };
+        match description {
+            Ok(description) => Ok(Some(PreparedStatement { sql: sql.to_string(), description })),
+            Err(err) => Err(to_pg_error(&err)),
+        }
+    }
+
+    fn get_parameter_types(&self, stmt: &Self::Statement) -> PgWireResult<Vec<Type>> {
+        Ok(stmt.description.param_types.iter().map(|t| pg_type_of(t.as_ref())).collect())
+    }
+
+    fn get_result_schema(
+        &self,
+        stmt: &Self::Statement,
+        column_format: Option<&Format>,
+    ) -> PgWireResult<Vec<FieldInfo>> {
+        Ok(stmt
+            .description
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(idx, (name, data_type))| {
+                let format =
+                    column_format.map(|format| format.format_for(idx)).unwrap_or(FieldFormat::Text);
+                field_info(name, data_type.as_ref(), format)
+            })
+            .collect())
     }
 }
 
@@ -75,7 +135,56 @@ impl SimpleQueryHandler for ConnectionState {
             tokio::task::block_in_place(|| session.execute(query))
         };
         match result {
-            Ok(result_set) => Ok(vec![to_response(query, result_set)]),
+            Ok(result_set) => Ok(vec![to_response(query, result_set, &Format::UnifiedText)]),
+            Err(err) => Err(to_pg_error(&err)),
+        }
+    }
+}
+
+#[async_trait]
+impl ExtendedQueryHandler for ConnectionState {
+    type Statement = PreparedStatement;
+    type QueryParser = StatementParser;
+
+    fn query_parser(&self) -> Arc<Self::QueryParser> {
+        Arc::new(StatementParser { session: Arc::clone(&self.session) })
+    }
+
+    async fn do_query<C>(
+        &self,
+        _client: &mut C,
+        portal: &Portal<Self::Statement>,
+        _max_rows: usize,
+    ) -> PgWireResult<Response>
+    where
+        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
+        C::PortalStore: PortalStore<Statement = Self::Statement>,
+        C::Error: Debug,
+        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
+    {
+        let sql = portal.statement.statement.sql.clone();
+        let param_types: Vec<Type> = portal
+            .statement
+            .statement
+            .description
+            .param_types
+            .iter()
+            .map(|data_type| pg_type_of(data_type.as_ref()))
+            .collect();
+
+        let mut params = Vec::with_capacity(portal.parameter_len());
+        for idx in 0..portal.parameter_len() {
+            let pg_type = param_types.get(idx).cloned().unwrap_or(Type::VARCHAR);
+            params.push(decode_param(portal, idx, &pg_type)?);
+        }
+
+        let result = {
+            let mut session =
+                self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            tokio::task::block_in_place(|| session.execute_with_params(&sql, &params))
+        };
+        match result {
+            Ok(result_set) => Ok(to_response(&sql, result_set, &portal.result_column_format)),
             Err(err) => Err(to_pg_error(&err)),
         }
     }
@@ -130,7 +239,7 @@ where
     Response::Query(query_response)
 }
 
-fn to_response(query: &str, result_set: ResultSet) -> Response {
+fn to_response(query: &str, result_set: ResultSet, result_format: &Format) -> Response {
     match result_set {
         ResultSet::RolledBack => Response::TransactionEnd(Tag::new("ROLLBACK")),
         ResultSet::RowsAffected(count) => {
@@ -148,7 +257,10 @@ fn to_response(query: &str, result_set: ResultSet) -> Response {
             let fields: Vec<FieldInfo> = columns
                 .iter()
                 .zip(column_types.iter())
-                .map(|(name, data_type)| field_info(name, data_type.as_ref(), FieldFormat::Text))
+                .enumerate()
+                .map(|(idx, (name, data_type))| {
+                    field_info(name, data_type.as_ref(), result_format.format_for(idx))
+                })
                 .collect();
             let schema = Arc::new(fields);
             let mut encoder = DataRowEncoder::new(Arc::clone(&schema));
@@ -174,15 +286,56 @@ fn statement_keyword(sql: &str) -> String {
     first
 }
 
-fn field_info(name: &str, data_type: Option<&DataType>, format: FieldFormat) -> FieldInfo {
-    let pg_type = match data_type {
+fn pg_type_of(data_type: Option<&DataType>) -> Type {
+    match data_type {
         Some(DataType::Boolean) => Type::BOOL,
         Some(DataType::Integer) => Type::INT4,
         Some(DataType::BigInt) => Type::INT8,
         Some(DataType::Double) => Type::FLOAT8,
         Some(DataType::Varchar(_)) | None => Type::VARCHAR,
-    };
-    FieldInfo::new(name.to_string(), None, None, pg_type, format)
+    }
+}
+
+fn field_info(name: &str, data_type: Option<&DataType>, format: FieldFormat) -> FieldInfo {
+    FieldInfo::new(name.to_string(), None, None, pg_type_of(data_type), format)
+}
+
+fn decode_param(
+    portal: &Portal<PreparedStatement>,
+    idx: usize,
+    pg_type: &Type,
+) -> PgWireResult<Value> {
+    decode_param_bytes(portal, idx, pg_type).map_err(|err| parameter_decode_error(idx, err))
+}
+
+fn decode_param_bytes(
+    portal: &Portal<PreparedStatement>,
+    idx: usize,
+    pg_type: &Type,
+) -> PgWireResult<Value> {
+    match *pg_type {
+        Type::BOOL => {
+            Ok(portal.parameter::<bool>(idx, pg_type)?.map_or(Value::Null, Value::Boolean))
+        }
+        Type::INT4 => {
+            Ok(portal.parameter::<i32>(idx, pg_type)?.map_or(Value::Null, Value::Integer))
+        }
+        Type::INT8 => Ok(portal.parameter::<i64>(idx, pg_type)?.map_or(Value::Null, Value::BigInt)),
+        Type::FLOAT8 => {
+            Ok(portal.parameter::<f64>(idx, pg_type)?.map_or(Value::Null, Value::Double))
+        }
+        _ => {
+            Ok(portal.parameter::<String>(idx, &Type::VARCHAR)?.map_or(Value::Null, Value::Varchar))
+        }
+    }
+}
+
+fn parameter_decode_error(idx: usize, err: PgWireError) -> PgWireError {
+    PgWireError::UserError(Box::new(ErrorInfo::new(
+        "ERROR".to_owned(),
+        SqlState::PROTOCOL_VIOLATION.as_str().to_owned(),
+        format!("parameter ${} could not be decoded: {err}", idx + 1),
+    )))
 }
 
 fn encode_data_row(encoder: &mut DataRowEncoder, tuple: &Tuple) -> PgWireResult<DataRow> {
@@ -209,6 +362,10 @@ struct ConnectionHandlers {
 
 impl PgWireServerHandlers for ConnectionHandlers {
     fn simple_query_handler(&self) -> Arc<impl SimpleQueryHandler> {
+        self.inner.clone()
+    }
+
+    fn extended_query_handler(&self) -> Arc<impl ExtendedQueryHandler> {
         self.inner.clone()
     }
 

@@ -73,7 +73,9 @@ loop's own thread are independent of each other by design.
   `SELECT`/`INSERT`/`CREATE TABLE`/`CREATE INDEX`/`BEGIN`/`COMMIT`/
   `ROLLBACK`/`EXPLAIN` over the simple query protocol,
   `SET`/`SHOW`/`RESET` accepted before a query ever reaches the engine,
-  and a real per-error SQLSTATE and transaction status on every reply. See
+  the extended query protocol (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`,
+  M13.3) with `$n` placeholders bound in text or binary format, and a real
+  per-error SQLSTATE and transaction status on every reply. See
   `src/wire.MD`.
 
 ## Features
@@ -90,11 +92,18 @@ authentication yet — that's M22), and run `CREATE TABLE`, `INSERT`,
 `SELECT`, `CREATE INDEX`, `BEGIN`/`COMMIT`/`ROLLBACK`, `EXPLAIN`, and
 `SET`/`SHOW`/`RESET` over the simple query protocol, with a real
 per-statement SQLSTATE on error and an accurate transaction status on
-every `ReadyForQuery`. See `src/wire.MD` for exactly what each message
-carries and its one known limitation (one statement per simple query
-message). What doesn't work yet: `DELETE`/`UPDATE`, multi-table joins,
-the extended query protocol (prepared statements/portals), and any
-authentication at all — see `docs/ROADMAP.md`.
+every `ReadyForQuery`. The extended query protocol also works (M13.3):
+`Parse`/`Bind`/`Describe`/`Execute`/`Sync`, so a client like pgjdbc or
+`tokio_postgres` that always prepares its statements — rather than
+sending raw SQL text as a simple query — gets a real `ParameterDescription`
+and `RowDescription` from `Describe` (typed from `planner::infer_parameter_types`/
+`Database::describe`, never by actually running the statement), and
+`Execute` binds `$n` placeholders in either text or binary format before
+calling `Database::execute_with_params`. See `src/wire.MD` for exactly
+what each message carries and its one known limitation (one statement per
+simple query message). What doesn't work yet: `DELETE`/`UPDATE`,
+multi-table joins, fetch limits/`PortalSuspended` on the extended
+protocol, and any authentication at all — see `docs/ROADMAP.md`.
 
 ## Dependencies
 
@@ -107,9 +116,9 @@ calls into); `metrics-exporter-prometheus` with `default-features = false`
 Architecture); `ctrlc` with its `termination` feature (catches `SIGTERM`
 on Unix in addition to `SIGINT`/`Ctrl-C` everywhere); `tokio` (`rt-multi-thread`,
 `net`, `macros`, `signal` — the runtime the `pgwire` listener runs on);
-`pgwire` (wire framing and the startup/simple-query message flow; see
-`src/wire.MD`). Dev-only: `tempfile`, `tokio-postgres` (the test client
-`tests/wire_*.rs` drive the listener with).
+`pgwire` (wire framing and the startup/simple-query/extended-query message
+flows; see `src/wire.MD`). Dev-only: `tempfile`, `tokio-postgres` (the test
+client `tests/wire_*.rs` drive the listener with).
 
 ## Configuration
 
@@ -161,14 +170,19 @@ should stay private (see CLAUDE.md's testing section); nothing in `health`
 or `http` does.
 
 `tests/wire_startup.rs`, `tests/wire_simple_query.rs`,
-`tests/wire_errors.rs` and `tests/wire_set_show_reset.rs` drive
-`server::wire::serve` end to end over `tokio_postgres` against an
-ephemeral `127.0.0.1:0` listener and a `tempfile`-backed
-`engine::Database`: the startup handshake, `CREATE TABLE`/`INSERT`/
-`SELECT`/`BEGIN`/`COMMIT`/`EXPLAIN` over the simple query protocol, the
-real SQLSTATE and transaction-status handling on error, and
-`SET`/`SHOW`/`RESET` respectively - see each file's own `.MD` for exactly
-what it asserts. These, together with the HTTP tests above, are
+`tests/wire_errors.rs`, `tests/wire_set_show_reset.rs` and
+`tests/wire_extended_query.rs` drive `server::wire::serve` end to end over
+`tokio_postgres` against an ephemeral `127.0.0.1:0` listener and a
+`tempfile`-backed `engine::Database`: the startup handshake, `CREATE
+TABLE`/`INSERT`/`SELECT`/`BEGIN`/`COMMIT`/`EXPLAIN` over the simple query
+protocol, the real SQLSTATE and transaction-status handling on error,
+`SET`/`SHOW`/`RESET`, and (M13.3) `Client::prepare`/`prepare_typed`/
+`query`/`execute` over the extended protocol - bound `bool`/`i32`/`i64`/
+`f64`/`&str`/`NULL` parameters, a statement reused with different values,
+a transaction wrapping a prepared `INSERT`, and a parameter whose bytes
+don't decode as the server's own inferred type reported as a real error
+rather than a dropped connection - respectively - see each file's own
+`.MD` for exactly what it asserts. These, together with the HTTP tests above, are
 deterministic, in-process checks; none of them proves the container works
 end to end - that's what spawning the compiled binary as a subprocess
 would be for, the way `crates/cli/tests/crash_recovery.rs` does it, but

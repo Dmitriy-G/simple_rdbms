@@ -1,27 +1,35 @@
 # wire
 
 The PostgreSQL wire protocol listener (`docs/adr/0007-postgres-wire-protocol.md`,
-`docs/ROADMAP.md`'s M13.2): the `pgwire` crate handles wire framing and the
-startup/simple-query message flow, and this module supplies the two
-handler traits `pgwire` needs to drive that flow against this engine -
-`pgwire::api::auth::StartupHandler` (via the no-authentication
-`NoopStartupHandler` blanket impl; real authentication is M22) and
-`pgwire::api::query::SimpleQueryHandler`. `sql`'s own hand-written parser
-is untouched: `pgwire` never sees SQL grammar, only the wire messages that
-carry a query string to and a result set back from this module.
+`docs/ROADMAP.md`'s M13.2/M13.3): the `pgwire` crate handles wire framing
+and the startup/simple-query/extended-query message flows, and this
+module supplies the three handler traits `pgwire` needs to drive those
+flows against this engine - `pgwire::api::auth::StartupHandler` (via the
+no-authentication `NoopStartupHandler` blanket impl; real authentication
+is M22), `pgwire::api::query::SimpleQueryHandler`, and (M13.3)
+`pgwire::api::query::ExtendedQueryHandler` together with its
+`pgwire::api::stmt::QueryParser`. `sql`'s own hand-written parser is
+untouched: `pgwire` never sees SQL grammar, only the wire messages that
+carry a query string (and, for the extended protocol, bound parameter
+values) to and a result set back from this module.
 
 Each accepted TCP connection gets its own `engine::Database` session, via
 `Database::connect()` (`crates/engine/src/database.rs:47`) on the shared
 `Arc<Database>` `main` hands to `serve`. A session is not `Clone` and its
 `execute` takes `&mut self`, but the `pgwire` handler traits this module
 implements are called through `&self` - the same shared handler instance
-answers every message on a connection - so the session lives behind a
-`Mutex` inside `ConnectionState`, one `ConnectionState` per connection
-rather than one shared across connections the way `pgwire`'s own examples
-share a single handler. `PgWireServerHandlers::simple_query_handler` and
-`::startup_handler` both hand out clones of the same `Arc<ConnectionState>`
-so `pgwire` sees one logical handler with two faces, per the shape
-`pgwire`'s own `examples/server.rs` uses for a shared handler.
+answers every message on a connection - so the session lives behind an
+`Arc<Mutex<Database>>` inside `ConnectionState`, one `ConnectionState` per
+connection rather than one shared across connections the way `pgwire`'s
+own examples share a single handler. The field is an `Arc<Mutex<_>>`
+rather than a bare `Mutex<_>` (M13.3) so `ConnectionState::query_parser`
+can clone the same session handle into a separate `StatementParser`
+(below) without needing an `Arc<ConnectionState>` to clone from - `&self`
+alone is enough. `PgWireServerHandlers::simple_query_handler`,
+`::extended_query_handler`, and `::startup_handler` all hand out clones of
+the same `Arc<ConnectionState>` so `pgwire` sees one logical handler with
+three faces, per the shape `pgwire`'s own `examples/server.rs` uses for a
+shared handler.
 
 `Database::connect` and `Database::execute` are both blocking calls - they
 wait on the engine's own worker-pool thread over an `mpsc` channel
@@ -180,6 +188,96 @@ like any other statement error, because nothing on the wire tells this
 module the difference and the task's own description - "a statement
 error while in one moves it to failed" - draws no exception for it.
 
+M13.3 adds the extended query protocol (`Parse`/`Bind`/`Describe`/
+`Execute`/`Sync`, for `PreparedStatement` support): `ConnectionState` now
+also implements `pgwire::api::query::ExtendedQueryHandler`, and
+`ConnectionHandlers::extended_query_handler` hands out the same
+`Arc<ConnectionState>` `simple_query_handler` does, so a prepared and a
+simple statement on one connection share the one session and the one
+transaction. `pgwire`'s own default `on_parse`/`on_bind`/`on_execute`/
+`on_describe`/`on_sync`/`on_flush`/`on_close` implementations (`pgwire`'s
+`query.rs`) do the actual protocol bookkeeping - storing a `StoredStatement`/
+`Portal`, tracking `PortalExecutionState`, resuming a suspended portal -
+and this module supplies only what they call out to: `query_parser`
+(returning a `StatementParser`), `do_query`, and, through `QueryParser`,
+`get_parameter_types`/`get_result_schema`, which are what the trait's own
+default `do_describe_statement`/`do_describe_portal` call - **this module
+never overrides `do_describe_statement`/`do_describe_portal` itself**,
+since the default implementations already do exactly what M13.3 needs
+once `QueryParser` reports correct types.
+
+A `PreparedStatement` (`ExtendedQueryHandler::Statement`) carries the
+original SQL text and the `engine::StatementDescription`
+`Database::describe` returned for it at `Parse` time - the type
+`StatementParser` (`ExtendedQueryHandler::QueryParser`) produces.
+`StatementParser::parse_sql` calls `Database::describe` under
+`block_in_place`, exactly like `SimpleQueryHandler::do_query` calls
+`execute`, and folds a `common::Error` into a `PgWireError` via
+`to_pg_error` on failure - so a syntax error in a `Parse` message is
+reported the same way a syntax error in a simple query is.
+`StatementParser::get_parameter_types` maps each `Option<types::DataType>`
+in `description.param_types` through `pg_type_of` (below), which is the
+same `DataType` -> `pgwire::api::Type` mapping `field_info` already used,
+factored out so both share it; `None` (a placeholder
+`planner::infer_parameter_types` couldn't resolve) becomes `Type::VARCHAR`,
+the same fallback `field_info` already gave an untyped result column.
+`get_result_schema` builds one `FieldInfo` per `description.columns`
+entry, in the caller-supplied `Format` (`None` for `do_describe_statement`,
+which has no portal and therefore no result format yet; `Some(&target.result_column_format)`
+for `do_describe_portal`, per `Format::format_for(idx)`) - `column_format`
+being `None` falls back to `FieldFormat::Text`, matching
+`DescribeStatementResponse`'s own job of describing a statement in the
+abstract, before any `Bind` has chosen a format.
+
+`ExtendedQueryHandler::do_query` is the one required method with no
+default: it reads the SQL text and `param_types` off
+`portal.statement.statement` (`Portal<S>.statement: Arc<StoredStatement<S>>`,
+`StoredStatement<S>.statement: S`, so `.statement.statement` reaches our
+own `PreparedStatement` through two levels of the framework's own
+wrapping), decodes each of the portal's actual bound parameters
+(`portal.parameter_len()`, not `param_types.len()` - the two can disagree
+if a client binds a different number of values than the statement
+declares, and the engine's own `common::Error::ParameterCountMismatch`
+check is what should catch that, not a `Vec` index panic here) via
+`decode_param`, and calls `Database::execute_with_params` under
+`block_in_place` exactly as `SimpleQueryHandler::do_query` calls
+`execute`. The `Response` comes from the same `to_response` the simple
+query path uses, now given `&portal.result_column_format` instead of the
+simple query path's fixed `&Format::UnifiedText` - see `to_response`'s
+own entry below for why a per-column format has to reach the
+`DataRowEncoder`, not just `RowDescription`: the `QueryResponse` returned
+here is exactly what a suspended portal later resumes from
+(`pgwire::api::portal::Portal::fetch`), so its rows must already be
+encoded in the format the client was told to expect, since no second
+`RowDescription` is sent once `Execute` starts streaming `DataRow`s.
+
+`decode_param` picks the concrete Rust type to decode into from the
+*server's own* inferred type (`pg_type_of` on `description.param_types[idx]`,
+or `Type::VARCHAR` past the end of that list), never from
+`target.parameter_types` (what the client itself declared, if anything,
+in `Parse` - used only by the default `do_describe_statement` to choose
+what `ParameterDescription` to *report*). The two can disagree - a client
+using `Client::prepare_typed` can declare any OID it likes - and when they
+do, this module still decodes using its own inference, so a value the
+client encoded for its own declared type but that doesn't parse as the
+server's real one fails cleanly rather than being silently reinterpreted;
+`crates/server/tests/wire_extended_query.rs`'s
+`a_wrong_typed_parameter_is_reported_as_an_error_not_a_dropped_connection`
+is built on exactly this gap. `Portal::parameter::<T>(idx, pg_type)`
+(`pgwire`'s own helper) does the actual decoding, honoring the portal's
+own per-parameter text/binary format
+(`pgwire::api::portal::Format::is_binary`) automatically - this module
+never branches on format itself, only on which Rust type to ask
+`parameter` for. A decode failure (`Portal::parameter` returning `Err`,
+whatever pgwire's own SQLSTATE for that failure would have been) is
+remapped by `parameter_decode_error` into a fresh `PgWireError` carrying
+`common::SqlState::PROTOCOL_VIOLATION` (`08P01`) - the same code
+`common::Error::ParameterCountMismatch` uses (`planner::parameters.MD`) -
+rather than `pgwire`'s own default `22P02`, since a bind value that
+doesn't match this server's own type inference is a protocol-level
+disagreement between client and server, not an ordinary data exception a
+SQL statement raised.
+
 ## Key Components
 
 - `serve(listener, db) -> impl Future<Output = ()>` - the listener's main
@@ -191,13 +289,54 @@ error while in one moves it to failed" - draws no exception for it.
   an I/O error partway through a connection's protocol messages is
   logged and only ends that one connection, never the listener.
 - `ConnectionState` - private. Holds this connection's session
-  (`Mutex<engine::Database>`) and implements the two `pgwire` traits that
-  do the actual protocol work: `NoopStartupHandler` (no overrides - the
-  default no-authentication handshake is exactly what subtask 1 wants)
-  and `SimpleQueryHandler::do_query`, which runs the query string through
-  the session (via `block_in_place`) and turns its `Result<ResultSet>`
-  into a `Vec<Response>` with `to_response`, or a `PgWireError` with the
-  statement's real SQLSTATE and severity via `to_pg_error`.
+  (`Arc<Mutex<engine::Database>>`) and implements the three `pgwire`
+  traits that do the actual protocol work: `NoopStartupHandler` (no
+  overrides - the default no-authentication handshake is exactly what
+  subtask 1 wants), `SimpleQueryHandler::do_query`, which runs the query
+  string through the session (via `block_in_place`) and turns its
+  `Result<ResultSet>` into a `Vec<Response>` with `to_response`, or a
+  `PgWireError` with the statement's real SQLSTATE and severity via
+  `to_pg_error`; and `ExtendedQueryHandler` (M13.3, see above) -
+  `type Statement = PreparedStatement`, `type QueryParser = StatementParser`,
+  `query_parser` clones `session` into a fresh `StatementParser`, and
+  `do_query` decodes the portal's bound parameters and calls
+  `Database::execute_with_params`.
+- `PreparedStatement` - private, `Clone` (required by
+  `ExtendedQueryHandler::Statement`). `sql: String` (the original text) and
+  `description: engine::StatementDescription` (`Database::describe`'s
+  result for it), computed once at `Parse` time and reused by every later
+  `Bind`/`Describe`/`Execute` against the same statement name.
+- `StatementParser` - private. Holds a clone of `ConnectionState`'s own
+  `Arc<Mutex<engine::Database>>` and implements
+  `pgwire::api::stmt::QueryParser<Statement = PreparedStatement>`:
+  `parse_sql` calls `Database::describe` (via `block_in_place`) and wraps
+  the result in a `PreparedStatement`, mapping a `common::Error` through
+  `to_pg_error` on failure; `get_parameter_types` maps
+  `description.param_types` through `pg_type_of`; `get_result_schema`
+  maps `description.columns` through `field_info`, in the caller-supplied
+  `Format` (falling back to `FieldFormat::Text` when `None`).
+- `pg_type_of(data_type) -> Type` - private. The `types::DataType` ->
+  `pgwire::api::Type` mapping (`Boolean`/`Integer`/`BigInt`/`Double` to
+  their obvious OIDs, `Varchar(_)`/`None` to `Type::VARCHAR`), factored out
+  of `field_info` so `StatementParser::get_parameter_types` and `decode_param`
+  share the exact same rule `field_info` uses for result columns.
+- `decode_param(portal, idx, pg_type) -> PgWireResult<Value>` - private.
+  Calls `decode_param_bytes`, remapping any error through
+  `parameter_decode_error` so a decode failure always carries `08P01`
+  regardless of which internal `pgwire` error caused it.
+- `decode_param_bytes(portal, idx, pg_type) -> PgWireResult<Value>` -
+  private. Matches `*pg_type` onto the concrete Rust type to decode:
+  `BOOL`/`INT4`/`INT8`/`FLOAT8` onto `bool`/`i32`/`i64`/`f64` via
+  `Portal::parameter::<T>(idx, pg_type)`, anything else onto `String` via
+  `Portal::parameter::<String>(idx, &Type::VARCHAR)` (the `VARCHAR`/`TEXT`/
+  unknown-type fallback); a `None` from `Portal::parameter` (a SQL `NULL`)
+  becomes `Value::Null` via `Option::map_or` rather than an empty string,
+  for every branch alike.
+- `parameter_decode_error(idx, err) -> PgWireError` - private. Wraps a
+  `Portal::parameter` failure in a fresh `PgWireError::UserError` carrying
+  `common::SqlState::PROTOCOL_VIOLATION` (`08P01`) and a message naming the
+  1-based parameter index, in place of whatever SQLSTATE `pgwire`'s own
+  `PgWireError` variant would otherwise have carried (see above for why).
 - `to_pg_error(err) -> PgWireError` - private. Builds the
   `pgwire::error::ErrorInfo` (SQLSTATE, severity, message) a
   `common::Error` becomes, wrapped in `PgWireError::UserError`; see above
@@ -212,10 +351,14 @@ error while in one moves it to failed" - draws no exception for it.
   from `pgwire`'s own `DefaultServerParameterProvider::default()` table -
   the same one the startup handshake's `ParameterStatus` messages use -
   or an empty string when `name` is not in it.
-- `to_response(query, result_set) -> Response` - private. Builds the
-  `pgwire::api::results::Response` a `ResultSet` becomes: `Response::Query`
-  (`RowDescription` + one `DataRow` per row, via `field_info` and
-  `encode_data_row`) for `Rows`; for `RowsAffected`,
+- `to_response(query, result_set, result_format) -> Response` - private.
+  Builds the `pgwire::api::results::Response` a `ResultSet` becomes:
+  `Response::Query` (`RowDescription` + one `DataRow` per row, via
+  `field_info` and `encode_data_row`) for `Rows`, each column's
+  `FieldFormat` taken from `result_format.format_for(idx)` (M13.3) - the
+  simple-query call site passes `&Format::UnifiedText` (unchanged
+  behavior), the extended-query call site passes
+  `&portal.result_column_format`; for `RowsAffected`,
   `Response::TransactionStart` for a `BEGIN`, `Response::TransactionEnd`
   for a `COMMIT`, and `Response::Execution` with a tag from
   `statement_keyword` for everything else; `Response::TransactionEnd` for
@@ -225,10 +368,9 @@ error while in one moves it to failed" - draws no exception for it.
   keyword, upper-cased, after trimming a single trailing `;`; `CREATE`
   looks one further word ahead so `CREATE TABLE`/`CREATE INDEX` read as
   two-word keywords.
-- `field_info(name, data_type, format) -> FieldInfo` - private. Maps an
-  `Option<types::DataType>` to the `FieldInfo` `RowDescription` needs, in
-  the caller-supplied `FieldFormat`; `to_response` always passes
-  `FieldFormat::Text` for the simple-query path.
+- `field_info(name, data_type, format) -> FieldInfo` - private. Builds the
+  `FieldInfo` `RowDescription` needs from `pg_type_of(data_type)` and the
+  caller-supplied `FieldFormat`.
 - `encode_data_row(encoder, tuple) -> PgWireResult<DataRow>` - private.
   Encodes one `types::Tuple` into `encoder` field by field via
   `encode_field`, then calls `DataRowEncoder::take_row` to produce the
@@ -241,9 +383,10 @@ error while in one moves it to failed" - draws no exception for it.
   their obvious Rust equivalents, `Null` onto `&None::<i8>` (an arbitrary
   placeholder type - `Option<T>` encodes "null" the same way for any `T`).
 - `ConnectionHandlers` - private. The `pgwire::api::PgWireServerHandlers`
-  a connection is served with; both of its methods return a clone of the
-  same `Arc<ConnectionState>`, so `startup_handler` and
-  `simple_query_handler` are backed by the one session.
+  a connection is served with; all three of its methods return a clone of
+  the same `Arc<ConnectionState>`, so `startup_handler`,
+  `simple_query_handler`, and `extended_query_handler` are all backed by
+  the one session.
 
 ## Usage Example
 
@@ -280,3 +423,12 @@ until `ROLLBACK`, and the connection is still usable afterward.
 of a known and an unknown parameter both succeed, the leading keyword is
 recognized regardless of case, and the connection remains usable for an
 ordinary statement afterward.
+`crates/server/tests/wire_extended_query.rs` drives the same listener
+with `tokio_postgres::Client::prepare`/`prepare_typed`/`query`/`execute`,
+proving `ExtendedQueryHandler`/`QueryParser`: bound `bool`/`i32`/`i64`/
+`f64`/`&str` parameters round-trip through `decode_param`, a `NULL`
+parameter stores a real SQL `NULL`, one prepared statement runs
+repeatedly with different values, `BEGIN`/`COMMIT` (over `simple_query`)
+wrap a prepared `INSERT` on the same session, and a parameter whose bytes
+don't decode as the server's own inferred type comes back as an `08P01`
+error rather than a dropped connection.
