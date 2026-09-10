@@ -54,7 +54,15 @@ conflict even though both are equally retryable to a client.
 to a parameter that doesn't exist, and maps to `Error::UndefinedParameter`:
 a prepared statement executed without its `$n` placeholders substituted
 first, which `planner::binder::Binder` raises the moment it meets an
-`Expr::Parameter` that reached it unsubstituted.
+`Expr::Parameter` that reached it unsubstituted. `PROTOCOL_VIOLATION`
+(`08P01`) is Postgres's own extension code within class 08 (connection
+exception) for a client-driver-level mismatch rather than a SQL-level
+one, and maps to `Error::ParameterCountMismatch`:
+`planner::parameters::substitute_parameters` was given a different
+number of values than the statement has distinct `$n` placeholders for -
+the wire protocol's own `Bind` message carries an explicit parameter
+count, so a mismatch here is a protocol-level error a driver made, not a
+SQL condition a user's statement raised.
 
 ## Key Components
 
@@ -77,6 +85,7 @@ first, which `planner::binder::Binder` raises the moment it meets an
   | `SUCCESSFUL_COMPLETION` | `00000` | 00 - successful completion |
   | `CONNECTION_DOES_NOT_EXIST` | `08003` | 08 - connection exception |
   | `CONNECTION_FAILURE` | `08006` | 08 - connection exception |
+  | `PROTOCOL_VIOLATION` | `08P01` | 08 - connection exception |
   | `NUMERIC_VALUE_OUT_OF_RANGE` | `22003` | 22 - data exception |
   | `NULL_VALUE_NOT_ALLOWED` | `22004` | 22 - data exception |
   | `INVALID_TEXT_REPRESENTATION` | `22P02` | 22 - data exception |

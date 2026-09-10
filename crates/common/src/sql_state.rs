@@ -6,6 +6,7 @@ impl SqlState {
 
     pub const CONNECTION_DOES_NOT_EXIST: SqlState = SqlState(*b"08003");
     pub const CONNECTION_FAILURE: SqlState = SqlState(*b"08006");
+    pub const PROTOCOL_VIOLATION: SqlState = SqlState(*b"08P01");
 
     pub const NUMERIC_VALUE_OUT_OF_RANGE: SqlState = SqlState(*b"22003");
     pub const NULL_VALUE_NOT_ALLOWED: SqlState = SqlState(*b"22004");

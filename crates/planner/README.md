@@ -42,6 +42,10 @@ to_physical -> PhysicalPlan` for a `SELECT`; `INSERT`/`CREATE TABLE`/
   [physical_plan.MD](src/physical_plan.MD).
 - `plan` - lowers a `BoundStatement` into a `LogicalPlan`. See
   [plan.MD](src/plan.MD).
+- `parameters` - `infer_parameter_types`, `substitute_parameters`: type
+  inference and literal substitution for a `$n` prepared-statement
+  placeholder, over an unbound `sql::Statement`. See
+  [parameters.MD](src/parameters.MD).
 - `explain` - `explain_logical`, `explain_physical`: render either plan
   tree as `EXPLAIN`'s human-readable output against a `Catalog`. See
   [explain.MD](src/explain.MD).
@@ -74,6 +78,14 @@ estimated cost, and dropping a filter an equality index scan alone could
 already satisfy, are both left to roadmap milestone M23.2 — see
 `docs/ROADMAP.md`.
 
+A `$n` placeholder (`sql::Expr::Parameter`) is never bound directly -
+`Binder::bind_expr` rejects one outright - so a caller running a prepared
+statement calls `parameters::infer_parameter_types` to learn each
+placeholder's type (best-effort; `None` where no column context gives it
+one) and `parameters::substitute_parameters` to replace every placeholder
+with a literal value before handing the statement to `Binder::bind`, the
+same way an ordinary literal-only statement already is.
+
 `EXPLAIN [VERBOSE] <statement>` binds and lowers its target exactly as if
 run directly, then hands the resulting `LogicalPlan`/`PhysicalPlan` to
 `explain_logical`/`explain_physical` instead of to the executor —
@@ -94,6 +106,11 @@ None — `planner` has no configuration of its own.
 
 `tests/binder_tests.rs` binds parsed statements against a populated catalog
 and checks that unknown columns/tables and type mismatches are rejected.
+`tests/parameters.rs` covers `infer_parameter_types` (a `WHERE`
+comparison, an `INSERT`'s named column list, an unresolvable placeholder,
+a numbering gap) and `substitute_parameters` (agreement with the
+equivalent literal statement's bound plan, and both directions of a
+parameter-count mismatch).
 `tests/optimizer_tests.rs` runs `Optimizer` (with `IndexScanRule`) over
 bound-and-planned `SELECT`s against a `Catalog::from_tables_and_indexes`
 fixture, checking that an indexed predicate is rewritten to an `IndexScan`

@@ -5,6 +5,7 @@ mod error;
 pub mod explain;
 mod logical_plan;
 mod optimizer;
+mod parameters;
 mod physical_plan;
 mod plan;
 
@@ -16,6 +17,7 @@ pub use error::PlannerError;
 pub use explain::{explain_logical, explain_physical};
 pub use logical_plan::LogicalPlan;
 pub use optimizer::{IndexScanRule, Optimizer, OptimizerRule};
+pub use parameters::{infer_parameter_types, substitute_parameters};
 pub use physical_plan::{PhysicalPlan, to_physical};
 pub use plan::plan;
 pub use sql::{BinaryOperator, UnaryOperator};

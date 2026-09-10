@@ -71,6 +71,14 @@ had to change, from stringifying to matching.
     baked into `message`.
   - `ColumnCountMismatch` -> `SYNTAX_ERROR` (42601), Error. An `INSERT`
     whose value-tuple length doesn't match its column list.
+  - `ParameterCountMismatch` -> `PROTOCOL_VIOLATION` (08P01), Error. From
+    `planner::PlannerError::ParameterCountMismatch`:
+    `planner::parameters::substitute_parameters` was handed a different
+    number of values than the statement has distinct `$n` placeholders
+    for - a client/driver-level mismatch (the wire protocol's `Bind`
+    message states its own parameter count) rather than a SQL-level one,
+    so it gets its own class-08 code instead of sharing `ColumnCountMismatch`'s
+    `SYNTAX_ERROR`.
   - `UndefinedTable`, `UndefinedColumn`, `AmbiguousColumn`,
     `DuplicateTable`, `DatatypeMismatch` -> `UNDEFINED_TABLE` (42P01),
     `UNDEFINED_COLUMN` (42703), `AMBIGUOUS_COLUMN` (42702),

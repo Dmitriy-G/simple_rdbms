@@ -15,6 +15,9 @@ pub enum PlannerError {
     #[error("column count mismatch: expected {expected}, found {found}")]
     ColumnCountMismatch { expected: usize, found: usize },
 
+    #[error("parameter count mismatch: expected {expected}, found {found}")]
+    ParameterCountMismatch { expected: usize, found: usize },
+
     #[error("type mismatch in expression: {0}")]
     TypeMismatch(String),
 
@@ -35,6 +38,9 @@ impl From<PlannerError> for common::Error {
             }
             PlannerError::ColumnCountMismatch { expected, found } => {
                 common::Error::ColumnCountMismatch { expected, found }
+            }
+            PlannerError::ParameterCountMismatch { expected, found } => {
+                common::Error::ParameterCountMismatch { expected, found }
             }
             PlannerError::TypeMismatch(detail) => common::Error::DatatypeMismatch { detail },
             PlannerError::AmbiguousColumn(name) => common::Error::AmbiguousColumn { name },

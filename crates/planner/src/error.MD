@@ -15,7 +15,13 @@ Errors raised while binding a parsed statement against the catalog.
   first. `ColumnCountMismatch {
   expected, found }` is raised when an `INSERT` row supplies a different
   number of values than the number of target columns (explicit or, if
-  omitted, the table's full column list). `TypeMismatch(String)` is raised
+  omitted, the table's full column list). `ParameterCountMismatch {
+  expected, found }` is raised by `parameters::substitute_parameters` when
+  the number of values it is given does not match the highest `$n`
+  placeholder index the statement actually references - kept distinct
+  from `ColumnCountMismatch` since the two conditions are unrelated (an
+  `INSERT`'s column list vs. a prepared statement's bind parameters) even
+  though their fields are identically shaped. `TypeMismatch(String)` is raised
   when an expression's operand types are incompatible with the operator
   applied to them. `AmbiguousColumn(String)` is raised when a column
   reference could be resolved against more than one source in scope, and
@@ -30,6 +36,7 @@ Errors raised while binding a parsed statement against the catalog.
   `UnknownTable` -> `UndefinedTable`, `UnknownColumn` -> `UndefinedColumn`,
   `UndefinedParameter` -> the identically-shaped `UndefinedParameter`,
   `ColumnCountMismatch` -> the identically-shaped `ColumnCountMismatch`,
+  `ParameterCountMismatch` -> the identically-shaped `ParameterCountMismatch`,
   `TypeMismatch` -> `DatatypeMismatch`, `AmbiguousColumn` -> the
   identically-shaped `AmbiguousColumn`, `LiteralOutOfRange` ->
   `NumericValueOutOfRange` (kept distinct from `DatatypeMismatch` since

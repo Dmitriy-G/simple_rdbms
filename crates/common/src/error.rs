@@ -59,6 +59,9 @@ pub enum Error {
     #[error("column count mismatch: expected {expected}, found {found}")]
     ColumnCountMismatch { expected: usize, found: usize },
 
+    #[error("parameter count mismatch: expected {expected}, found {found}")]
+    ParameterCountMismatch { expected: usize, found: usize },
+
     #[error("undefined table: {name}")]
     UndefinedTable { name: String },
 
@@ -151,6 +154,7 @@ impl Error {
             Error::InvalidConfiguration { .. } => SqlState::CONNECTION_FAILURE,
             Error::Syntax { .. } => SqlState::SYNTAX_ERROR,
             Error::ColumnCountMismatch { .. } => SqlState::SYNTAX_ERROR,
+            Error::ParameterCountMismatch { .. } => SqlState::PROTOCOL_VIOLATION,
             Error::UndefinedTable { .. } => SqlState::UNDEFINED_TABLE,
             Error::UndefinedColumn { .. } => SqlState::UNDEFINED_COLUMN,
             Error::UndefinedParameter { .. } => SqlState::UNDEFINED_PARAMETER,
@@ -200,6 +204,7 @@ impl Error {
             | Error::KeyTooLarge { .. }
             | Error::Syntax { .. }
             | Error::ColumnCountMismatch { .. }
+            | Error::ParameterCountMismatch { .. }
             | Error::UndefinedTable { .. }
             | Error::UndefinedColumn { .. }
             | Error::UndefinedParameter { .. }
@@ -245,6 +250,7 @@ impl Error {
             | Error::KeyTooLarge { .. }
             | Error::InvalidConfiguration { .. }
             | Error::ColumnCountMismatch { .. }
+            | Error::ParameterCountMismatch { .. }
             | Error::UndefinedTable { .. }
             | Error::UndefinedColumn { .. }
             | Error::UndefinedParameter { .. }
