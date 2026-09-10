@@ -83,6 +83,33 @@ their `Display` impl, `Varchar` verbatim, and `Null` as `None` - which
 `encode_data_row` turns into the protocol's `-1`-length null marker
 rather than an empty string.
 
+M13.2 subtask 5 intercepts `SET`, `RESET` and `SHOW` before a query string
+ever reaches `engine::Database::execute` - pgjdbc sends
+`SET extra_float_digits` during its own handshake, and none of the three
+keywords exists in `sql`'s token list or grammar, so letting them fall
+through would surface as a syntax error. `do_query` calls
+`intercept_set_show_reset` first; on `Some`, that response is returned
+directly and the query is never handed to the session at all. Matching is
+case-insensitive on the leading keyword only - `intercept_set_show_reset`
+upper-cases only the first whitespace-separated word after trimming a
+trailing `;`, so `SET`/`set`/`Set` are all recognized but a parameter name
+is compared byte-for-byte. `SET <anything>` and `RESET <anything>` both
+become a bare `Response::Execution` with the tag `SET`/`RESET`,
+discarding the rest of the query entirely - there is nothing to change,
+since no session state backs either keyword yet. `SHOW <name>` becomes a
+one-row, one-column `Response::Query` via `show_response`, which answers
+from the exact same fixed parameter table `pgwire`'s own
+`DefaultServerParameterProvider::default()` builds for the startup
+handshake's `ParameterStatus` messages (`server_version`, `TimeZone`,
+`standard_conforming_strings`, and the rest) - `show_response` calls
+`ServerParameterProvider::server_parameters` itself rather than
+duplicating that table, so the two can never drift. A name absent from
+that table (or absent entirely, e.g. a bare `SHOW`) answers with an empty
+string rather than an error, exactly like `RowsAffected`/`Rows`'s
+`CommandComplete` handling above, `show_response`'s `QueryResponse`
+carries the command tag `SHOW`, and the same `pgwire` row-count-appending
+behaviour noted above for `EXPLAIN` applies to it too.
+
 A simple query carries exactly one statement:
 `sql::Parser::parse` (`crates/sql/src/parser.rs`) accepts one optional
 trailing semicolon and rejects anything after it, so a multi-statement
@@ -161,6 +188,16 @@ error while in one moves it to failed" - draws no exception for it.
   `pgwire::error::ErrorInfo` (SQLSTATE, severity, message) a
   `common::Error` becomes, wrapped in `PgWireError::UserError`; see above
   for why this is a top-level `Err` and not a `Response::Error`.
+- `intercept_set_show_reset(client, query) -> Option<Response>` - private.
+  Recognizes a `SET`/`RESET`/`SHOW` query by its leading keyword (folded
+  to uppercase) before it reaches the session at all; `None` for every
+  other query, which `do_query` then runs through `engine::Database`
+  exactly as before.
+- `show_response(client, name) -> Response` - private. The one-row,
+  one-column `Response::Query` a `SHOW <name>` becomes, its value read
+  from `pgwire`'s own `DefaultServerParameterProvider::default()` table -
+  the same one the startup handshake's `ParameterStatus` messages use -
+  or an empty string when `name` is not in it.
 - `to_response(query, result_set) -> Response` - private. Builds the
   `pgwire::api::results::Response` a `ResultSet` becomes: `Response::Query`
   (`RowDescription` + one `DataRow` per row, via `field_info` and
@@ -215,3 +252,8 @@ module's `RowDescription`/`DataRow`/`CommandComplete` handling.
 reaches `tokio_postgres` as `42P01`, a failing statement inside an
 explicit transaction leaves the next statement rejected with `25P02`
 until `ROLLBACK`, and the connection is still usable afterward.
+`crates/server/tests/wire_set_show_reset.rs` proves
+`intercept_set_show_reset`: `SET`/`RESET` are accepted as no-ops, `SHOW`
+of a known and an unknown parameter both succeed, the leading keyword is
+recognized regardless of case, and the connection remains usable for an
+ordinary statement afterward.

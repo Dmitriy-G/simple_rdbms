@@ -6,8 +6,8 @@ use common::{Error, Severity};
 use engine::{DataType, Database, ResultSet, Tuple, Value};
 use futures::stream;
 use pgwire::api::Type;
-use pgwire::api::auth::StartupHandler;
 use pgwire::api::auth::noop::NoopStartupHandler;
+use pgwire::api::auth::{DefaultServerParameterProvider, ServerParameterProvider, StartupHandler};
 use pgwire::api::query::SimpleQueryHandler;
 use pgwire::api::results::{FieldFormat, FieldInfo, QueryResponse, Response, Tag};
 use pgwire::api::store::PortalStore;
@@ -61,11 +61,14 @@ impl NoopStartupHandler for ConnectionState {}
 
 #[async_trait]
 impl SimpleQueryHandler for ConnectionState {
-    async fn do_query<C>(&self, _client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
+    async fn do_query<C>(&self, client: &mut C, query: &str) -> PgWireResult<Vec<Response>>
     where
         C: ClientInfo + ClientPortalStore + Unpin + Send + Sync,
         C::PortalStore: PortalStore,
     {
+        if let Some(response) = intercept_set_show_reset(&*client, query) {
+            return Ok(vec![response]);
+        }
         let result = {
             let mut session =
                 self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -89,6 +92,42 @@ fn to_pg_error(err: &Error) -> PgWireError {
         err.sql_state().as_str().to_owned(),
         err.to_string(),
     )))
+}
+
+fn intercept_set_show_reset<C>(client: &C, query: &str) -> Option<Response>
+where
+    C: ClientInfo,
+{
+    let trimmed = query.trim().trim_end_matches(';').trim();
+    let mut words = trimmed.split_whitespace();
+    let leading = words.next()?;
+    match leading.to_uppercase().as_str() {
+        "SET" => Some(Response::Execution(Tag::new("SET"))),
+        "RESET" => Some(Response::Execution(Tag::new("RESET"))),
+        "SHOW" => Some(show_response(client, words.next().unwrap_or(""))),
+        _ => None,
+    }
+}
+
+fn show_response<C>(client: &C, name: &str) -> Response
+where
+    C: ClientInfo,
+{
+    let value = DefaultServerParameterProvider::default()
+        .server_parameters(client)
+        .and_then(|params| params.get(name).cloned())
+        .unwrap_or_default();
+    let fields =
+        vec![FieldInfo::new(name.to_owned(), None, None, Type::VARCHAR, FieldFormat::Text)];
+    let schema = Arc::new(fields);
+    let mut buf = BytesMut::new();
+    buf.put_i32(value.len() as i32);
+    buf.put_slice(value.as_bytes());
+    let data_row = DataRow::new(buf, 1);
+    let data_rows = stream::iter(std::iter::once(Ok(data_row)));
+    let mut query_response = QueryResponse::new(schema, data_rows);
+    query_response.set_command_tag("SHOW");
+    Response::Query(query_response)
 }
 
 fn to_response(query: &str, result_set: ResultSet) -> Response {
