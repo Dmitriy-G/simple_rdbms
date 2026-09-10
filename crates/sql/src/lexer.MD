@@ -32,6 +32,15 @@ specially - lexed or not - is also the one place a future keyword's
 - `Lexer::lex_string(&mut self, start) -> Result<TokenKind, SqlError>` -
   private. Scans a single-quoted string literal starting at the opening
   quote, with `''` treated as an escaped single quote.
+- `Lexer::lex_dollar(&mut self, start) -> Result<TokenKind, SqlError>` -
+  private. Scans a `$n` placeholder: `$` followed by one or more ASCII
+  digits produces `TokenKind::Parameter(n)`. A bare `$` with no following
+  digit, `$0`, and a digit run that doesn't fit `u32` all become
+  `SqlError::InvalidParameter` quoting the whole `$...` span rather than
+  producing a token - `$0` is rejected here rather than left for the
+  binder because a placeholder's index is 1-based everywhere downstream
+  (`ast.MD`'s `Expr::Parameter`), so `0` can never be a valid index to
+  bind against.
 - `Lexer::lex_ident_or_keyword(&mut self) -> TokenKind` - private. Scans
   an identifier, matching it case-insensitively against the keyword set;
   anything that doesn't match a keyword becomes an `Identifier` carrying

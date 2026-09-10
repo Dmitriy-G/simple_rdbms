@@ -125,7 +125,11 @@ becomes "semantically valid against this database's schema".
   type it's checked against). `sql::Expr::IsNull { expr, negated }` binds
   its operand against no type restriction at all (any type, including an
   untyped `NULL` literal, can be tested for nullness) and always resolves
-  to `Boolean`.
+  to `Boolean`. `sql::Expr::Parameter { index }` is rejected outright with
+  `PlannerError::UndefinedParameter { index }` - this binder never
+  substitutes a placeholder itself, so reaching one here means the
+  statement was bound without `parameters::substitute_parameters` having
+  replaced every `$n` with a literal first (`parameters.MD`).
 - `Binder::bind_unary_op(&self, op, expr, schema, table_scope) -> Result<(BoundExpr, Option<DataType>), PlannerError>` -
   private. Type-checks `NOT` (operand must be `Boolean`) and unary `-`
   (operand must be numeric and non-`NULL`); `table_scope` passes straight

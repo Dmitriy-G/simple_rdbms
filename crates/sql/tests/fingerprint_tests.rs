@@ -31,3 +31,11 @@ fn a_string_literal_containing_a_comma_and_parens_is_redacted_as_one_token() {
 fn unlexable_input_redacts_to_a_single_placeholder_rather_than_leaking_a_fragment() {
     assert_eq!(fingerprint("INSERT INTO t VALUES ('unterminated"), "?");
 }
+
+#[test]
+fn a_dollar_placeholder_survives_fingerprinting_unchanged() {
+    assert_eq!(
+        fingerprint("SELECT * FROM t WHERE a = $1 AND b = 2"),
+        "SELECT * FROM t WHERE a = $1 AND b = ?"
+    );
+}

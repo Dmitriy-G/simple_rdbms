@@ -280,6 +280,9 @@ impl<'a> Binder<'a> {
                 let bound = BoundExpr::IsNull { expr: Box::new(bound), negated: *negated };
                 Ok((bound, Some(DataType::Boolean)))
             }
+            sql::Expr::Parameter { index } => {
+                Err(PlannerError::UndefinedParameter { index: *index })
+            }
         }
     }
 

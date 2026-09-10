@@ -78,6 +78,13 @@ had to change, from stringifying to matching.
     all Error. From `planner::PlannerError`/`catalog::CatalogError`'s name
     and type-resolution failures, and `executor::ExecutorError::Evaluation`
     for a type error caught at execution rather than bind time.
+  - `UndefinedParameter` -> `UNDEFINED_PARAMETER` (42P02), Error. From
+    `planner::PlannerError::UndefinedParameter`: a statement containing an
+    `Expr::Parameter` reached the binder without its placeholders having
+    been substituted for values first - `planner::parameters::substitute_parameters`
+    is what would normally replace every `$n` with a literal before
+    binding, so reaching this means a caller ran `Database::execute` on
+    parameterized SQL instead of `Database::execute_with_params`.
   - `UndefinedIndex`, `DuplicateIndex` -> `UNDEFINED_OBJECT` (42704),
     `DUPLICATE_OBJECT` (42710), both Error. From
     `catalog::CatalogError::IndexNotFound`/`IndexAlreadyExists`

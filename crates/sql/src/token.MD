@@ -25,6 +25,10 @@ The lexical tokens `Lexer` produces and `Parser` consumes.
   is an integer literal, before it is narrowed to a `types::DataType`.
   `FloatLiteral(f64)` is a floating-point literal. `StringLiteral(String)`
   is a single-quoted string literal, with quoting already stripped.
+  `Parameter(u32)` is a `$n` placeholder (1-based), used in place of a
+  literal in a prepared statement (`lexer.MD`'s `lex_dollar`); `$0` and a
+  bare `$` never reach this variant, since `Lexer::lex_dollar` rejects both
+  as `SqlError::InvalidParameter` before a token is produced.
   Punctuation/operator variants (`Comma`, `Semicolon`, `LParen`, `RParen`,
   `Star`, `Dot`, `Plus`, `Minus`, `Slash`, `Eq`, `NotEq`, `Lt`, `LtEq`,
   `Gt`, `GtEq`) mirror their source spelling. `Dot` doubles as the

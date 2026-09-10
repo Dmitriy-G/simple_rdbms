@@ -24,6 +24,7 @@ impl<'a> Lexer<'a> {
                 }
                 Some(b) if b.is_ascii_digit() => self.lex_number()?,
                 Some(b'\'') => self.lex_string(start)?,
+                Some(b'$') => self.lex_dollar(start)?,
                 Some(b) if b == b'_' || b.is_ascii_alphabetic() => self.lex_ident_or_keyword(),
                 Some(_) => self.lex_punct(start)?,
             };
@@ -102,6 +103,23 @@ impl<'a> Lexer<'a> {
             }
         }
         Ok(TokenKind::StringLiteral(value))
+    }
+
+    fn lex_dollar(&mut self, start: usize) -> Result<TokenKind, SqlError> {
+        self.offset += 1;
+        let digits_start = self.offset;
+        self.advance_while(|b| b.is_ascii_digit());
+        let text = &self.input[start..self.offset];
+        if digits_start == self.offset {
+            return Err(SqlError::InvalidParameter { text: text.to_string(), offset: start });
+        }
+        let index: u32 = self.input[digits_start..self.offset]
+            .parse()
+            .map_err(|_| SqlError::InvalidParameter { text: text.to_string(), offset: start })?;
+        if index == 0 {
+            return Err(SqlError::InvalidParameter { text: text.to_string(), offset: start });
+        }
+        Ok(TokenKind::Parameter(index))
     }
 
     fn lex_ident_or_keyword(&mut self) -> TokenKind {

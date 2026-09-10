@@ -610,6 +610,69 @@ fn nested_explain_is_a_parse_error() {
 }
 
 #[test]
+fn parses_dollar_placeholder_in_where_clause() {
+    let stmt = parse("SELECT * FROM t WHERE a = $1");
+    let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
+    assert_eq!(
+        select.where_clause,
+        Some(Expr::BinaryOp {
+            left: Box::new(col_expr("a")),
+            op: BinaryOperator::Eq,
+            right: Box::new(Expr::Parameter { index: 1 }),
+        })
+    );
+}
+
+#[test]
+fn parses_dollar_placeholders_in_insert_values() {
+    let stmt = parse("INSERT INTO t VALUES ($1, $2)");
+    assert_eq!(
+        stmt,
+        Statement::Insert(InsertStatement {
+            table: "t".to_string(),
+            columns: vec![],
+            values: vec![vec![Expr::Parameter { index: 1 }, Expr::Parameter { index: 2 },]],
+        })
+    );
+}
+
+#[test]
+fn dollar_zero_is_a_lexer_error() {
+    let source = "SELECT * FROM t WHERE a = $0";
+    match parse_err(source) {
+        SqlError::InvalidParameter { text, offset } => {
+            assert_eq!(text, "$0");
+            assert_eq!(offset, byte_offset(source, '$'));
+        }
+        other => panic!("expected InvalidParameter, got {other:?}"),
+    }
+}
+
+#[test]
+fn bare_dollar_with_no_digit_is_a_lexer_error() {
+    let source = "SELECT * FROM t WHERE a = $ AND b = 1";
+    match parse_err(source) {
+        SqlError::InvalidParameter { text, offset } => {
+            assert_eq!(text, "$");
+            assert_eq!(offset, byte_offset(source, '$'));
+        }
+        other => panic!("expected InvalidParameter, got {other:?}"),
+    }
+}
+
+#[test]
+fn oversized_parameter_index_is_a_lexer_error() {
+    let source = "SELECT * FROM t WHERE a = $99999999999";
+    match parse_err(source) {
+        SqlError::InvalidParameter { text, offset } => {
+            assert_eq!(text, "$99999999999");
+            assert_eq!(offset, byte_offset(source, '$'));
+        }
+        other => panic!("expected InvalidParameter, got {other:?}"),
+    }
+}
+
+#[test]
 fn render_points_a_caret_at_the_offending_token() {
     let source = "SELECT * FROM t WHERE a = @";
     let err = parse_err(source);

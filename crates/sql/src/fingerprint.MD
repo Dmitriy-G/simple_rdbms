@@ -26,7 +26,11 @@ trusts.
   other characters. If `sql` fails to lex at all, the whole thing might be
   an unterminated string literal (i.e. arbitrary user text with no lexical
   structure to redact around), so this returns a single `"?"` rather than
-  risk leaking a fragment.
+  risk leaking a fragment. A `TokenKind::Parameter` is not treated as a
+  literal by `is_literal`, so a `$1` placeholder survives fingerprinting
+  unchanged - it names *which* prepared statement ran, not a value a user
+  typed, and collapsing it to `?` the same way a literal is would make two
+  differently-parameterized statements fingerprint identically.
 
 ## Usage Example
 

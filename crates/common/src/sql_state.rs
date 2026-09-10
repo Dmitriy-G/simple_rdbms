@@ -27,6 +27,7 @@ impl SqlState {
     pub const SYNTAX_ERROR: SqlState = SqlState(*b"42601");
     pub const AMBIGUOUS_COLUMN: SqlState = SqlState(*b"42702");
     pub const UNDEFINED_COLUMN: SqlState = SqlState(*b"42703");
+    pub const UNDEFINED_PARAMETER: SqlState = SqlState(*b"42P02");
     pub const UNDEFINED_TABLE: SqlState = SqlState(*b"42P01");
     pub const DUPLICATE_TABLE: SqlState = SqlState(*b"42P07");
     pub const DATATYPE_MISMATCH: SqlState = SqlState(*b"42804");

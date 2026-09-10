@@ -99,12 +99,16 @@ cursor rather than by recursing over the input text.
   `parse_comparison`, `parse_unary`, `parse_primary` - private. The
   precedence-climbing ladder `parse_expr` sits on top of, each one level
   tighter than the last; `parse_primary` is the base case, matching
-  literals, column references, and parenthesized sub-expressions - a bare
-  identifier becomes `Expr::Column { table: None, name }`, and one
-  immediately followed by `.` and a second identifier becomes
-  `Expr::Column { table: Some(first), name: second }`, a qualified
+  literals, column references, parenthesized sub-expressions, and `$n`
+  placeholders - a bare identifier becomes `Expr::Column { table: None,
+  name }`, and one immediately followed by `.` and a second identifier
+  becomes `Expr::Column { table: Some(first), name: second }`, a qualified
   reference the binder resolves against the `FROM` clause's `TableRef`
-  (`planner::binder.MD`). This ladder matches Postgres's order exactly,
+  (`planner::binder.MD`); a `TokenKind::Parameter(n)` token becomes
+  `Expr::Parameter { index: n }` with no further validation here - the
+  lexer has already rejected `$0` and a bare `$` (`lexer.MD`'s
+  `lex_dollar`), so every `Parameter` token `parse_primary` sees carries a
+  positive index. This ladder matches Postgres's order exactly,
   highest to lowest: comparison, `IS`, `NOT`, `AND`, `OR`, with unary
   minus kept separate and high (inside `parse_unary`, above the
   multiplicative/additive levels M15 will add) since Postgres binds unary

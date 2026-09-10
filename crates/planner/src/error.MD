@@ -7,7 +7,12 @@ Errors raised while binding a parsed statement against the catalog.
 - `PlannerError` - the enum. `UnknownTable(String)` is raised when a
   statement references a table not present in the catalog.
   `UnknownColumn(String)` is raised when a statement references a column
-  not present in the resolved table's schema. `ColumnCountMismatch {
+  not present in the resolved table's schema. `UndefinedParameter { index }`
+  is raised when `Binder` meets an `sql::Expr::Parameter { index }` while
+  binding an expression - the binder never substitutes a placeholder
+  itself, so reaching one here means the statement was bound without
+  `parameters::substitute_parameters` having replaced it with a literal
+  first. `ColumnCountMismatch {
   expected, found }` is raised when an `INSERT` row supplies a different
   number of values than the number of target columns (explicit or, if
   omitted, the table's full column list). `TypeMismatch(String)` is raised
@@ -23,6 +28,7 @@ Errors raised while binding a parsed statement against the catalog.
 - `impl From<PlannerError> for common::Error` - matches each variant onto
   the `common::Error` variant naming the same SQL condition:
   `UnknownTable` -> `UndefinedTable`, `UnknownColumn` -> `UndefinedColumn`,
+  `UndefinedParameter` -> the identically-shaped `UndefinedParameter`,
   `ColumnCountMismatch` -> the identically-shaped `ColumnCountMismatch`,
   `TypeMismatch` -> `DatatypeMismatch`, `AmbiguousColumn` -> the
   identically-shaped `AmbiguousColumn`, `LiteralOutOfRange` ->

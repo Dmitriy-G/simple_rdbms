@@ -278,6 +278,15 @@ fn qualified_column_in_insert_values_is_unknown_table() {
 }
 
 #[test]
+fn binding_an_unsubstituted_parameter_is_undefined_parameter() {
+    let catalog = catalog_with_users();
+    match bind(&catalog, "SELECT * FROM users WHERE id = $1") {
+        Err(PlannerError::UndefinedParameter { index }) => assert_eq!(index, 1),
+        other => panic!("expected UndefinedParameter, got {other:?}"),
+    }
+}
+
+#[test]
 fn binds_create_table() {
     let catalog = catalog_with_users();
     let BoundStatement::CreateTable(create) =

@@ -321,7 +321,7 @@ and receive results from, each tagged with its session. How those
 statements are then scheduled — serially or concurrently — is the
 execution model's business, not this sub-milestone's.
 
-### M13.2 — PostgreSQL wire protocol, simple query 🚧 In Progress
+### M13.2 — PostgreSQL wire protocol, simple query ✅ Done
 **Problem:** the engine can be reached by message passing from any number
 of connections, but nothing yet speaks the bytes a Postgres client
 actually sends - startup negotiation, parameter/status exchange, and the
@@ -344,7 +344,7 @@ either accept a documented concurrency limit of eight simultaneously
 blocked statements or stop a blocked statement from holding a worker.
 Decide which, and say so in this entry, before the listener ships.
 
-### M13.3 — Extended query protocol 🆕 New
+### M13.3 — Extended query protocol 🚧 In Progress
 **Problem:** simple query (M13.2) inlines literals into full SQL text on
 every execution, which is what `psql` does but not what real drivers do -
 JDBC and most connection-pooled clients prepare a statement once and

@@ -29,6 +29,7 @@ pub enum TokenKind {
     IntegerLiteral(i64),
     FloatLiteral(f64),
     StringLiteral(String),
+    Parameter(u32),
 
     Comma,
     Semicolon,

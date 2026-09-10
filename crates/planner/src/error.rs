@@ -9,6 +9,9 @@ pub enum PlannerError {
     #[error("unknown column: {0}")]
     UnknownColumn(String),
 
+    #[error("undefined parameter: ${index}")]
+    UndefinedParameter { index: u32 },
+
     #[error("column count mismatch: expected {expected}, found {found}")]
     ColumnCountMismatch { expected: usize, found: usize },
 
@@ -27,6 +30,9 @@ impl From<PlannerError> for common::Error {
         match err {
             PlannerError::UnknownTable(name) => common::Error::UndefinedTable { name },
             PlannerError::UnknownColumn(name) => common::Error::UndefinedColumn { name },
+            PlannerError::UndefinedParameter { index } => {
+                common::Error::UndefinedParameter { index }
+            }
             PlannerError::ColumnCountMismatch { expected, found } => {
                 common::Error::ColumnCountMismatch { expected, found }
             }

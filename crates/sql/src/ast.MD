@@ -62,7 +62,13 @@ consumes.
   for `NULL` that actually returns a `Boolean`: `<expr> = NULL` parses as
   an ordinary `BinaryOp` and, under three-valued logic, evaluates to
   `NULL` for every row rather than ever selecting one (`expression.MD` in
-  `executor`).
+  `executor`). `Parameter { index }` is a `$n` placeholder from a prepared
+  statement, 1-based to match the wire protocol's own numbering
+  (`token.MD`'s `TokenKind::Parameter`); it is accepted anywhere a literal
+  is, and `planner::binder::Binder` rejects one directly - reaching the
+  binder unsubstituted means the statement was run without its parameter
+  values, since `planner::parameters::substitute_parameters` replaces
+  every `Parameter` with a `Literal` first.
 - `BinaryOperator` - a binary operator that can appear in an
   `Expr::BinaryOp`: `Eq` (`=`), `NotEq` (`<>`/`!=`), `Lt` (`<`), `LtEq`
   (`<=`), `Gt` (`>`), `GtEq` (`>=`), `And` (`AND`), `Or` (`OR`), `Plus`

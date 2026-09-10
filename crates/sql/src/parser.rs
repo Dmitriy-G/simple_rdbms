@@ -340,6 +340,10 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Literal(Value::Null))
             }
+            TokenKind::Parameter(index) => {
+                self.advance();
+                Ok(Expr::Parameter { index })
+            }
             TokenKind::Identifier(name) => {
                 self.advance();
                 if matches!(self.current().kind, TokenKind::Dot) {

@@ -21,7 +21,12 @@ Errors raised while lexing or parsing SQL text.
   (an integer literal too large for `i64`, or a float literal outside
   `f64`'s range), rather than being silently replaced with a sentinel
   value; `text` is the exact source text the user typed and `offset` is
-  where the literal starts. `ExplainOfTransactionControl { offset }` is
+  where the literal starts. `InvalidParameter { text, offset }` is raised
+  when a `$`-prefixed placeholder is malformed: a bare `$` with no digit
+  after it, `$0` (placeholder indices are 1-based, `ast.MD`'s
+  `Expr::Parameter`), or a digit run too large for `u32`; `text` is the
+  whole `$...` span as written and `offset` is where the `$` starts.
+  `ExplainOfTransactionControl { offset }` is
   raised when `EXPLAIN`'s target parses as `BEGIN`, `COMMIT`, or
   `ROLLBACK` - none of them go through `planner::plan`, so there is no
   plan to show. `NestedExplain { offset }` is raised when `EXPLAIN`'s

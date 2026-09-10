@@ -84,6 +84,9 @@ unknown columns/tables and type mismatches are rejected.
   column inside an `INSERT ... VALUES` row, which has no `FROM` and so no
   table in scope to qualify against at all, returns
   `PlannerError::UnknownTable`.
+- `binding_an_unsubstituted_parameter_is_undefined_parameter` - `WHERE id =
+  $1` reaching the binder unsubstituted returns
+  `PlannerError::UndefinedParameter { index: 1 }`.
 - `binds_create_table` - `CREATE TABLE t (a INTEGER, b TEXT)` binds to a
   `BoundCreateTable` with the given name and two columns.
 

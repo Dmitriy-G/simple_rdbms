@@ -65,6 +65,7 @@ pub enum Expr {
     BinaryOp { left: Box<Expr>, op: BinaryOperator, right: Box<Expr> },
     UnaryOp { op: UnaryOperator, expr: Box<Expr> },
     IsNull { expr: Box<Expr>, negated: bool },
+    Parameter { index: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

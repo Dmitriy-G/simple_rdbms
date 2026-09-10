@@ -26,6 +26,10 @@ SQL punctuation, and unlexable input.
 - `unlexable_input_redacts_to_a_single_placeholder_rather_than_leaking_a_fragment`
   - an unterminated string literal (or any other lex failure) redacts to
   a bare `"?"` instead of falling back to showing the raw, unredacted text.
+- `a_dollar_placeholder_survives_fingerprinting_unchanged` - a `$1`
+  placeholder is left as-is while an ordinary integer literal alongside it
+  is still redacted to `?`, proving `is_literal` treats `Parameter`
+  differently from the three literal token kinds.
 
 ## Usage Example
 

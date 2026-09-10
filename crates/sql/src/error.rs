@@ -17,6 +17,9 @@ pub enum SqlError {
     #[error("invalid numeric literal '{text}' at offset {offset}")]
     InvalidNumericLiteral { text: String, offset: usize },
 
+    #[error("invalid parameter '{text}' at offset {offset}: expected $1, $2, ...")]
+    InvalidParameter { text: String, offset: usize },
+
     #[error(
         "EXPLAIN cannot be used with BEGIN, COMMIT, or ROLLBACK at offset {offset}: they have \
          no plan"
@@ -34,6 +37,7 @@ impl SqlError {
             | SqlError::UnterminatedString { offset }
             | SqlError::UnexpectedToken { offset, .. }
             | SqlError::InvalidNumericLiteral { offset, .. }
+            | SqlError::InvalidParameter { offset, .. }
             | SqlError::ExplainOfTransactionControl { offset }
             | SqlError::NestedExplain { offset } => *offset,
             SqlError::UnexpectedEof { .. } => source.len(),

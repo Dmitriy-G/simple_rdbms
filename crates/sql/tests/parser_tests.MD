@@ -126,6 +126,18 @@ parse error (not a panic).
   `SqlError::ExplainOfTransactionControl` rather than parsing.
 - `nested_explain_is_a_parse_error` - `EXPLAIN EXPLAIN SELECT * FROM t`
   reports `SqlError::NestedExplain`.
+- `parses_dollar_placeholder_in_where_clause` - `WHERE a = $1` parses `$1`
+  to `Expr::Parameter { index: 1 }` in primary-expression position.
+- `parses_dollar_placeholders_in_insert_values` - `INSERT INTO t VALUES
+  ($1, $2)` parses both placeholders to `Expr::Parameter`, in order.
+- `dollar_zero_is_a_lexer_error` - `$0` reports
+  `SqlError::InvalidParameter` quoting `"$0"` at the `$`'s offset, since
+  placeholder indices are 1-based.
+- `bare_dollar_with_no_digit_is_a_lexer_error` - a `$` with no following
+  digit reports `SqlError::InvalidParameter` quoting `"$"`.
+- `oversized_parameter_index_is_a_lexer_error` - a digit run too large for
+  `u32` after `$` reports `SqlError::InvalidParameter` quoting the whole
+  span.
 - `render_points_a_caret_at_the_offending_token` - `SqlError::render`
   produces exactly three lines (message, source line, caret) with the
   caret aligned to the offending byte offset.

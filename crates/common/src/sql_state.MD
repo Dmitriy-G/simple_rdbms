@@ -50,6 +50,11 @@ new one" apart from "the server process itself is gone." `DEADLOCK_DETECTED`
 `SERIALIZATION_FAILURE` (`40001`) so a `txn::LockManager` deadlock victim
 (`Error::DeadlockDetected`) can be told apart from a plain write-write
 conflict even though both are equally retryable to a client.
+`UNDEFINED_PARAMETER` (`42P02`) is the standard's own code for a reference
+to a parameter that doesn't exist, and maps to `Error::UndefinedParameter`:
+a prepared statement executed without its `$n` placeholders substituted
+first, which `planner::binder::Binder` raises the moment it meets an
+`Expr::Parameter` that reached it unsubstituted.
 
 ## Key Components
 
@@ -87,6 +92,7 @@ conflict even though both are equally retryable to a client.
   | `SYNTAX_ERROR` | `42601` | 42 - syntax error or access rule violation |
   | `AMBIGUOUS_COLUMN` | `42702` | 42 - syntax error or access rule violation |
   | `UNDEFINED_COLUMN` | `42703` | 42 - syntax error or access rule violation |
+  | `UNDEFINED_PARAMETER` | `42P02` | 42 - syntax error or access rule violation |
   | `UNDEFINED_TABLE` | `42P01` | 42 - syntax error or access rule violation |
   | `DUPLICATE_TABLE` | `42P07` | 42 - syntax error or access rule violation |
   | `DATATYPE_MISMATCH` | `42804` | 42 - syntax error or access rule violation |
