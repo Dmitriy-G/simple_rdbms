@@ -4,11 +4,11 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use common::{Error, Severity, SqlState};
-use engine::{DataType, Database, ResultSet, StatementDescription, Tuple, Value};
+use engine::{Database, ResultSet, StatementDescription, Tuple, Value};
 use futures::{Sink, stream};
 use pgwire::api::Type;
 
-use crate::pg_catalog::{self, Introspection};
+use crate::pg_catalog::{self, Introspection, field_info, pg_type_of};
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::{DefaultServerParameterProvider, ServerParameterProvider, StartupHandler};
 use pgwire::api::portal::{Format, Portal};
@@ -324,20 +324,6 @@ fn statement_keyword(sql: &str) -> String {
         }
     }
     first
-}
-
-fn pg_type_of(data_type: Option<&DataType>) -> Type {
-    match data_type {
-        Some(DataType::Boolean) => Type::BOOL,
-        Some(DataType::Integer) => Type::INT4,
-        Some(DataType::BigInt) => Type::INT8,
-        Some(DataType::Double) => Type::FLOAT8,
-        Some(DataType::Varchar(_)) | None => Type::VARCHAR,
-    }
-}
-
-fn field_info(name: &str, data_type: Option<&DataType>, format: FieldFormat) -> FieldInfo {
-    FieldInfo::new(name.to_string(), None, None, pg_type_of(data_type), format)
 }
 
 fn decode_param(

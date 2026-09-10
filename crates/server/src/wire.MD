@@ -80,8 +80,10 @@ harmless deviation instead.
 
 Column types ride on `engine::ResultSet::Rows`'s `column_types`
 (`crates/engine/src/result_set.rs`, plumbed from the binder in M13.2
-subtask 2) and `field_info` maps each to the fixed PostgreSQL OID the
-task called for: `Boolean` to `Type::BOOL` (16), `Integer` to `Type::INT4`
+subtask 2) and `pg_catalog::field_info` (`src/pg_catalog.MD` - moved there
+in M13.4 subtask 3, `pub(crate)`, alongside the `pg_type_of` mapping it is
+built on) maps each to the fixed PostgreSQL OID the task called for:
+`Boolean` to `Type::BOOL` (16), `Integer` to `Type::INT4`
 (23), `BigInt` to `Type::INT8` (20), `Double` to `Type::FLOAT8` (701), and
 `Varchar(_)`/`None` to `Type::VARCHAR` (25) - `None` (a projection with no
 static type, e.g. a bare `NULL` literal) gets the same OID a real `NULL`
@@ -109,9 +111,9 @@ M13.4 subtask 1 intercepts real clients' introspection queries even
 earlier than that: `do_query` calls `pg_catalog::answer` (`src/pg_catalog.MD`)
 under the same session lock every other query path takes, before
 `intercept_set_show_reset` ever runs, so a recognized `pg_catalog` query
-(`select version()` today; `pg_namespace`/`pg_class`/`pg_attribute`/
-`pg_type` in later M13.4 subtasks) never reaches `sql::Parser` at all -
-that grammar has no notion of any `pg_*` relation and would fail every one
+(`select version()`, `pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`
+as of M13.4 subtask 3) never reaches `sql::Parser` at all - that grammar
+has no notion of any `pg_*` relation and would fail every one
 of them with `42P01 undefined_table`, which is exactly what killed a real
 client's connection before this subtask. `db.table_names()`/
 `db.table_schema` reach `pg_catalog::answer` through the same
@@ -237,9 +239,9 @@ original SQL text and the `engine::StatementDescription`
 `to_pg_error` on failure - so a syntax error in a `Parse` message is
 reported the same way a syntax error in a simple query is.
 `StatementParser::get_parameter_types` maps each `Option<types::DataType>`
-in `description.param_types` through `pg_type_of` (below), which is the
-same `DataType` -> `pgwire::api::Type` mapping `field_info` already used,
-factored out so both share it; `None` (a placeholder
+in `description.param_types` through `pg_catalog::pg_type_of`, which is
+the same `DataType` -> `pgwire::api::Type` mapping `field_info` already
+used, factored out so both share it; `None` (a placeholder
 `planner::infer_parameter_types` couldn't resolve) becomes `Type::VARCHAR`,
 the same fallback `field_info` already gave an untyped result column.
 `get_result_schema` builds one `FieldInfo` per `description.columns`
@@ -300,8 +302,9 @@ that portal, and `crates/server/tests/wire_extended_query.rs`'s
 what prove it end to end over `tokio_postgres::Transaction::query_portal`.
 
 `decode_param` picks the concrete Rust type to decode into from the
-*server's own* inferred type (`pg_type_of` on `description.param_types[idx]`,
-or `Type::VARCHAR` past the end of that list), never from
+*server's own* inferred type (`pg_catalog::pg_type_of` on
+`description.param_types[idx]`, or `Type::VARCHAR` past the end of that
+list), never from
 `target.parameter_types` (what the client itself declared, if anything,
 in `Parse` - used only by the default `do_describe_statement` to choose
 what `ParameterDescription` to *report*). The two can disagree - a client
@@ -363,11 +366,6 @@ SQL statement raised.
   `description.param_types` through `pg_type_of`; `get_result_schema`
   maps `description.columns` through `field_info`, in the caller-supplied
   `Format` (falling back to `FieldFormat::Text` when `None`).
-- `pg_type_of(data_type) -> Type` - private. The `types::DataType` ->
-  `pgwire::api::Type` mapping (`Boolean`/`Integer`/`BigInt`/`Double` to
-  their obvious OIDs, `Varchar(_)`/`None` to `Type::VARCHAR`), factored out
-  of `field_info` so `StatementParser::get_parameter_types` and `decode_param`
-  share the exact same rule `field_info` uses for result columns.
 - `decode_param(portal, idx, pg_type) -> PgWireResult<Value>` - private.
   Calls `decode_param_bytes`, remapping any error through
   `parameter_decode_error` so a decode failure always carries `08P01`
@@ -426,9 +424,6 @@ SQL statement raised.
   keyword, upper-cased, after trimming a single trailing `;`; `CREATE`
   looks one further word ahead so `CREATE TABLE`/`CREATE INDEX` read as
   two-word keywords.
-- `field_info(name, data_type, format) -> FieldInfo` - private. Builds the
-  `FieldInfo` `RowDescription` needs from `pg_type_of(data_type)` and the
-  caller-supplied `FieldFormat`.
 - `encode_data_row(encoder, tuple) -> PgWireResult<DataRow>` - private.
   Encodes one `types::Tuple` into `encoder` field by field via
   `encode_field`, then calls `DataRowEncoder::take_row` to produce the

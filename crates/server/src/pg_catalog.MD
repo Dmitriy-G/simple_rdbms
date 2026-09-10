@@ -2,16 +2,25 @@
 
 Intercepts the introspection queries a real PostgreSQL client library sends
 before it will trust a connection - `select version()`, `pg_namespace`,
-`pg_class` (M13.4 subtask 2), and (later subtasks of
-`docs/ROADMAP.md`'s M13.4) `pg_attribute` and `pg_type` - and answers them
-from this engine's own live catalog rather than letting them reach
-`sql::Parser`, which knows nothing about any relation named `pg_*` and
-would fail every one of them with `42P01 undefined_table`, killing the
-client's connection before its first real statement.
-`crates/server/src/wire.rs` calls `answer` at the very front of
-`SimpleQueryHandler::do_query`, ahead of `intercept_set_show_reset`, so a
-recognized introspection query never reaches `engine::Database::execute`
-at all; an unrecognized query falls through unchanged.
+`pg_class` (M13.4 subtask 2), `pg_attribute` and `pg_type` (M13.4
+subtask 3), and (a later subtask of `docs/ROADMAP.md`'s M13.4) anything
+else starting `pg_` - and answers them from this engine's own live
+catalog rather than letting them reach `sql::Parser`, which knows nothing
+about any relation named `pg_*` and would fail every one of them with
+`42P01 undefined_table`, killing the client's connection before its first
+real statement. `crates/server/src/wire.rs` calls `answer` at the very
+front of `SimpleQueryHandler::do_query`, ahead of
+`intercept_set_show_reset`, so a recognized introspection query never
+reaches `engine::Database::execute` at all; an unrecognized query falls
+through unchanged.
+
+This module also carries `pg_type_of`/`field_info` (moved here from
+`wire.rs` in M13.4 subtask 3, `pub(crate)` since `wire.rs`'s own
+`to_response`/`StatementParser` still need them for an ordinary result
+set's column types): the `types::DataType` -> `pgwire::api::Type` mapping
+every recognizer that reports a real column's type reuses, so
+`pg_attribute`'s `atttypid` and an ordinary `SELECT`'s `RowDescription`
+can never disagree about what oid a given `DataType` maps to.
 
 This module never fabricates a row for data the engine doesn't have:
 where nothing backs an answer, the answer is zero rows (M13.4 subtask 4),
@@ -45,9 +54,9 @@ answered through actual joins, eventually replace this module).
   is sufficient for every recognized shape this module matches.
 - `answer(db, sql) -> Option<Introspection>` - normalizes `sql` and tries
   each recognizer in turn (`select version()`, then `pg_namespace`, then
-  `pg_class`), returning the first match's `Introspection` or `None` when
-  nothing recognizes it, in which case the caller runs the query through
-  the engine exactly as before.
+  `pg_class`, then `pg_attribute`, then `pg_type`), returning the first
+  match's `Introspection` or `None` when nothing recognizes it, in which
+  case the caller runs the query through the engine exactly as before.
 - `is_select_version(normalized)` - private, pure. `true` for
   `"select version()"` and the same with a trailing bare or `as`-prefixed
   single-word alias (`"select version() v"`, `"select version() as v"`),
@@ -135,6 +144,48 @@ answered through actual joins, eventually replace this module).
   the row set is simply not narrowed by it, which is the "brittle" half of
   this module's contract: a predicate this module cannot understand does
   not make the query fail, it just does not filter.
+- `pg_type_of(data_type) -> Type` - `pub(crate)`. The `types::DataType` ->
+  `pgwire::api::Type` mapping (`Boolean`/`Integer`/`BigInt`/`Double` to
+  their obvious OIDs, `Varchar(_)`/`None` to `Type::VARCHAR`); moved here
+  from `wire.rs` (M13.4 subtask 3) since `answer_pg_attribute` below needs
+  it as much as `wire.rs`'s own `StatementParser`/`to_response` do, and a
+  second copy would risk the two disagreeing about a type's oid.
+- `field_info(name, data_type, format) -> FieldInfo` - `pub(crate)`. Builds
+  the `FieldInfo` an ordinary `RowDescription` needs from `pg_type_of` and
+  a caller-supplied `FieldFormat`; moved here alongside `pg_type_of` for
+  the same reason, `wire.rs`'s `to_response`/`StatementParser` are its only
+  callers today.
+- `answer_pg_attribute(db, normalized) -> Option<Introspection>` -
+  private. Recognizes a query whose `FROM` names `pg_attribute` and
+  answers one row per column of every table in `Database::table_names()`
+  (or, once an `attrelid = <oid>` predicate narrows it, just the one table
+  that oid names): `attrelid` (`table_oid`), `attname`, `atttypid`
+  (`pg_type_of(&column.data_type).oid()`), `attnum` (1-based position
+  within `Schema::columns()`, so this recognizer's own row order is
+  already `attnum` order without needing to sort), `attnotnull` (`t` when
+  `!column.nullable`), `atttypmod` (always `-1`), `attisdropped` (always
+  `f` - this engine has no `DROP COLUMN`) and `attidentity` (always empty
+  - no identity columns). An `attname = '<x>'` predicate further narrows
+  the row set to that one column, once `attrelid`/table selection has
+  already run; `attnum > 0` is not parsed at all, since every column this
+  engine can report already satisfies it (no system columns exist to
+  exclude).
+- `pg_type_catalog() -> Vec<Type>` - private, pure. The five
+  `pgwire::api::Type`s this engine's `DataType` ever maps to
+  (`BOOL`/`INT4`/`INT8`/`FLOAT8`/`VARCHAR`), in a fixed order - the
+  complete `pg_type` row set before any `WHERE` filter narrows it.
+- `answer_pg_type(normalized) -> Option<Introspection>` - private.
+  Recognizes a query whose `FROM` names `pg_type` and answers one row per
+  `pg_type_catalog()` entry: `oid`/`typname` from the `Type` itself
+  (`Type::oid()`/`Type::name()`, so this can never disagree with
+  `pg_type_of`'s own mapping), `typnamespace` (always `11`, `pg_catalog`),
+  `typtype` (always `b`, base type), and `typelem`/`typbasetype`/`typrelid`
+  (always `0` - none of this engine's five types is an array, a domain, or
+  a composite type). `oid = <n>` and `typname = '<x>'` predicates narrow
+  the row set; a `typname` this engine has no `DataType` for - `lo`, or any
+  real PostgreSQL type name this engine doesn't model - answers zero rows
+  rather than an error, exactly like `answer_pg_class`'s `relname` filter
+  does for a table that doesn't exist.
 
 ## Usage Example
 

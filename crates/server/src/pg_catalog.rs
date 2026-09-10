@@ -1,5 +1,6 @@
-use engine::Database;
+use engine::{DataType, Database};
 use pgwire::api::Type;
+use pgwire::api::results::{FieldFormat, FieldInfo};
 
 pub struct Introspection {
     pub columns: Vec<(String, Type)>,
@@ -276,6 +277,127 @@ fn answer_pg_class(db: &Database, normalized: &str) -> Option<Introspection> {
     })
 }
 
+pub(crate) fn pg_type_of(data_type: Option<&DataType>) -> Type {
+    match data_type {
+        Some(DataType::Boolean) => Type::BOOL,
+        Some(DataType::Integer) => Type::INT4,
+        Some(DataType::BigInt) => Type::INT8,
+        Some(DataType::Double) => Type::FLOAT8,
+        Some(DataType::Varchar(_)) | None => Type::VARCHAR,
+    }
+}
+
+pub(crate) fn field_info(
+    name: &str,
+    data_type: Option<&DataType>,
+    format: FieldFormat,
+) -> FieldInfo {
+    FieldInfo::new(name.to_string(), None, None, pg_type_of(data_type), format)
+}
+
+fn answer_pg_attribute(db: &Database, normalized: &str) -> Option<Introspection> {
+    if !recognizes_relation(normalized, "pg_attribute") {
+        return None;
+    }
+
+    let mut names = db.table_names();
+    let clause = where_clause(normalized);
+    let attname_filter = clause.and_then(|clause| eq_string_predicate(clause, "attname"));
+    if let Some(clause) = clause {
+        if let Some(attrelid) = eq_number_predicate(clause, "attrelid") {
+            names.retain(|name| u64::from(table_oid(name)) == attrelid);
+        }
+    }
+
+    let mut rows = Vec::new();
+    for name in names {
+        let Ok(schema) = db.table_schema(&name) else {
+            continue;
+        };
+        let oid = table_oid(&name);
+        for (idx, column) in schema.columns().iter().enumerate() {
+            if let Some(filter) = attname_filter {
+                if column.name != filter {
+                    continue;
+                }
+            }
+            let attnum = idx + 1;
+            rows.push(vec![
+                Some(oid.to_string()),
+                Some(column.name.clone()),
+                Some(pg_type_of(Some(&column.data_type)).oid().to_string()),
+                Some(attnum.to_string()),
+                Some(if column.nullable { "f" } else { "t" }.to_string()),
+                Some("-1".to_string()),
+                Some("f".to_string()),
+                Some(String::new()),
+            ]);
+        }
+    }
+
+    Some(Introspection {
+        columns: vec![
+            ("attrelid".to_string(), Type::OID),
+            ("attname".to_string(), Type::VARCHAR),
+            ("atttypid".to_string(), Type::OID),
+            ("attnum".to_string(), Type::INT4),
+            ("attnotnull".to_string(), Type::VARCHAR),
+            ("atttypmod".to_string(), Type::INT4),
+            ("attisdropped".to_string(), Type::VARCHAR),
+            ("attidentity".to_string(), Type::VARCHAR),
+        ],
+        rows,
+    })
+}
+
+fn pg_type_catalog() -> Vec<Type> {
+    vec![Type::BOOL, Type::INT4, Type::INT8, Type::FLOAT8, Type::VARCHAR]
+}
+
+fn answer_pg_type(normalized: &str) -> Option<Introspection> {
+    if !recognizes_relation(normalized, "pg_type") {
+        return None;
+    }
+
+    let mut types = pg_type_catalog();
+    if let Some(clause) = where_clause(normalized) {
+        if let Some(oid) = eq_number_predicate(clause, "oid") {
+            types.retain(|pg_type| u64::from(pg_type.oid()) == oid);
+        }
+        if let Some(typname) = eq_string_predicate(clause, "typname") {
+            types.retain(|pg_type| pg_type.name() == typname);
+        }
+    }
+
+    let rows = types
+        .into_iter()
+        .map(|pg_type| {
+            vec![
+                Some(pg_type.oid().to_string()),
+                Some(pg_type.name().to_string()),
+                Some(PG_CATALOG_NAMESPACE_OID.to_string()),
+                Some("b".to_string()),
+                Some("0".to_string()),
+                Some("0".to_string()),
+                Some("0".to_string()),
+            ]
+        })
+        .collect();
+
+    Some(Introspection {
+        columns: vec![
+            ("oid".to_string(), Type::OID),
+            ("typname".to_string(), Type::VARCHAR),
+            ("typnamespace".to_string(), Type::OID),
+            ("typtype".to_string(), Type::VARCHAR),
+            ("typelem".to_string(), Type::OID),
+            ("typbasetype".to_string(), Type::OID),
+            ("typrelid".to_string(), Type::OID),
+        ],
+        rows,
+    })
+}
+
 pub fn answer(db: &Database, sql: &str) -> Option<Introspection> {
     let normalized = normalize(sql);
     if is_select_version(&normalized) {
@@ -288,6 +410,12 @@ pub fn answer(db: &Database, sql: &str) -> Option<Introspection> {
         return Some(introspection);
     }
     if let Some(introspection) = answer_pg_class(db, &normalized) {
+        return Some(introspection);
+    }
+    if let Some(introspection) = answer_pg_attribute(db, &normalized) {
+        return Some(introspection);
+    }
+    if let Some(introspection) = answer_pg_type(&normalized) {
         return Some(introspection);
     }
     None

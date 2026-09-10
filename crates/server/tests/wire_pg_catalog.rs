@@ -4,6 +4,7 @@ use common::DbConfig;
 use engine::Database;
 use tokio::net::TcpListener;
 use tokio_postgres::SimpleQueryMessage;
+use tokio_postgres::types::Type as PgType;
 
 async fn connect(db: Arc<Database>) -> Result<tokio_postgres::Client, Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -156,4 +157,68 @@ async fn pg_class_reports_the_same_oid_for_a_table_across_two_queries() {
     let first_oid = only_row(&first).get("oid").expect("expected an oid column");
     let second_oid = only_row(&second).get("oid").expect("expected an oid column");
     assert_eq!(first_oid, second_oid);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_attribute_lists_columns_for_a_table_filtered_by_oid_in_attnum_order() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_pg_attribute.db").await;
+
+    client
+        .simple_query("CREATE TABLE t (flag BOOLEAN, n INTEGER, name TEXT)")
+        .await
+        .expect("create table succeeds");
+
+    let class_result = client
+        .simple_query("SELECT oid FROM pg_class WHERE relname = 't'")
+        .await
+        .expect("pg_class query succeeds");
+    let oid = only_row(&class_result).get("oid").expect("expected an oid column").to_string();
+
+    let attr_result = client
+        .simple_query(&format!(
+            "SELECT attname, atttypid, attnum FROM pg_attribute WHERE attrelid = {oid}"
+        ))
+        .await
+        .expect("pg_attribute query succeeds");
+    let rows: Vec<&tokio_postgres::SimpleQueryRow> = attr_result
+        .iter()
+        .filter_map(|m| match m {
+            SimpleQueryMessage::Row(row) => Some(row),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rows.len(), 3);
+
+    assert_eq!(rows[0].get("attname"), Some("flag"));
+    assert_eq!(rows[0].get("attnum"), Some("1"));
+    assert_eq!(rows[0].get("atttypid"), Some(PgType::BOOL.oid().to_string()).as_deref());
+
+    assert_eq!(rows[1].get("attname"), Some("n"));
+    assert_eq!(rows[1].get("attnum"), Some("2"));
+    assert_eq!(rows[1].get("atttypid"), Some(PgType::INT4.oid().to_string()).as_deref());
+
+    assert_eq!(rows[2].get("attname"), Some("name"));
+    assert_eq!(rows[2].get("attnum"), Some("3"));
+    assert_eq!(rows[2].get("atttypid"), Some(PgType::VARCHAR.oid().to_string()).as_deref());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_type_reports_int4_and_zero_rows_for_an_unknown_typname() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_pg_type.db").await;
+
+    let int4 = client
+        .simple_query("SELECT oid, typname FROM pg_type WHERE typname = 'int4'")
+        .await
+        .expect("pg_type query succeeds");
+    let row = only_row(&int4);
+    assert_eq!(row.get("typname"), Some("int4"));
+    assert_eq!(row.get("oid"), Some(PgType::INT4.oid().to_string()).as_deref());
+
+    let unknown = client
+        .simple_query("SELECT oid FROM pg_type WHERE typname = 'lo'")
+        .await
+        .expect("pg_type query succeeds");
+    assert_eq!(row_count(&unknown), 0);
 }

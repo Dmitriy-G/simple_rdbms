@@ -53,6 +53,21 @@ as `wire_simple_query.rs`.
   `simple_query` round trips) return the same value, proving
   `table_oid`'s hash-based oid is deterministic per name rather than
   computed differently each time.
+- `pg_attribute_lists_columns_for_a_table_filtered_by_oid_in_attnum_order` -
+  for a table created as `(flag BOOLEAN, n INTEGER, name TEXT)`, first
+  reads the table's oid back from a `pg_class` query (exactly as a real
+  driver would), then a `pg_attribute` query filtered by
+  `attrelid = <that oid>` returns exactly three rows, in declaration order
+  (`flag`/`1`, `n`/`2`, `name`/`3`), each `atttypid` matching
+  `tokio_postgres::types::Type::{BOOL,INT4,VARCHAR}.oid()` respectively -
+  proving `answer_pg_attribute`'s row order already matches `attnum`
+  without a separate sort step, and that `atttypid` agrees with
+  `pg_catalog::pg_type_of`'s own mapping.
+- `pg_type_reports_int4_and_zero_rows_for_an_unknown_typname` -
+  `SELECT oid, typname FROM pg_type WHERE typname = 'int4'` returns one
+  row whose `oid` matches `tokio_postgres::types::Type::INT4.oid()`, and
+  the same shape with `typname = 'lo'` (a real PostgreSQL type this engine
+  has no `DataType` for) returns zero rows rather than an error.
 
 ## Usage Example
 
