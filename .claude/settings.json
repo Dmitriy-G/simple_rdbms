@@ -5,6 +5,12 @@
       "Read(//**/.cargo/registry/src/**)",
       "Read(//**/.cargo/git/checkouts/**)",
       "Read(//**/.rustup/toolchains/**)",
+      "Read(~/.cargo/registry/src/**)",
+      "Read(~/.cargo/git/checkouts/**)",
+      "Read(~/.rustup/toolchains/**)",
+      "Read(//*/Users/*/.cargo/registry/src/**)",
+      "Read(//*/Users/*/.cargo/git/checkouts/**)",
+      "Read(//*/Users/*/.rustup/toolchains/**)",
       "Bash(cargo build:*)",
       "Bash(cargo check:*)",
       "Bash(cargo fmt:*)",
@@ -13,6 +19,8 @@
       "Bash(cargo run:*)",
       "Bash(cargo tree:*)",
       "Bash(cargo metadata:*)",
+      "Bash(cargo search:*)",
+      "Bash(cargo info:*)",
       "Bash(cargo --version)",
       "Bash(rustc --version)",
       "Bash(bash scripts/check_docs.sh)",
@@ -20,7 +28,29 @@
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(git show:*)",
-      "Bash(git ls-files:*)"
+      "Bash(git ls-files:*)",
+      "Bash(git check-ignore:*)",
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(basename:*)",
+      "Bash(dirname:*)",
+      "Bash(echo:*)",
+      "Bash(pwd)",
+      "Bash(tee /tmp/:*)",
+      "Bash(mkdir -p /tmp/:*)"
+    ],
+    "deny": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(git reset:*)",
+      "Bash(git restore:*)",
+      "Bash(git checkout:*)",
+      "Bash(git clean:*)"
     ]
   }
 }

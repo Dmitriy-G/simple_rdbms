@@ -169,13 +169,19 @@ Role: <role name>
    gives, moving each subtask's status to 🚧 In Progress when it starts
    and 👀 Review when it stops — never to ✅ Done, which is the human's.
    Never commit automatically. Don't install heavy tooling (e.g. Python/pip)
-   for investigating — use `bash` instead. Read files with `Read`, `Grep`
-   and `Glob` and change them with `Edit` and `Write`, never with `cat`,
-   `sed`, `head`, `tail` or `awk` in a shell: a shell command is authorized
+   for investigating — use `bash` instead. Read and list files with
+   `Read`, `Grep` and `Glob` and change them with `Edit` and `Write`,
+   never with `cat`, `sed`, `head`, `tail`, `awk`, `find` or `ls` in a
+   shell: a shell command is authorized
    as a literal string, so each one is a fresh permission prompt for the
    human, while a path rule is answered once — `.claude/settings.json`
    already allows the vendored dependency sources under `~/.cargo` for
-   exactly that reason. `bash` is for commands that do something: `cargo`,
+   exactly that reason. That file also allows the read-only shell verbs
+   outright, so what still prompts is nearly always a *compound* command:
+   a pipe into `head`, a `VAR=...;` in front, a `find /` sweep. Each has a
+   tool that does the same thing in one call — `Grep`'s `head_limit`,
+   `Glob`'s absolute `path` — and `.claude/agents/coder.md` names all
+   three. `bash` is for commands that do something: `cargo`,
    `git`, `scripts/`. If a problem surfaces that
    isn't part of the current subtask, record it in `.claude/problems.md` rather
    than investigating or fixing it there. If a needed investigation is
@@ -539,7 +545,10 @@ Milestone planning is the Task writer's, milestone review is the
 Milestone Reviewer's, and neither is a file the other may write.
 
 No role commits. Finished work is left in the working tree for the human
-to review and commit.
+to review and commit, and `.claude/settings.json` denies `git commit`,
+`git push` and the four commands that would discard an unreviewed working
+tree (`reset`, `restore`, `checkout`, `clean`) so the rule holds even when
+a session forgets it.
 
 ### File formats
 

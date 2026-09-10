@@ -79,9 +79,10 @@ own, and you stop.
 
 - Never commit. Leave changes for review.
 - Never install heavy tooling for investigation. Use `bash`.
-- Never read a file through `bash`. `cat`, `sed -n`, `head`, `tail`,
-  `awk` and `grep` in a shell command are not how this project reads
-  source: `Read`, `Grep` and `Glob` are, and that holds for a dependency's
+- Never read or list a file through `bash`. `cat`, `sed -n`, `head`,
+  `tail`, `awk`, `grep`, `find` and `ls` in a shell command are not how
+  this project reads source: `Read`, `Grep` and `Glob` are, and that holds
+  for a dependency's
   vendored source under `~/.cargo/registry` exactly as it holds for
   `crates/`. The reason is mechanical rather than stylistic. A shell
   command is authorized as a literal string, so
@@ -92,6 +93,22 @@ own, and you stop.
   `.claude/settings.json` allows the registry and toolchain source trees
   outright. `bash` is for commands that *do* something: `cargo`, `git`,
   `scripts/check_docs.sh`.
+
+  Three shell habits turn even an allowed command into a prompt, because
+  a permission rule matches the *start* of a command string and a
+  compound command has to match in every part:
+
+  - **Piping into `head`, `tail` or `wc -l`.** `grep -n foo x.rs | head -80`
+    is two commands, and `head` is not allowed — deliberately, since it
+    reads files. `Grep` takes `head_limit` and `-n` and needs no pipe.
+  - **A variable assignment in front.** `P=...; find "$P" -name '*.rs'`
+    starts with the assignment, not with `find`, so no `find` rule can
+    match it. `Glob` takes an absolute `path` argument instead.
+  - **Searching from `/` or a home directory.** Locating a vendored crate
+    with `find / -maxdepth 6 -iname 'pgwire-*'` prompts, then takes
+    minutes and gets abandoned. The version is in `Cargo.lock`, which
+    `Grep` reads, and the unpacked source is a `Glob` under
+    `~/.cargo/registry/src`.
 - Never edit a file through `bash` either. `sed -i`, `>` redirection and
   `cp` over a tracked path skip the read-before-write check that `Edit`
   and `Write` enforce, and they leave a diff nobody reviewed the input
