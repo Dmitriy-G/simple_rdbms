@@ -57,17 +57,17 @@ database in a state a real schema would have rejected.
 is enforced rather than accidental. Statements from different sessions run
 concurrently on a fixed worker pool
 (`engine::runtime::WORKER_POOL_SIZE = 8`,
-`crates/engine/src/runtime.rs:36,181`); one session's own statements stay
+`crates/engine/src/runtime.rs:37,192`); one session's own statements stay
 serialized behind its session mutex.
 
 *Readers take no locks.* Every user statement runs at
 `IsolationLevel::SnapshotIsolation`
-(`crates/engine/src/runtime.rs:547,786,864,907`),
+(`crates/engine/src/runtime.rs:893,975,1018`),
 and under it `SeqScanExecutor::init` skips the shared table lock
 (`crates/executor/src/operators/seq_scan.rs:26-29`) while `next` filters
 each tuple through `VersionStore::is_visible_to(rid, txn_id, read_ts)`
 (line 43). `IndexScanExecutor` does the same
-(`crates/executor/src/operators/index_scan.rs:45,64`). A reader therefore
+(`crates/executor/src/operators/index_scan.rs:45,75`). A reader therefore
 never blocks and never blocks anyone.
 
 *Writers take exclusive locks and hold them to commit.*

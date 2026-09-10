@@ -11,6 +11,31 @@ revive works — is in `CLAUDE.md`'s "Problem triage".
 
 ---
 
+## `clippy.toml`'s `msrv` understates the workspace's `rust-version`
+
+`Cargo.toml` requires Rust 1.90 since M13.2 pinned the container's builder
+image, but `clippy.toml`'s `msrv` is still `1.85`, so clippy is more
+conservative than it needs to be about the idioms it suggests. Not being
+done because raising it makes `collapsible_if`'s let-chain rewrite and
+`manual_is_multiple_of` fire under `-D warnings` at five sites, three of
+them in `crates/storage/src/btree.rs` and one in
+`crates/storage/src/buffer.rs`, which puts both crash-injection sweeps on
+a change with no behavioural difference at all. Nothing is miscompiled and
+no lint is suppressed incorrectly: `cargo clippy -D warnings` is clean as
+the file stands. The fix, whenever a storage task is already paying for
+the sweeps, is to rewrite the five sites and bump the `msrv` in the same
+change.
+
+Created: 2026-09-11
+
+Importance: 🟢 Low
+
+Effort: 8 SP
+
+Thinking: 4
+
+---
+
 ## Each role should work to an explicit, staged workflow
 
 A role definition today says what a role may write and what it must

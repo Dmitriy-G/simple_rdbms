@@ -122,7 +122,7 @@ immediately and queues behind nothing, so the LRU-K choice is still the
 right one and hit rate is untouched in every case where the preference
 would cost something. Residency skew stays bounded in the contended case
 too, because `checkpoint_and_flush` calls `flush_all`
-(`crates/engine/src/runtime.rs:609`) and empties the dirty set on the
+(`crates/engine/src/runtime.rs:675`) and empties the dirty set on the
 checkpoint threshold.
 
 **(b) A fetch that does need a flush waits for it, but not forever.**
@@ -140,8 +140,8 @@ and a wait that exhausts it returns `StorageError::BufferPoolWaitTimedOut
 caller: the pool could not give you a frame inside the window. This
 restores ADR 0010's stated bound rather than inventing a new one, and no
 new SQLSTATE is introduced. Whether that error class should be retryable —
-it maps to `OUT_OF_MEMORY` (`crates/common/src/error.rs:145`) and
-`Error::is_retryable` (`:218-225`) is false for it — is one open question
+it maps to `OUT_OF_MEMORY` (`crates/common/src/error.rs:151`) and
+`Error::is_retryable` (`:228-236`) is false for it — is one open question
 about one error, and both of its cases answer it the same way; it is not
 settled here.
 

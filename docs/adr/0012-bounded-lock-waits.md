@@ -93,16 +93,17 @@ Specifically:
 - **Expiry raises `Error::LockTimeout`** through a new `TxnError`
   variant, alongside `DeadlockVictim` in `crates/txn/src/error.rs`, so
   the mapping to `SqlState::LOCK_NOT_AVAILABLE` already at
-  `crates/common/src/error.rs:170` is the one a client sees.
+  `crates/common/src/error.rs:178` is the one a client sees.
 - **A lock timeout has the same effect on transaction state as a
   deadlock abort.** Both mean "the lock manager refused"; a client must
   not have to distinguish two failure shapes for one condition, and the
   engine must not grow a second recovery path.
 - **`Error::LockTimeout` is retryable.** `Error::is_retryable`
-  (`crates/common/src/error.rs:218-225`) currently matches
+  (`crates/common/src/error.rs:228-236`) matched
   `SERIALIZATION_FAILURE`, `DEADLOCK_DETECTED` and
-  `STATEMENT_COMPLETION_UNKNOWN`; `LOCK_NOT_AVAILABLE` joins them,
-  because a lock held by another transaction is by definition transient.
+  `STATEMENT_COMPLETION_UNKNOWN` before this decision, and
+  `LOCK_NOT_AVAILABLE` joins them here, because a lock held by another
+  transaction is by definition transient.
   Without this the bounded wait converts a hang into an error a client is
   told not to retry, which is a worse contract than the hang.
 - **`lock_wait_timeout_ms = 0` means wait forever**, matching Postgres's
@@ -134,7 +135,7 @@ must now handle a second refusal, and `crates/common/src/config.MD` and
 `crates/common/src/error.MD` must stop describing the deleted park queue
 and describe this instead.
 
-`crates/engine/tests/sessions.rs:64`'s
+`crates/engine/tests/sessions.rs:55`'s
 `a_second_session_can_begin_immediately_without_55p03` stays correct and
 should stay: `BEGIN` takes no locks, so a second session's `BEGIN` must
 still never report `55P03`. What this ADR makes raisable is a `55P03`
