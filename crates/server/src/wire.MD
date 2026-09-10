@@ -77,19 +77,25 @@ task called for: `Boolean` to `Type::BOOL` (16), `Integer` to `Type::INT4`
 (23), `BigInt` to `Type::INT8` (20), `Double` to `Type::FLOAT8` (701), and
 `Varchar(_)`/`None` to `Type::VARCHAR` (25) - `None` (a projection with no
 static type, e.g. a bare `NULL` literal) gets the same OID a real `NULL`
-literal column gets in PostgreSQL itself. Every field is always reported
-in **text** format (`FieldFormat::Text`): no type modifier is plumbed
-through, so a `VARCHAR`'s declared length is invisible on the wire - only
-its OID says "this is text". `encode_data_row` builds each `DataRow`'s
-bytes directly (length-prefixed UTF-8, or `-1` for a SQL `NULL`) rather
-than going through `pgwire`'s `DataRowEncoder`, since that encoder wants
-values that implement `postgres_types::ToSql`/`ToSqlText` and
-`types::Value` implements neither. `encode_value_text` is the text
-encoding for each `types::Value`: `Boolean` as `t`/`f` (PostgreSQL's own
-text booleans, not `true`/`false`), `Integer`/`BigInt`/`Double` through
-their `Display` impl, `Varchar` verbatim, and `Null` as `None` - which
-`encode_data_row` turns into the protocol's `-1`-length null marker
-rather than an empty string.
+literal column gets in PostgreSQL itself. `field_info` takes the wire
+format (`FieldFormat`) as a parameter rather than hard-coding it, so its
+one caller here (the simple-query path, in `to_response`) keeps passing
+`FieldFormat::Text` - behaviour unchanged from before M13.3 - while
+`server::wire`'s extended-query handler (M13.3) can build a `FieldInfo`
+per the client's own requested format instead. `encode_data_row` builds
+each `DataRow` through `pgwire::api::results::DataRowEncoder` rather than
+writing length-prefixed bytes by hand: `encode_field` matches each
+`types::Value` onto the primitive Rust type `postgres_types::ToSql`/
+`ToSqlText` are implemented for (`Boolean(bool)`, `Integer(i32)`,
+`BigInt(i64)`, `Double(f64)`, `Varchar(&String)`, and `Null` as
+`&None::<i8>` - the placeholder type is never inspected once the value is
+`None`, since `Option<T>::to_sql`/`to_sql_text` return "this column is
+null" unconditionally, regardless of `T` or of the schema's declared
+type), and `DataRowEncoder::encode_field` itself decides text or binary
+encoding from the `FieldFormat` on that column's `FieldInfo` - which is
+exactly why `field_info` needed a format parameter at all: `DataRowEncoder`
+reads it off the schema it was built with, not off anything
+`encode_data_row` passes explicitly per call.
 
 M13.2 subtask 5 intercepts `SET`, `RESET` and `SHOW` before a query string
 ever reaches `engine::Database::execute` - pgjdbc sends
@@ -219,13 +225,21 @@ error while in one moves it to failed" - draws no exception for it.
   keyword, upper-cased, after trimming a single trailing `;`; `CREATE`
   looks one further word ahead so `CREATE TABLE`/`CREATE INDEX` read as
   two-word keywords.
-- `field_info(name, data_type) -> FieldInfo` - private. Maps an
-  `Option<types::DataType>` to the `FieldInfo` `RowDescription` needs,
-  always in text format.
-- `encode_data_row(tuple) -> DataRow` - private. Encodes one `types::Tuple`
-  as a wire `DataRow`, via `encode_value_text`.
-- `encode_value_text(value) -> Option<String>` - private. The text-format
-  encoding of one `types::Value`; `None` means SQL `NULL`.
+- `field_info(name, data_type, format) -> FieldInfo` - private. Maps an
+  `Option<types::DataType>` to the `FieldInfo` `RowDescription` needs, in
+  the caller-supplied `FieldFormat`; `to_response` always passes
+  `FieldFormat::Text` for the simple-query path.
+- `encode_data_row(encoder, tuple) -> PgWireResult<DataRow>` - private.
+  Encodes one `types::Tuple` into `encoder` field by field via
+  `encode_field`, then calls `DataRowEncoder::take_row` to produce the
+  `DataRow` and reset the encoder's internal buffer for the next row -
+  `to_response` builds one `DataRowEncoder` per query and reuses it across
+  every row rather than allocating a fresh one each time.
+- `encode_field(encoder, value) -> PgWireResult<()>` - private. Matches one
+  `types::Value` onto the concrete Rust type `DataRowEncoder::encode_field`
+  needs and calls it: `Boolean`/`Integer`/`BigInt`/`Double`/`Varchar` onto
+  their obvious Rust equivalents, `Null` onto `&None::<i8>` (an arbitrary
+  placeholder type - `Option<T>` encodes "null" the same way for any `T`).
 - `ConnectionHandlers` - private. The `pgwire::api::PgWireServerHandlers`
   a connection is served with; both of its methods return a clone of the
   same `Arc<ConnectionState>`, so `startup_handler` and

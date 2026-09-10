@@ -9,7 +9,7 @@ use pgwire::api::Type;
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::{DefaultServerParameterProvider, ServerParameterProvider, StartupHandler};
 use pgwire::api::query::SimpleQueryHandler;
-use pgwire::api::results::{FieldFormat, FieldInfo, QueryResponse, Response, Tag};
+use pgwire::api::results::{DataRowEncoder, FieldFormat, FieldInfo, QueryResponse, Response, Tag};
 use pgwire::api::store::PortalStore;
 use pgwire::api::{ClientInfo, ClientPortalStore, PgWireServerHandlers};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
@@ -148,10 +148,13 @@ fn to_response(query: &str, result_set: ResultSet) -> Response {
             let fields: Vec<FieldInfo> = columns
                 .iter()
                 .zip(column_types.iter())
-                .map(|(name, data_type)| field_info(name, data_type.as_ref()))
+                .map(|(name, data_type)| field_info(name, data_type.as_ref(), FieldFormat::Text))
                 .collect();
             let schema = Arc::new(fields);
-            let data_rows = stream::iter(rows.into_iter().map(|tuple| Ok(encode_data_row(&tuple))));
+            let mut encoder = DataRowEncoder::new(Arc::clone(&schema));
+            let data_rows: Vec<PgWireResult<DataRow>> =
+                rows.iter().map(|tuple| encode_data_row(&mut encoder, tuple)).collect();
+            let data_rows = stream::iter(data_rows);
             let mut query_response = QueryResponse::new(schema, data_rows);
             query_response.set_command_tag(command_tag);
             Response::Query(query_response)
@@ -171,7 +174,7 @@ fn statement_keyword(sql: &str) -> String {
     first
 }
 
-fn field_info(name: &str, data_type: Option<&DataType>) -> FieldInfo {
+fn field_info(name: &str, data_type: Option<&DataType>, format: FieldFormat) -> FieldInfo {
     let pg_type = match data_type {
         Some(DataType::Boolean) => Type::BOOL,
         Some(DataType::Integer) => Type::INT4,
@@ -179,32 +182,24 @@ fn field_info(name: &str, data_type: Option<&DataType>) -> FieldInfo {
         Some(DataType::Double) => Type::FLOAT8,
         Some(DataType::Varchar(_)) | None => Type::VARCHAR,
     };
-    FieldInfo::new(name.to_string(), None, None, pg_type, FieldFormat::Text)
+    FieldInfo::new(name.to_string(), None, None, pg_type, format)
 }
 
-fn encode_data_row(tuple: &Tuple) -> DataRow {
-    let values = tuple.values();
-    let mut buf = BytesMut::new();
-    for value in values {
-        match encode_value_text(value) {
-            Some(text) => {
-                buf.put_i32(text.len() as i32);
-                buf.put_slice(text.as_bytes());
-            }
-            None => buf.put_i32(-1),
-        }
+fn encode_data_row(encoder: &mut DataRowEncoder, tuple: &Tuple) -> PgWireResult<DataRow> {
+    for value in tuple.values() {
+        encode_field(encoder, value)?;
     }
-    DataRow::new(buf, values.len() as i16)
+    Ok(encoder.take_row())
 }
 
-fn encode_value_text(value: &Value) -> Option<String> {
+fn encode_field(encoder: &mut DataRowEncoder, value: &Value) -> PgWireResult<()> {
     match value {
-        Value::Null => None,
-        Value::Boolean(b) => Some(if *b { "t".to_string() } else { "f".to_string() }),
-        Value::Integer(v) => Some(v.to_string()),
-        Value::BigInt(v) => Some(v.to_string()),
-        Value::Double(v) => Some(v.to_string()),
-        Value::Varchar(s) => Some(s.clone()),
+        Value::Null => encoder.encode_field(&None::<i8>),
+        Value::Boolean(v) => encoder.encode_field(v),
+        Value::Integer(v) => encoder.encode_field(v),
+        Value::BigInt(v) => encoder.encode_field(v),
+        Value::Double(v) => encoder.encode_field(v),
+        Value::Varchar(v) => encoder.encode_field(v),
     }
 }
 
