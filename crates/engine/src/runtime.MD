@@ -237,7 +237,12 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `mpsc::SyncSender` for its reply where a reply makes sense:
   `Connect` (allocate a `SessionId` and register a fresh `SessionState`),
   `Execute` (submit one statement for an existing session to the worker
-  pool - see `dispatch_execute` below), `TableNames`/`TableSchema` (read
+  pool - see `dispatch_execute` below), `ExecuteWithParams` (the same, plus
+  a `Vec<types::Value>` of bound parameter values - see
+  `dispatch_execute_with_params` below), `Describe` (infer a `$n`
+  placeholder's types and a `SELECT`'s result columns without executing
+  anything or naming a session at all - see `dispatch_describe` below),
+  `TableNames`/`TableSchema` (read
   the live catalog), `Checkpoint` (the engine-wide work `Database::close`
   needs), `BestEffortFlush` (the engine-wide work `Drop for Database`
   needs), `Disconnect` (no reply - fire-and-forget session teardown, sent
@@ -307,10 +312,15 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `self.engine.connect()`, opening a second, independent session on the
   same dispatch thread - `database.MD`'s `Database::connect` is the public
   door onto this. `execute(&self, sql) -> Result<ResultSet>`/
+  `execute_with_params(&self, sql, params) -> Result<ResultSet>`/
+  `describe(&self, sql) -> Result<StatementDescription>`/
   `table_schema(&self, name) -> Result<Schema>`/`checkpoint_and_flush(&self)
   -> Result<()>`/`table_names(&self) -> Result<Vec<String>>` all follow the
   same shape: build a one-shot reply channel, send the matching
   `EngineMessage` through `self.engine.send`, and block on the reply.
+  `describe` sends no `session_id` at all - unlike every other request
+  here, describing a statement touches no per-connection state, since it
+  never begins a transaction.
   `best_effort_flush(&self)` sends `BestEffortFlush` and waits for the
   reply, discarding whatever it gets - used only from `Drop for Database`.
   `kill_engine_for_test(&self)`/`stats(&self) -> Result<EngineStats>`/
@@ -340,8 +350,12 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   it - see `impl Drop for EngineHandle` above).
 - `dispatch_message(state, sessions, message) -> bool` - private free
   function. One arm per `EngineMessage` variant; returns `false` only for
-  `Shutdown`. `Execute` goes through `dispatch_execute` rather than
-  running inline; `Checkpoint`/`BestEffortFlush` go through
+  `Shutdown`. `Execute`/`ExecuteWithParams` go through `dispatch_execute`/
+  `dispatch_execute_with_params` rather than running inline; `Describe`
+  goes through `dispatch_describe` for the same reason - binding a
+  `SELECT` to learn its column types still calls into `planner`, which is
+  worth keeping off the dispatch thread even though it takes no lock;
+  `Checkpoint`/`BestEffortFlush` go through
   `dispatch_checkpoint`/`dispatch_best_effort_flush` (below) for the same
   reason; and `Disconnect` goes through the free function `disconnect`
   (below) rather than a bare `sessions.remove`, since it still has an open
@@ -363,6 +377,17 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `EngineShared::execute`, and sends the result to `reply` - this function
   itself never blocks and never runs a statement; it only ever builds and
   submits the job.
+- `dispatch_execute_with_params(state, sessions, session_id, sql, params,
+  reply)` - private free function, `dispatch_message`'s handler for
+  `ExecuteWithParams`. Identical in shape to `dispatch_execute`, except the
+  submitted job calls `EngineShared::execute_with_params` with the
+  message's `params` as well.
+- `dispatch_describe(state, sql, reply)` - private free function,
+  `dispatch_message`'s handler for `Describe`. Clones `state.shared`'s
+  `Arc` and submits a job calling `EngineShared::describe(&sql)`, sending
+  the result to `reply` - there is no session to look up and therefore no
+  `unknown_session` case, since describing a statement needs nothing but
+  the live catalog.
 - `dispatch_checkpoint(state, reply)`/`dispatch_best_effort_flush(state,
   reply)` - private free functions, `dispatch_message`'s handlers for
   `Checkpoint`/`BestEffortFlush` (P-54). Each clones `state.shared`'s
@@ -488,30 +513,68 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   name) -> Result<Schema>` - each is one in-memory `Catalog` lookup and
   holds no engine-level lock at all, which is what lets both be served
   inline on the dispatch thread while a statement of any length runs.
-- `EngineShared::execute(&self, session, sql) -> Result<ResultSet>` - the
-  per-request entry point a worker-pool job calls for every `Execute`
-  message, with the session already locked by that job. Unchanged in
-  behavior from before M10.2 split statement execution off the dispatch
-  thread: clones `session.conn_span`/`session.txn_span` into locals before
-  entering either (entering directly off `session.conn_span.enter()` would
-  hold an immutable borrow of `session` across the later `&mut session`
-  the dispatch call needs), enters both for the duration of the call,
-  checks `buffer_pool.is_flush_poisoned()` before dispatching to
-  `execute_impl`, and logs the same success/failure events at the same
-  levels as before. After logging, sets `session.idle_since` to
+- `EngineShared::describe(&self, sql) -> Result<StatementDescription>` -
+  the per-request entry point a worker-pool job calls for every `Describe`
+  message. Lexes and parses `sql`, calls `planner::infer_parameter_types`
+  against `self.catalog` to learn each `$n` placeholder's type, builds one
+  dummy value per inferred type via the private free function
+  `dummy_value_for_describe` (`Integer(0)`/`BigInt(0)`/`Double(0.0)`/
+  `Boolean(false)`/`Varchar(String::new())`, and `Varchar` for an unknown
+  (`None`) type), and calls `planner::substitute_parameters` with those
+  dummy values so the statement can be bound with no real parameter values
+  in hand. A `Statement::Select` is then bound and its
+  `BoundSelect::column_names`/`column_types` become
+  `StatementDescription::columns`; every other statement kind - including
+  `Explain` - describes with an empty `columns`, since only a query has a
+  row shape to report. Never begins a transaction, never locks
+  `txn_manager`, and never calls `execute_bound` - it reads the catalog
+  through `Binder::bind` exactly as `handle_explain` does, and nothing
+  else.
+- `dummy_value_for_describe(Option<types::DataType>) -> types::Value` -
+  private free function. The fixed, arbitrary value `describe` substitutes
+  for a placeholder of each type so a statement can be bound with none of
+  its real parameter values known yet; the value itself is never observed
+  by a caller, since `describe` reports only types, never rows.
+- `EngineShared::execute(&self, session, sql) -> Result<ResultSet>` - now
+  `self.execute_with_params(session, sql, &[])`; see
+  `execute_with_params` below for what an empty `params` slice means for
+  an unsubstituted `$n`.
+- `EngineShared::execute_with_params(&self, session, sql, params) ->
+  Result<ResultSet>` - the per-request entry point a worker-pool job calls
+  for every `Execute`/`ExecuteWithParams` message, with the session
+  already locked by that job. Unchanged in behavior from before M10.2 split
+  statement execution off the dispatch thread, and unchanged again from
+  before M13.3 added `params`: clones `session.conn_span`/`session.txn_span`
+  into locals before entering either (entering directly off
+  `session.conn_span.enter()` would hold an immutable borrow of `session`
+  across the later `&mut session` the dispatch call needs), enters both for
+  the duration of the call, checks `buffer_pool.is_flush_poisoned()` before
+  dispatching to `execute_impl`, and logs the same success/failure events
+  at the same levels as before. After logging, sets `session.idle_since` to
   `Some(Instant::now())` if `session.txn_slot` still holds a transaction
   id or `None` otherwise - the only place `idle_since` is written, so
   `expire_idle_transaction`'s reading of it always reflects time since the
   *last* statement, not time since `BEGIN`.
-- `EngineShared::execute_impl` - starts by checking whether
-  `session.txn_slot` is `TxnSlot::TimedOut`: if so, resets it to `None`
-  (clearing `txn_span` too) and returns `Error::IdleInTransactionTimeout`
-  immediately - this is how a session finds out its transaction was
-  aborted out from under it by `expire_idle_transaction`, reported exactly
-  once, on the first statement it sends after the fact. Otherwise lexes,
-  parses, and dispatches on statement kind to `handle_begin`/
+- `EngineShared::execute_impl(&self, session, sql, params, stmt_id)` -
+  starts by checking whether `session.txn_slot` is `TxnSlot::TimedOut`: if
+  so, resets it to `None` (clearing `txn_span` too) and returns
+  `Error::IdleInTransactionTimeout` immediately - this is how a session
+  finds out its transaction was aborted out from under it by
+  `expire_idle_transaction`, reported exactly once, on the first statement
+  it sends after the fact. Otherwise lexes and parses `sql`, then - only
+  if `params` is non-empty - calls `planner::substitute_parameters` on the
+  parsed statement before doing anything else with it; an empty `params`
+  (every plain `execute` call, per the previous entry) skips substitution
+  entirely; so a statement containing an unsubstituted `$n` executed this
+  way reaches `Binder::bind` unchanged and is rejected there as
+  `common::Error::UndefinedParameter` (`42P02`), while a non-empty
+  `params` that doesn't match the statement's own placeholder count is
+  rejected here, before binding, as `common::Error::ParameterCountMismatch`
+  (`08P01`) - `planner::parameters.MD` and `planner::binder.MD` are the
+  source of both errors respectively. After that, dispatches on statement
+  kind to `handle_begin`/
   `handle_commit`/`handle_rollback`/`handle_explain`/
-  `execute_non_control_statement`.
+  `execute_non_control_statement` exactly as before.
 - `EngineShared::execute_non_control_statement(&self, session, statement)
   -> Result<ResultSet>` - resolves this statement's transaction
   (`txn_for_statement`), binds it against `self.catalog` directly, and

@@ -94,6 +94,10 @@ was (`Database::handle_explain`, `database.MD`).
   worker threads. Private to the crate. See [runtime.MD](src/runtime.MD).
 - `result_set` - `ResultSet`, the result of executing one SQL statement.
   See [result_set.MD](src/result_set.MD).
+- `statement_description` - `StatementDescription`, the result of
+  `Database::describe`: a `$n` placeholder's inferred types and a
+  `SELECT`'s result column shape, learned without executing anything. See
+  [statement_description.MD](src/statement_description.MD).
 - `executor_factory` - `build_executor`, lowers a `planner::PhysicalPlan`
   into an `executor` operator tree. Private to the crate. See
   [executor_factory.MD](src/executor_factory.MD).
@@ -108,6 +112,18 @@ rules — can name the types `ResultSet`'s rows are made of without
 depending on `types` directly.
 
 ## Features
+
+`Database::execute_with_params(sql, params)` (M13.3, `docs/ROADMAP.md`)
+runs a `$n`-parameterized statement, substituting `params` for each
+placeholder (`planner::substitute_parameters`) before binding; a count
+mismatch is `common::Error::ParameterCountMismatch` (`08P01`).
+`Database::describe(sql)` answers a placeholder's inferred type and a
+`SELECT`'s result column shape (`planner::infer_parameter_types`) without
+starting a transaction, taking a lock, or executing a plan. Plain
+`Database::execute` is unaffected: a statement containing an
+unsubstituted `$n` still reaches `planner::Binder`, which rejects it as
+`common::Error::UndefinedParameter` (`42P02`), exactly as it did before
+either method existed.
 
 `CREATE TABLE`, `CREATE INDEX`, `INSERT`, `SELECT` (choosing an index scan
 over a sequential scan where `planner::optimizer::IndexScanRule` applies),
@@ -190,7 +206,11 @@ atomically. `tests/snapshot_isolation.rs` checks snapshot isolation across
 two real sessions: an uncommitted insert stays invisible to a concurrent
 `SELECT`, a transaction's snapshot does not move even after another
 session commits, and a rolled-back insert is never visible to anyone.
-`tests/rollback_matches_recovery_undo.rs` proves
+`tests/prepared_statements.rs` checks `Database::describe` (parameter and
+result-column types, and that it leaves no transaction or lock behind) and
+`Database::execute_with_params` (bound values in autocommit and inside an
+explicit `BEGIN`/`COMMIT`, a wrong parameter count, and plain `execute` on
+`$n`-containing SQL). `tests/rollback_matches_recovery_undo.rs` proves
 `TransactionManager::abort` and `storage::recovery::recover`'s Undo pass
 are one mechanism. `tests/crash_injection.rs` is the crash-injection
 harness described in Features. `tests/smoke.rs` is the minimum-viable

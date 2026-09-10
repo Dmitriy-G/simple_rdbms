@@ -55,6 +55,26 @@ dispatch thread or a worker pool exists underneath.
   statement) - changing the signature would violate this module's one
   hard rule, so the receiver stays `&mut` for a binding compatibility
   that no longer reflects an actual borrow need.
+- `Database::execute_with_params(&mut self, sql, params) -> Result<ResultSet>` -
+  forwards to `SessionHandle::execute_with_params`, sent as an
+  `EngineMessage::ExecuteWithParams` next to `Execute` and dispatched onto
+  the same worker pool. `runtime::EngineShared::execute` is now this
+  method called with an empty `params` slice, so a bare `execute("SELECT
+  ... WHERE a = $1")` with no values behaves exactly as it always has -
+  the unsubstituted `$1` reaches `planner::Binder`, which rejects it as
+  `common::Error::UndefinedParameter` (`42P02`) - while a non-empty
+  `params` always goes through `planner::substitute_parameters` first, so
+  a parameter-count mismatch is `common::Error::ParameterCountMismatch`
+  (`08P01`) instead (`runtime.MD`'s `EngineShared::execute_impl`).
+- `Database::describe(&self, sql) -> Result<StatementDescription>` -
+  forwards to `SessionHandle::describe`, sent as an `EngineMessage::Describe`
+  and dispatched onto the worker pool exactly like `execute`, so a
+  `Describe` never blocks the dispatch thread either. Parses `sql`, infers
+  each `$n` placeholder's type against the live catalog, binds the result
+  after substituting a dummy value of each inferred type in place of every
+  placeholder, and reads back a `SELECT`'s column names/types - starting
+  no transaction and taking no lock, since it never executes a plan. See
+  `statement_description.MD` and `runtime.MD`'s `EngineShared::describe`.
 - `Database::close(self) -> Result<()>` - forwards to
   `SessionHandle::checkpoint_and_flush`: a final checkpoint, every
   write-ahead log record forced to disk, every dirty page flushed, and

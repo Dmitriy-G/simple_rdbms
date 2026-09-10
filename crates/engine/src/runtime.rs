@@ -9,7 +9,7 @@ use common::{DbConfig, Error, Result, Severity, TxnId};
 use executor::ExecutorContext;
 use planner::{
     Binder, BoundStatement, IndexScanRule, Optimizer, PhysicalPlan, explain_logical,
-    explain_physical, to_physical,
+    explain_physical, infer_parameter_types, substitute_parameters, to_physical,
 };
 use sql::{Lexer, Parser, SqlError, Statement};
 use storage::StorageError;
@@ -28,6 +28,7 @@ use types::{DataType, MemcomparableEncode, Tuple, Value};
 
 use crate::executor_factory::build_executor;
 use crate::result_set::ResultSet;
+use crate::statement_description::StatementDescription;
 use crate::worker_pool::WorkerPool;
 
 const REPLACER_K: usize = 2;
@@ -85,6 +86,16 @@ enum EngineMessage {
         session_id: SessionId,
         sql: String,
         reply: mpsc::SyncSender<Result<ResultSet>>,
+    },
+    ExecuteWithParams {
+        session_id: SessionId,
+        sql: String,
+        params: Vec<Value>,
+        reply: mpsc::SyncSender<Result<ResultSet>>,
+    },
+    Describe {
+        sql: String,
+        reply: mpsc::SyncSender<Result<StatementDescription>>,
     },
     TableNames {
         reply: mpsc::SyncSender<Vec<String>>,
@@ -227,6 +238,23 @@ impl SessionHandle {
         reply_rx.recv().map_err(|_| engine_unavailable())?
     }
 
+    pub(crate) fn execute_with_params(&self, sql: &str, params: &[Value]) -> Result<ResultSet> {
+        let (reply, reply_rx) = mpsc::sync_channel(1);
+        self.engine.send(EngineMessage::ExecuteWithParams {
+            session_id: self.session_id,
+            sql: sql.to_string(),
+            params: params.to_vec(),
+            reply,
+        })?;
+        reply_rx.recv().map_err(|_| engine_unavailable())?
+    }
+
+    pub(crate) fn describe(&self, sql: &str) -> Result<StatementDescription> {
+        let (reply, reply_rx) = mpsc::sync_channel(1);
+        self.engine.send(EngineMessage::Describe { sql: sql.to_string(), reply })?;
+        reply_rx.recv().map_err(|_| engine_unavailable())?
+    }
+
     pub(crate) fn table_names(&self) -> Result<Vec<String>> {
         let (reply, reply_rx) = mpsc::sync_channel(1);
         self.engine.send(EngineMessage::TableNames { reply })?;
@@ -321,6 +349,12 @@ fn dispatch_message(
         EngineMessage::Execute { session_id, sql, reply } => {
             dispatch_execute(state, sessions, session_id, sql, reply);
         }
+        EngineMessage::ExecuteWithParams { session_id, sql, params, reply } => {
+            dispatch_execute_with_params(state, sessions, session_id, sql, params, reply);
+        }
+        EngineMessage::Describe { sql, reply } => {
+            dispatch_describe(state, sql, reply);
+        }
         EngineMessage::TableNames { reply } => {
             let _ = reply.send(state.shared.table_names());
         }
@@ -379,6 +413,38 @@ fn dispatch_execute(
         let mut session = recover_lock(session.lock(), "SessionState");
         let result = shared.execute(&mut session, &sql);
         let _ = reply.send(result);
+    }));
+}
+
+fn dispatch_execute_with_params(
+    state: &EngineState,
+    sessions: &HashMap<SessionId, Arc<Mutex<SessionState>>>,
+    session_id: SessionId,
+    sql: String,
+    params: Vec<Value>,
+    reply: mpsc::SyncSender<Result<ResultSet>>,
+) {
+    let Some(session) = sessions.get(&session_id) else {
+        let _ = reply.send(Err(unknown_session(session_id)));
+        return;
+    };
+    let session = Arc::clone(session);
+    let shared = Arc::clone(&state.shared);
+    state.worker_pool.submit(Box::new(move || {
+        let mut session = recover_lock(session.lock(), "SessionState");
+        let result = shared.execute_with_params(&mut session, &sql, &params);
+        let _ = reply.send(result);
+    }));
+}
+
+fn dispatch_describe(
+    state: &EngineState,
+    sql: String,
+    reply: mpsc::SyncSender<Result<StatementDescription>>,
+) {
+    let shared = Arc::clone(&state.shared);
+    state.worker_pool.submit(Box::new(move || {
+        let _ = reply.send(shared.describe(&sql));
     }));
 }
 
@@ -663,7 +729,42 @@ impl EngineShared {
         Ok(self.catalog.get_table(name)?.schema)
     }
 
+    fn describe(&self, sql: &str) -> Result<StatementDescription> {
+        tracing::debug!(sql, "describing statement");
+        let tokens = Lexer::new(sql).tokenize().map_err(|err| syntax_error(&err, sql))?;
+        let statement = Parser::new(tokens).parse().map_err(|err| syntax_error(&err, sql))?;
+
+        let param_types = infer_parameter_types(&statement, &self.catalog).map_err(Error::from)?;
+        let dummy_values: Vec<Value> =
+            param_types.iter().copied().map(dummy_value_for_describe).collect();
+        let substituted = substitute_parameters(statement, &dummy_values).map_err(Error::from)?;
+
+        let columns = match substituted {
+            Statement::Select(select) => {
+                let bound = Binder::new(&self.catalog)
+                    .bind(Statement::Select(select))
+                    .map_err(Error::from)?;
+                let BoundStatement::Select(select) = bound else {
+                    unreachable!("binding a Statement::Select always yields BoundStatement::Select")
+                };
+                select.column_names.into_iter().zip(select.column_types).collect()
+            }
+            _ => Vec::new(),
+        };
+
+        Ok(StatementDescription { param_types, columns })
+    }
+
     fn execute(&self, session: &mut SessionState, sql: &str) -> Result<ResultSet> {
+        self.execute_with_params(session, sql, &[])
+    }
+
+    fn execute_with_params(
+        &self,
+        session: &mut SessionState,
+        sql: &str,
+        params: &[Value],
+    ) -> Result<ResultSet> {
         let stmt_id = session.next_stmt_id;
         session.next_stmt_id += 1;
 
@@ -676,7 +777,7 @@ impl EngineShared {
         let result = if self.buffer_pool.is_flush_poisoned() {
             Err(Error::FlushPoisoned)
         } else {
-            self.execute_impl(session, sql, stmt_id)
+            self.execute_impl(session, sql, params, stmt_id)
         };
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
@@ -726,6 +827,7 @@ impl EngineShared {
         &self,
         session: &mut SessionState,
         sql: &str,
+        params: &[Value],
         stmt_id: u64,
     ) -> Result<ResultSet> {
         if matches!(session.txn_slot, TxnSlot::TimedOut) {
@@ -734,9 +836,14 @@ impl EngineShared {
             return Err(Error::IdleInTransactionTimeout);
         }
 
-        tracing::debug!(sql, "parsing statement");
+        tracing::debug!(sql, ?params, "parsing statement");
         let tokens = Lexer::new(sql).tokenize().map_err(|err| syntax_error(&err, sql))?;
         let statement = Parser::new(tokens).parse().map_err(|err| syntax_error(&err, sql))?;
+        let statement = if params.is_empty() {
+            statement
+        } else {
+            substitute_parameters(statement, params).map_err(Error::from)?
+        };
         let kind = statement_kind(&statement);
         tracing::Span::current().record("statement_kind", kind);
 
@@ -1058,4 +1165,14 @@ fn statement_kind(statement: &Statement) -> &'static str {
 
 fn syntax_error(err: &SqlError, sql: &str) -> Error {
     Error::Syntax { message: err.render(sql), offset: err.offset(sql) }
+}
+
+fn dummy_value_for_describe(data_type: Option<DataType>) -> Value {
+    match data_type {
+        Some(DataType::Integer) => Value::Integer(0),
+        Some(DataType::BigInt) => Value::BigInt(0),
+        Some(DataType::Double) => Value::Double(0.0),
+        Some(DataType::Boolean) => Value::Boolean(false),
+        Some(DataType::Varchar(_)) | None => Value::Varchar(String::new()),
+    }
 }

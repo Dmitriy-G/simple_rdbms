@@ -30,6 +30,9 @@ about `planner`); `engine` is the only place that does.
   one session through the same engine today. See `runtime.MD`.
 - `ResultSet` - the result of executing one SQL statement. See
   `result_set.MD`.
+- `StatementDescription` - the result of `Database::describe`: a `$n`
+  placeholder's inferred types and a `SELECT`'s result column shape,
+  learned without executing anything. See `statement_description.MD`.
 - `build_executor` - lowers a `planner::PhysicalPlan` into an `executor`
   operator tree. Private to the crate. See `executor_factory.MD`.
 - `DataType`, `Tuple`, `Value` - re-exported from `types`, so `cli` (which

@@ -2,11 +2,13 @@ use catalog::Schema;
 #[cfg(feature = "test-util")]
 use common::TxnId;
 use common::{DbConfig, Result};
+use types::Value;
 
 use crate::result_set::ResultSet;
 #[cfg(feature = "test-util")]
 use crate::runtime::EngineStats;
 use crate::runtime::{EngineHandle, SessionHandle};
+use crate::statement_description::StatementDescription;
 
 pub struct Database {
     session: SessionHandle,
@@ -50,6 +52,14 @@ impl Database {
 
     pub fn execute(&mut self, sql: &str) -> Result<ResultSet> {
         self.session.execute(sql)
+    }
+
+    pub fn execute_with_params(&mut self, sql: &str, params: &[Value]) -> Result<ResultSet> {
+        self.session.execute_with_params(sql, params)
+    }
+
+    pub fn describe(&self, sql: &str) -> Result<StatementDescription> {
+        self.session.describe(sql)
     }
 
     pub fn close(self) -> Result<()> {
