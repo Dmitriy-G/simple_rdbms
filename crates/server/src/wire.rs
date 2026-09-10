@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
+use common::{Error, Severity};
 use engine::{DataType, Database, ResultSet, Tuple, Value};
 use futures::stream;
 use pgwire::api::Type;
@@ -72,26 +73,35 @@ impl SimpleQueryHandler for ConnectionState {
         };
         match result {
             Ok(result_set) => Ok(vec![to_response(query, result_set)]),
-            Err(err) => Err(PgWireError::UserError(Box::new(ErrorInfo::new(
-                "ERROR".to_owned(),
-                "XX000".to_owned(),
-                err.to_string(),
-            )))),
+            Err(err) => Err(to_pg_error(&err)),
         }
     }
 }
 
+fn to_pg_error(err: &Error) -> PgWireError {
+    let severity = match err.severity() {
+        Severity::Error => "ERROR",
+        Severity::Fatal => "FATAL",
+        Severity::Panic => "PANIC",
+    };
+    PgWireError::UserError(Box::new(ErrorInfo::new(
+        severity.to_owned(),
+        err.sql_state().as_str().to_owned(),
+        err.to_string(),
+    )))
+}
+
 fn to_response(query: &str, result_set: ResultSet) -> Response {
     match result_set {
-        ResultSet::RolledBack => Response::Execution(Tag::new("ROLLBACK")),
+        ResultSet::RolledBack => Response::TransactionEnd(Tag::new("ROLLBACK")),
         ResultSet::RowsAffected(count) => {
             let keyword = statement_keyword(query);
-            let tag = if keyword == "INSERT" {
-                Tag::new("INSERT 0").with_rows(count)
-            } else {
-                Tag::new(&keyword)
-            };
-            Response::Execution(tag)
+            match keyword.as_str() {
+                "INSERT" => Response::Execution(Tag::new("INSERT 0").with_rows(count)),
+                "BEGIN" => Response::TransactionStart(Tag::new("BEGIN")),
+                "COMMIT" => Response::TransactionEnd(Tag::new("COMMIT")),
+                _ => Response::Execution(Tag::new(&keyword)),
+            }
         }
         ResultSet::Rows { columns, column_types, rows } => {
             let keyword = statement_keyword(query);

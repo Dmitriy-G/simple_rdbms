@@ -49,9 +49,10 @@ query's own leading token(s) - `"CREATE"` looks one word further, so
 and `to_response` uses that keyword together with the `ResultSet` variant
 to pick a tag: `INSERT 0 <n>` for `RowsAffected` after an `INSERT`, the
 keyword itself verbatim for every other `RowsAffected` (`BEGIN`, `COMMIT`,
-`CREATE TABLE`, `CREATE INDEX`), `ROLLBACK` for `ResultSet::RolledBack`,
-and `SELECT`/`EXPLAIN` for `Rows` depending on whether the leading keyword
-was `EXPLAIN`. For `Rows`, `pgwire`'s own `send_query_response`
+`CREATE TABLE`, `CREATE INDEX` - `BEGIN` and `COMMIT` carry that same tag
+text but a different `Response` variant since M13.2 subtask 4, see
+below), `ROLLBACK` for `ResultSet::RolledBack`, and `SELECT`/`EXPLAIN` for
+`Rows` depending on whether the leading keyword was `EXPLAIN`. For `Rows`, `pgwire`'s own `send_query_response`
 (`pgwire::api::query`) always appends the number of `DataRow`s actually
 streamed to whatever command tag `QueryResponse::set_command_tag` was
 given, which is exactly right for `SELECT <n>` but means an `EXPLAIN`'s
@@ -89,10 +90,54 @@ simple query (`SELECT 1; SELECT 2;`) surfaces to the client as a syntax
 error rather than running both statements. This is a known limitation,
 also called out in `crates/server/README.md`.
 
-Any `common::Error` `Database::execute` returns is still wrapped in a
-generic `PgWireError::UserError` with SQLSTATE `XX000` here - the real
-per-error SQLSTATE, severity and `ReadyForQuery` transaction status are
-M13.2 subtask 4's job, not this one's.
+M13.2 subtask 4 fills in the real per-error SQLSTATE, severity and
+`ReadyForQuery` transaction status. `to_pg_error` turns a `common::Error`
+into a `pgwire::error::ErrorInfo` carrying `Error::sql_state().as_str()`
+as the code, the `Display` text as the message, and `Error::severity()`
+mapped to the wire's three severities (`Severity::Error` -> `"ERROR"`,
+`Severity::Fatal` -> `"FATAL"`, `Severity::Panic` -> `"PANIC"`) - no
+`common::Error` variant produces `Severity::Panic` today, so that arm is
+untested but kept for when one does. `do_query` returns this as a
+top-level `Err(PgWireError::UserError(..))` rather than folding it into
+the `Vec<Response>` it succeeds with, which matters for two reasons: it
+is what makes `pgwire`'s own `process_error` compare the severity string
+against `"FATAL"` and close the connection after the response for a
+`Severity::Fatal` error, and it is what makes `process_error` move this
+connection's `TransactionStatus` to its error state the same way a
+`Response::Error` inside a successful `do_query` would.
+
+`ReadyForQuery`'s transaction status is not tracked by hand in this
+module: `engine::runtime::TxnSlot` (`crates/engine/src/runtime.MD`) that
+actually drives it is private to `engine`, so this module leans on
+`pgwire`'s own per-connection `TransactionStatus` state machine instead,
+driving it with the `Response` variants that carry transitions -
+`Response::TransactionStart`/`Response::TransactionEnd` alongside the
+plain `Response::Execution`/`Response::Query` subtask 3 already used, and
+`PgWireError`'s automatic move to the error state on any `Err` `do_query`
+returns. `to_response` emits `Response::TransactionStart` for a
+successful `BEGIN` and `Response::TransactionEnd` for a successful
+`COMMIT` or for `ResultSet::RolledBack` (which covers both an actual
+`ROLLBACK` and a `COMMIT` sent while the session's transaction was
+already aborted - `engine::runtime`'s `handle_commit` turns that case
+into an `Ok(ResultSet::RolledBack)` rather than an error, and this module
+follows suit by ending the transaction rather than starting one). Every
+other successful statement keeps using `Response::Execution`/
+`Response::Query`, which `pgwire` does not use to change transaction
+status at all - matching `TxnSlot::Active` staying `Active` across an
+ordinary statement. An error inside an explicit transaction becomes
+`Response::Error`'s (or the equivalent top-level `Err`'s) move to the
+error state, matching `TxnSlot::Aborted`; an error with no explicit
+transaction open leaves `TransactionStatus::Idle` alone, since
+`to_error_state` is a no-op from `Idle`, matching autocommit's own
+implicit transaction being rolled back without ever touching
+`session.txn_slot`. The one case this reconstruction does not reproduce
+exactly is a nested `BEGIN` sent while already inside a transaction:
+`engine::runtime::handle_begin` rejects it with `Error::NestedTransaction`
+without touching `session.txn_slot`, so the real engine-side transaction
+stays `Active`, but this module reports `TransactionStatus::Error` for it
+like any other statement error, because nothing on the wire tells this
+module the difference and the task's own description - "a statement
+error while in one moves it to failed" - draws no exception for it.
 
 ## Key Components
 
@@ -110,13 +155,21 @@ M13.2 subtask 4's job, not this one's.
   default no-authentication handshake is exactly what subtask 1 wants)
   and `SimpleQueryHandler::do_query`, which runs the query string through
   the session (via `block_in_place`) and turns its `Result<ResultSet>`
-  into a `Vec<Response>` with `to_response`, or a generic
-  `PgWireError::UserError` on failure.
+  into a `Vec<Response>` with `to_response`, or a `PgWireError` with the
+  statement's real SQLSTATE and severity via `to_pg_error`.
+- `to_pg_error(err) -> PgWireError` - private. Builds the
+  `pgwire::error::ErrorInfo` (SQLSTATE, severity, message) a
+  `common::Error` becomes, wrapped in `PgWireError::UserError`; see above
+  for why this is a top-level `Err` and not a `Response::Error`.
 - `to_response(query, result_set) -> Response` - private. Builds the
   `pgwire::api::results::Response` a `ResultSet` becomes: `Response::Query`
   (`RowDescription` + one `DataRow` per row, via `field_info` and
-  `encode_data_row`) for `Rows`, `Response::Execution` with a tag from
-  `statement_keyword` otherwise.
+  `encode_data_row`) for `Rows`; for `RowsAffected`,
+  `Response::TransactionStart` for a `BEGIN`, `Response::TransactionEnd`
+  for a `COMMIT`, and `Response::Execution` with a tag from
+  `statement_keyword` for everything else; `Response::TransactionEnd` for
+  `RolledBack` too, whichever of `ROLLBACK` or an aborted `COMMIT`
+  produced it.
 - `statement_keyword(sql) -> String` - private. The query's leading
   keyword, upper-cased; `CREATE` looks one further word ahead so
   `CREATE TABLE`/`CREATE INDEX` read as two-word keywords.
@@ -157,3 +210,8 @@ with `tokio_postgres` and observing a successful `connect()`.
 `tokio_postgres::Client::simple_query`, proving `CREATE TABLE`, `INSERT`,
 `SELECT`, `BEGIN`/`COMMIT` and `EXPLAIN` all round-trip through this
 module's `RowDescription`/`DataRow`/`CommandComplete` handling.
+`crates/server/tests/wire_errors.rs` proves `to_pg_error` and the
+`TransactionStatus` reconstruction above: an undefined table's SQLSTATE
+reaches `tokio_postgres` as `42P01`, a failing statement inside an
+explicit transaction leaves the next statement rejected with `25P02`
+until `ROLLBACK`, and the connection is still usable afterward.
