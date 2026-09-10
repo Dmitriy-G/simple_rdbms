@@ -289,3 +289,48 @@ through an entire transaction. Fixed by trimming a single trailing `;`
 before reading the keyword, since `sql::Parser::parse` never lets more
 than one reach this code; see `src/wire.MD` and
 `tests/wire_errors.rs`'s `a_semicolon_terminated_begin_still_tracks_transaction_status`.
+
+## Client compatibility
+
+What was actually exercised against this listener, and how - a claim
+below with no "Verified by" entry that isn't "not verified" would be a
+client this crate promises works when nobody has actually run it:
+
+| Client | What was exercised | Result | Verified by |
+| --- | --- | --- | --- |
+| `tokio_postgres` | Simple query: `CREATE TABLE`/`INSERT`/`SELECT`/`BEGIN`/`COMMIT`/`ROLLBACK`/`EXPLAIN`/`SET`/`SHOW`/`RESET` | Works | Automated (`tests/wire_startup.rs`, `tests/wire_simple_query.rs`, `tests/wire_errors.rs`, `tests/wire_set_show_reset.rs`) |
+| `tokio_postgres` | Extended query: `prepare`/`prepare_typed`/`query`/`execute`, bound parameters (text and binary), portal suspension via `query_portal` | Works | Automated (`tests/wire_extended_query.rs`) |
+| `tokio_postgres` | `pg_catalog` introspection over both protocols: `select version()`, `pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`, and an unrecognized `pg_`-relation | Works | Automated (`tests/wire_pg_catalog.rs`) |
+| `psql` | Simple query: `CREATE TABLE`/`INSERT`/`SELECT`/`BEGIN`/`COMMIT` | Works | Manual, real container - transcript above in "Verify, don't assume" |
+| `psql` | `\dt`, `\d <table>` | Not verified | Nobody has run these against a real `psql` yet |
+
+The last row is deliberate, not an oversight: `\dt` and `\d <table>` are
+real psql's own introspection commands, and they are exactly what
+`pg_catalog` (`src/pg_catalog.MD`, `docs/ROADMAP.md`'s M13.4) exists to
+answer - but this crate's own test suite only ever drives `pg_catalog`
+through `tokio_postgres`, which never sends the literal queries `psql`
+sends for `\dt`/`\d`. `\dt` alone is a reasonable bet: it sends a single
+`FROM pg_catalog.pg_class` query with a `relkind IN ('r', ...)` predicate,
+a shape `pg_catalog::answer_pg_class` already handles. `\d <table>` is
+not: real `psql` joins `pg_attribute` to `pg_type` and separately queries
+`pg_index`/`pg_constraint` for indexes and constraints, and
+`pg_catalog`'s recognizers here only ever match a single, unjoined `FROM`
+target (`src/pg_catalog.MD`'s own "deliberately brittle text matching"
+note) - a joined query would still be *recognized* (the token right after
+`FROM` is still `pg_attribute`), but the columns and rows this module
+would answer with come from `answer_pg_attribute` alone, not from
+whatever the join actually asked for, so `\d <table>`'s real output
+against this server is unknown rather than assumed working.
+
+`pg_catalog` recognizes exactly five query shapes today (`src/pg_catalog.MD`):
+`select version()`, and a single-table `FROM` naming `pg_namespace`,
+`pg_class`, `pg_attribute` or `pg_type` (each honoring the specific
+predicates `src/pg_catalog.MD` lists - `relkind IN (...)`, `nspname =`,
+`relnamespace =`, `relname =`, `oid =`, `attrelid =`, `attname =`,
+`typname =`). Every other `pg_`-named relation - `pg_index`,
+`pg_constraint`, `pg_description`, `pg_proc`, `pg_settings`, and anything
+else starting `pg_` or `pg_catalog.` - answers zero rows of whatever
+columns its own select list named (M13.4 subtask 4), never `42P01
+undefined_table` and never a fabricated row. A relation name that is not
+`pg_`-prefixed at all is not `pg_catalog`'s concern and reaches the real
+engine unchanged, exactly as it did before M13.4.
