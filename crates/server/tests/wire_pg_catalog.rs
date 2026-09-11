@@ -278,3 +278,53 @@ async fn pg_class_over_the_extended_protocol_sees_a_table_created_after_parse() 
     assert_eq!(rows.len(), 1, "the table created after Parse must still show up at Execute");
     assert_eq!(rows[0].get::<_, &str>("relname"), "t");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_real_table_named_pg_something_is_read_from_the_engine_not_intercepted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_user_pg_table.db").await;
+
+    client.simple_query("CREATE TABLE pg_foo (a INTEGER)").await.expect("create table succeeds");
+    client.simple_query("INSERT INTO pg_foo VALUES (7)").await.expect("insert succeeds");
+
+    let rows = client.simple_query("SELECT a FROM pg_foo").await.expect("select succeeds");
+    assert_eq!(row_count(&rows), 1, "the real table's row must come back, not an empty answer");
+    assert_eq!(only_row(&rows).get("a"), Some("7"));
+
+    let qualified = client
+        .simple_query("SELECT a FROM pg_catalog.pg_foo")
+        .await
+        .expect("an explicitly pg_catalog-qualified name stays intercepted");
+    assert_eq!(
+        row_count(&qualified),
+        0,
+        "pg_catalog.pg_foo names the catalog explicitly and must not resolve to the user's table"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pg_prefixed_table_created_after_parse_invalidates_the_cached_plan() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_user_pg_table_extended.db").await;
+
+    let stmt = client
+        .prepare("SELECT a FROM pg_later")
+        .await
+        .expect("prepare succeeds as an introspection statement while no such table exists");
+
+    client.simple_query("CREATE TABLE pg_later (a INTEGER)").await.expect("create succeeds");
+    client.simple_query("INSERT INTO pg_later VALUES (9)").await.expect("insert succeeds");
+
+    let err = client
+        .query(&stmt, &[])
+        .await
+        .expect_err("a statement described as introspection must not silently answer zero rows");
+    let db_error = err.as_db_error().expect("expected a database error, not a connection failure");
+    assert_eq!(db_error.code().code(), "0A000");
+
+    let reprepared =
+        client.prepare("SELECT a FROM pg_later").await.expect("re-preparing it succeeds");
+    let rows = client.query(&reprepared, &[]).await.expect("the re-prepared statement runs");
+    assert_eq!(rows.len(), 1, "re-preparing must reach the real table");
+    assert_eq!(rows[0].get::<_, i32>("a"), 9);
+}

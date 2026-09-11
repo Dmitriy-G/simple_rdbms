@@ -374,3 +374,13 @@ columns its own select list named (M13.4 subtask 4), never `42P01
 undefined_table` and never a fabricated row. A relation name that is not
 `pg_`-prefixed at all is not `pg_catalog`'s concern and reaches the real
 engine unchanged, exactly as it did before M13.4.
+
+None of that applies to a table the engine actually has. `sql`'s grammar
+accepts `CREATE TABLE pg_foo (...)`, and a real `pg_foo` is read from the
+engine like any other table: the interception layer asks the catalog
+first and steps aside for any unqualified `pg_`-prefixed name it already
+knows (P-82). The prefix is not reserved here — reserving it at
+`CREATE TABLE` time, the way PostgreSQL does, is an engine decision rather
+than a compatibility-shim one and is left to whichever milestone wants it.
+An explicitly `pg_catalog.`-qualified name still goes to the catalog, since
+it names the schema rather than the table.

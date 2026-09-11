@@ -14,7 +14,35 @@ recognized introspection query never reaches `engine::Database::execute`
 at all; a query whose `FROM` names something that is neither `pg_`-prefixed
 nor one of this module's own recognized shapes falls through unchanged -
 `SELECT * FROM nosuchtable` still reaches the engine and still fails with
-a real `42P01`, exactly as it would if this module did not exist. The
+a real `42P01`, exactly as it would if this module did not exist.
+
+**A relation the engine really has is never intercepted, whatever it is
+called.** `sql`'s grammar accepts `CREATE TABLE pg_foo (...)`, so a user
+can own a table whose name this module's `pg_`-prefix rule would otherwise
+claim; before P-82 the catch-all shadowed it and `SELECT * FROM pg_foo`
+answered zero rows under a `?column?` heading while the `INSERT`s into it
+had all reported success. That is the worst shape a wrong answer can take,
+and it was a silent one. So `answer` now asks the engine first, in
+`shadows_a_real_table`, and returns `None` for any unqualified
+`pg_`-prefixed name that `Database::table_names` knows: the real table
+wins, and every recognizer behind that check - including the four named
+ones - inherits the rule without restating it. The question this module
+never used to ask is whether the engine already had an answer, and that is
+the general hazard of an interception layer sitting in front of a real
+one.
+
+The one name that stays intercepted is an explicitly qualified
+`pg_catalog.pg_foo`. Writing the schema out asks for the catalog by name
+rather than for whatever `pg_foo` currently resolves to, which is how
+PostgreSQL reads it too, and falling through would hand `sql::Parser` a
+dotted relation name its grammar has no meaning for. Reserving the `pg_`
+prefix at `CREATE TABLE` time, the way PostgreSQL does, was the other way
+to close this; it was rejected here because it is a `sql`/`catalog` change
+that would make the reservation a property of the engine rather than of
+this compatibility shim, and the milestone that wants a reserved prefix
+can still make that decision later without unpicking this one.
+
+The
 extended query protocol (M13.4 subtask 5) calls `answer` twice for the
 same statement, deliberately: once in `StatementParser::parse_sql` at
 `Parse` time, purely to learn the column shape `Describe` needs to report
@@ -22,8 +50,18 @@ without ever calling `Database::describe` (which would fail a `pg_class`
 query the same way `Database::execute` would), and again in
 `ExtendedQueryHandler::do_query` at `Execute` time, to compute the actual
 rows against whatever the catalog looks like *then* - so a table created
-between `Parse` and `Execute` still shows up, exactly as it would for an
-ordinary `SELECT` reaching the real engine.
+between `Parse` and `Execute` still shows up in a `pg_class` listing,
+exactly as it would for an ordinary `SELECT` reaching the real engine.
+
+The existence check above gives that second call a case it did not have
+before: a statement `Parse` described as introspection can be `Execute`d
+after a real table of that name has appeared, at which point `answer`
+returns `None` and the shape `Describe` already promised the client is no
+longer the shape the query has. `wire.rs` answers that with
+`0A000 feature_not_supported`, the same condition PostgreSQL reports as
+"cached plan must not change result type", rather than running the real
+query under the old column types or falling back to zero rows - see
+`wire.MD`'s `cached_plan_changed`.
 
 This module also carries `pg_type_of`/`field_info` (moved here from
 `wire.rs` in M13.4 subtask 3, `pub(crate)` since `wire.rs`'s own
@@ -70,12 +108,26 @@ of always saying "nothing").
   intact. String-literal tracking here is intentionally naive (a `'` always
   toggles in/out of a literal; there is no escape handling for `''`), which
   is sufficient for every recognized shape this module matches.
-- `answer(db, sql) -> Option<Introspection>` - normalizes `sql` and tries
+- `answer(db, sql) -> Option<Introspection>` - normalizes `sql`, gives
+  `shadows_a_real_table` first refusal, and then tries
   each recognizer in turn (`select version()`, then `pg_namespace`, then
   `pg_class`, then `pg_attribute`, then `pg_type`, then the
   `answer_unrecognized_pg_relation` catch-all), returning the first
   match's `Introspection` or `None` when nothing recognizes it, in which
   case the caller runs the query through the engine exactly as before.
+- `shadows_a_real_table(db, normalized) -> bool` - private. The one
+  question every recognizer in this module used to skip: does the engine
+  already have a table by this name? `true` only when the `FROM` token is
+  unqualified, `pg_`-prefixed, and matches a `Database::table_names()`
+  entry case-insensitively, in which case `answer` returns `None` and the
+  query goes to the engine like any other. It sits in `answer` rather than
+  in each recognizer on purpose - a check repeated six times is a check
+  the seventh recognizer will not have - and it costs one
+  `Database::table_names()` round trip, paid only by a query whose `FROM`
+  is `pg_`-prefixed and never by an ordinary statement. An explicitly
+  `pg_catalog.`-qualified name is excluded: it names the catalog rather
+  than whatever the bare name resolves to, and the engine's grammar could
+  not run it anyway.
 - `is_select_version(normalized)` - private, pure. `true` for
   `"select version()"` and the same with a trailing bare or `as`-prefixed
   single-word alias (`"select version() v"`, `"select version() as v"`),
@@ -248,7 +300,9 @@ of always saying "nothing").
   (an ordinary missing table, `nosuchtable`) is not this recognizer's
   concern at all - `is_pg_relation` returns `false` and `answer` falls
   through to the engine, which reports the real `42P01` exactly as if this
-  module were not in the path.
+  module were not in the path. A `pg_`-prefixed name that *does* exist as a
+  real table never reaches this function either: `answer` has already
+  returned `None` for it in `shadows_a_real_table`.
 
 ## Usage Example
 

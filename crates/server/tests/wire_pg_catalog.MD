@@ -92,6 +92,27 @@ listener and a `tempfile`-backed database, in the same shape as
   one row naming `t` - proving `ExtendedQueryHandler::do_query` recomputes
   the `pg_class` answer at `Execute` time rather than reusing whatever it
   saw (nothing) at `Parse` time.
+- `a_real_table_named_pg_something_is_read_from_the_engine_not_intercepted` -
+  the P-82 regression. `CREATE TABLE pg_foo (a INTEGER)` and one `INSERT`,
+  then `SELECT a FROM pg_foo` must return that row: before the fix, the
+  `pg_`-prefix catch-all shadowed the real table and answered zero rows
+  under a `?column?` heading while the `INSERT` had reported success, which
+  is a silent wrong answer rather than an error. The second half of the
+  test is the boundary of the fix rather than the fix itself:
+  `SELECT a FROM pg_catalog.pg_foo` still answers zero rows, because
+  writing the schema out names the catalog explicitly and must not resolve
+  to a user's table (`pg_catalog.MD`).
+- `a_pg_prefixed_table_created_after_parse_invalidates_the_cached_plan` -
+  the extended-protocol half of the same question, and the one case the
+  existence check cannot answer with rows. `prepare("SELECT a FROM
+  pg_later")` succeeds as an introspection statement while no such table
+  exists, so `Describe` has already promised the client a `VARCHAR`
+  column; `pg_later` is then created as an `INTEGER` table. `Execute` must
+  not answer zero rows (the same silent lie, one protocol over) and must
+  not run the real query under the promised types (a driver-level
+  deserialization failure), so it returns `0A000` - and re-preparing the
+  identical text then reads the real row, which is what proves the error
+  is about the cached plan and not about the table.
 
 ## Usage Example
 

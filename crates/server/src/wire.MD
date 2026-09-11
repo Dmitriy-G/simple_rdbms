@@ -294,20 +294,32 @@ table it will eventually report even exists.
 default: it matches on `&portal.statement.statement`
 (`Portal<S>.statement: Arc<StoredStatement<S>>`, `StoredStatement<S>.statement: S`,
 so `.statement.statement` reaches our own `PreparedStatement` through two
-levels of the framework's own wrapping). For `Introspection { sql, columns }`
+levels of the framework's own wrapping). For `Introspection { sql, .. }`
 (M13.4 subtask 5), it calls `pg_catalog::answer(&session, sql)` again,
 fresh, right here at `Execute` time rather than reusing anything computed
 at `Parse` - that is the whole point: a table created between `Parse` and
 `Execute` must show up, and the only way to guarantee that is to never
-cache the *rows*, only the column shape `get_result_schema` needed. Since
-the same SQL text is deterministically recognized the same way every
-time, `pg_catalog::answer` returning `None` here (the statement was
-recognized at `Parse` but not at `Execute`) cannot actually happen; the
-defensive fallback, `unwrap_or_else` to the `Parse`-time `columns` with
-zero rows rather than `.expect`/`.unwrap`, exists only so a change to
-`pg_catalog`'s recognizers can never turn a should-be-impossible case into
-a panicked connection - `unwrap_used`/`expect_used` are workspace-`warn`
-lints promoted to errors by `-D warnings` for exactly this reason. For
+cache the *rows*, only the column shape `get_result_schema` needed.
+
+`answer` returning `None` here means the statement was recognized as
+introspection at `Parse` and is not one now, and P-82 made that reachable
+for exactly one reason: a real table of that `pg_`-prefixed name has been
+created in between, so `pg_catalog::shadows_a_real_table` now declines the
+query (`pg_catalog.MD`). The column shape `Describe` already promised the
+client is then the wrong shape, and none of the three things this could do
+is free. Running the real query anyway sends `INTEGER` data under a
+`VARCHAR` `RowDescription` the client has already cached, which is a
+deserialization failure at the driver rather than an error it can read.
+Falling back to the `Parse`-time columns with zero rows is the same silent
+wrong answer P-82 was filed about, one protocol over. So it returns
+`0A000 feature_not_supported` through `cached_plan_changed` - the
+condition PostgreSQL reports as "cached plan must not change result type"
+in the same situation - and a client that re-prepares gets the real table.
+That is also why the old `unwrap_or_else` fallback is gone rather than
+kept as a defensive branch; `unwrap_used`/`expect_used` are
+workspace-`warn` lints promoted to errors by `-D warnings`, and a `match`
+with a real arm on each side satisfies them without inventing an answer.
+For
 `Ordinary { sql, description }`, the path is exactly what M13.3 shipped:
 `param_types` comes from `description.param_types` mapped through
 `pg_catalog::pg_type_of`, each of the portal's actual bound parameters
@@ -411,8 +423,19 @@ SQL statement raised.
   `type Statement = PreparedStatement`, `type QueryParser = StatementParser`,
   `query_parser` clones `session` into a fresh `StatementParser`, and
   `do_query` either re-answers an `Introspection` statement fresh from
-  `pg_catalog::answer` (M13.4 subtask 5) or decodes an `Ordinary`
-  statement's bound parameters and calls `Database::execute_with_params`.
+  `pg_catalog::answer` (M13.4 subtask 5), failing it with
+  `cached_plan_changed` if that answer has since become `None`, or decodes
+  an `Ordinary` statement's bound parameters and calls
+  `Database::execute_with_params`.
+- `cached_plan_changed() -> PgWireError` - private. The `0A000
+  feature_not_supported` a prepared `Introspection` statement gets at
+  `Execute` when `pg_catalog::answer` no longer recognizes it, which since
+  P-82 happens when a real table has taken the `pg_`-prefixed name it was
+  described against. It carries no SQL text and no table name - it is an
+  error handed straight to a client, and the client already knows which
+  statement it sent. PostgreSQL reports the same SQLSTATE in the same
+  situation, so a driver that already knows to re-prepare on `0A000` needs
+  nothing new to recover.
 - `on_session(session, f) -> T` - private. The single door from an async
   handler onto the engine: locks the `Mutex<Database>` (recovering a
   poisoned lock rather than propagating the panic, since one statement's

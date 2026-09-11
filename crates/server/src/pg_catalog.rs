@@ -480,8 +480,21 @@ fn answer_unrecognized_pg_relation(normalized: &str) -> Option<Introspection> {
     Some(Introspection { columns: select_list_columns(normalized), rows: Vec::new() })
 }
 
+fn shadows_a_real_table(db: &Database, normalized: &str) -> bool {
+    let Some(relation) = relation_after_from(normalized) else {
+        return false;
+    };
+    if relation.starts_with("pg_catalog.") || !is_pg_relation(relation) {
+        return false;
+    }
+    db.table_names().iter().any(|name| name.eq_ignore_ascii_case(relation))
+}
+
 pub fn answer(db: &Database, sql: &str) -> Option<Introspection> {
     let normalized = normalize(sql);
+    if shadows_a_real_table(db, &normalized) {
+        return None;
+    }
     if is_select_version(&normalized) {
         return Some(Introspection {
             columns: vec![("version".to_string(), Type::VARCHAR)],

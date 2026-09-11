@@ -195,14 +195,11 @@ impl ExtendedQueryHandler for ConnectionState {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         match &portal.statement.statement {
-            PreparedStatement::Introspection { sql, columns } => {
-                let introspection =
-                    on_session(&self.session, |session| pg_catalog::answer(session, sql));
-                let introspection = introspection.unwrap_or_else(|| Introspection {
-                    columns: columns.clone(),
-                    rows: Vec::new(),
-                });
-                Ok(introspection_response(introspection))
+            PreparedStatement::Introspection { sql, .. } => {
+                match on_session(&self.session, |session| pg_catalog::answer(session, sql)) {
+                    Some(introspection) => Ok(introspection_response(introspection)),
+                    None => Err(cached_plan_changed()),
+                }
             }
             PreparedStatement::Ordinary { sql, description } => {
                 let sql = sql.clone();
@@ -229,6 +226,16 @@ impl ExtendedQueryHandler for ConnectionState {
             }
         }
     }
+}
+
+fn cached_plan_changed() -> PgWireError {
+    PgWireError::UserError(Box::new(ErrorInfo::new(
+        "ERROR".to_owned(),
+        SqlState::FEATURE_NOT_SUPPORTED.as_str().to_owned(),
+        "cached plan must not change result type: this statement was prepared as a pg_catalog \
+         introspection query and the relation it names now exists as a real table"
+            .to_owned(),
+    )))
 }
 
 fn to_pg_error(err: &Error) -> PgWireError {
