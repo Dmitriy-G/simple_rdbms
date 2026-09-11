@@ -726,13 +726,17 @@ does.
 state and answered through ordinary `SELECT` execution rather than string
 matching, including the joins across them real clients issue — which
 needs M23.1's nested-loop joins to exist first. Retire M13.4's interception
-once these are in place — **including the three relations it answers from
-configuration rather than from the catalog**, `pg_database`, `pg_roles`
-and `pg_user`, which are the only fabricated rows in it and the ones a
-client's object tree has its root in
+once these are in place — **including the four relations it answers from
+configuration rather than from the catalog**, `pg_database`, `pg_roles`,
+`pg_user` and `pg_settings`, which are the only fabricated rows in it:
+the first three are where a client's object tree has its root, and
+`pg_settings` is where it reads the server version number that decides
+what it asks next
 (`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`). Deleting
-the interception without replacing those three empties every client's
-tree again, which is the failure P-90 reported. See datafusion-postgres
+the interception without replacing all four empties every client's
+tree again (P-90) or crashes the driver outright on a null (P-94). Note
+that `pg_settings` also has to keep agreeing with `SHOW`, which reads the
+same table today. See datafusion-postgres
 (linked from M13) as a reference `pg_catalog` implementation.
 
 ## M25 — Referential integrity (foreign keys) 🆕 New

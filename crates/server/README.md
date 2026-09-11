@@ -372,6 +372,7 @@ client this crate promises works when nobody has actually run it:
 | `tokio_postgres` | `pg_catalog` introspection over both protocols: `pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`, and an unrecognized `pg_`-relation | Works | Automated (`tests/wire_pg_catalog.rs`) |
 | `tokio_postgres` | `select version()` — answered by the engine as a session-context expression, no longer intercepted here | Works | Automated (`tests/wire_pg_catalog.rs`, unchanged across the move) |
 | `tokio_postgres` | `pg_database`, `pg_roles` and `pg_user` over both protocols: the one database row is named after the db file, the one role row is the owner `pg_namespace` reports | Works | Automated (`tests/wire_pg_catalog.rs`) |
+| `tokio_postgres` | `pg_settings` and `SHOW` agreeing on `server_version_num`, and `SHOW TRANSACTION ISOLATION LEVEL` | Works | Automated (`tests/wire_pg_catalog.rs`) |
 | DataGrip (PostgreSQL JDBC) | Object tree: a database node, its schemas and its tables | Not verified | The gap P-90 reported was found in a real DataGrip session, but only the automated tests above have been run against the fix |
 | `psql` | Simple query: `CREATE TABLE`/`INSERT`/`SELECT`/`BEGIN`/`COMMIT` | Works | Manual, real container - transcript above in "Verify, don't assume" |
 | `psql` | `\dt`, `\d <table>` | Not verified | Nobody has run these against a real `psql` yet |
@@ -394,20 +395,25 @@ would answer with come from `answer_pg_attribute` alone, not from
 whatever the join actually asked for, so `\d <table>`'s real output
 against this server is unknown rather than assumed working.
 
-`pg_catalog` recognizes exactly seven query shapes today (`src/pg_catalog.MD`),
+`pg_catalog` recognizes exactly eight query shapes today (`src/pg_catalog.MD`),
 every one of them a single-table `FROM` naming `pg_namespace`,
-`pg_class`, `pg_attribute`, `pg_type`, `pg_database`, `pg_roles` or
-`pg_user` (each honoring the specific
+`pg_class`, `pg_attribute`, `pg_type`, `pg_database`, `pg_roles`,
+`pg_user` or `pg_settings` (each honoring the specific
 predicates `src/pg_catalog.MD` lists - `relkind IN (...)`, `nspname =`,
 `relnamespace =`, `relname =`, `oid =`, `attrelid =`, `attname =`,
-`typname =`, `datname =`, `rolname =`, `usename =`). The last three
-answer one row each, from configuration rather than from a catalog: one
+`typname =`, `datname =`, `rolname =`, `usename =`, `name =`). The last
+four answer from configuration rather than from a catalog: one
 database, named after the `--db-path` file stem
-(`engine::Database::database_name`), and one implicit superuser named
-`postgres`, since nothing authenticates until M22. They are the exception
-to the zero-rows rule below and exist because a client reads an empty
-`pg_database` as "this server serves no databases" and stops there,
-leaving its whole object tree empty (P-90). Every other `pg_`-named relation - `pg_index`,
+(`engine::Database::database_name`), one implicit superuser named
+`postgres` since nothing authenticates until M22, and the parameter table
+in `src/settings.MD` that `SHOW` reads too. They are the exception
+to the zero-rows rule below, and both halves of that exception were paid
+for by a real client: an empty `pg_database` reads as "this server serves
+no databases", so the object tree stays empty (P-90), and an empty
+`pg_settings` reads as a *null* to a driver consuming
+`server_version_num` as a number, which kills the connection outright
+(P-94). `docs/adr/0021-one-database-one-role-until-m22-and-m24.md` states
+the test for which side a future relation falls on. Every other `pg_`-named relation - `pg_index`,
 `pg_constraint`, `pg_description`, `pg_proc`, `pg_settings`, and anything
 else starting `pg_` or `pg_catalog.` - answers zero rows of whatever
 columns its own select list named (M13.4 subtask 4), never `42P01

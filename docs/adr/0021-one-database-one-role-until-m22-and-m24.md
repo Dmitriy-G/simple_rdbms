@@ -2,6 +2,12 @@
 
 Date: 2026-09-11
 
+Revised: 2026-09-11 — Decision and Consequences: the test this ADR stated
+covered only relations a client *lists*, and a client that reads a single
+value out of one crashed on the empty answer (P-94). `pg_settings` joins
+the relations answered from configuration, and the scalar rule below is
+the generalization.
+
 Status: Accepted
 
 ## Context
@@ -42,9 +48,13 @@ meantime, which is precisely the gap M13.4 exists to close.
 
 ## Decision
 
-**`pg_database`, `pg_roles` and `pg_user` are answered from the server's
-own configuration, one row each, and they are the only fabricated rows in
-`crates/server/src/pg_catalog.rs`.**
+**`pg_database`, `pg_roles`, `pg_user` and `pg_settings` are answered
+from the server's
+own configuration, and they are the only fabricated rows in
+`crates/server/src/pg_catalog.rs`.** The first three answer one row each;
+`pg_settings` answers one row per parameter in
+`crates/server/src/settings.rs`, which is also the table `SHOW` reads, so
+the two spellings of one question cannot disagree.
 
 - The database's name is `engine::Database::database_name()` — the file
   stem of `DbConfig::db_path`, computed once when the database is opened
@@ -70,6 +80,29 @@ to decide whether anything exists is answered from configuration; a
 relation it uses to describe something it already found is answered from
 the catalog, or with zero rows.**
 
+**That test was too narrow, and the revision above is what P-94 cost.**
+It asks what a client does with a *relation* — lists it, or decides
+something exists from it — and says nothing about what the client does
+with the *answer*. A driver that runs
+`select setting from pg_settings where name = 'server_version_num'` is
+not listing anything: it is reading one value, and it reads the empty
+result set as a null, not as an empty list. The failure that produced
+this revision was a Java driver calling `Number.longValue()` on that
+null, which killed the connection with a message naming no SQL at all —
+strictly worse than an error, because an error at least names the
+relation. So the test has a second half:
+
+**A query whose answer a client consumes as a single value must never be
+answered with zero rows. Answer it, or let it fail loudly.**
+
+The two halves differ in what they protect against. The first is about a
+client *misreading* a correct-looking answer — an empty `pg_database`
+means "no databases", so the tree stays empty. The second is about a
+client *crashing* on one, and it is the more dangerous of the two because
+the crash names nothing: no SQLSTATE, no relation, no statement. Zero
+rows remains the right answer for everything else, and the catch-all
+still runs last.
+
 ## Consequences
 
 A real client's object tree resolves: a database node, its two schemas,
@@ -89,14 +122,27 @@ and both have an owner. **M22 supplies the real role**: once
 authentication exists, the fixed name and oid here become the session's
 authenticated identity, and the `passwd` cell — `********` today, never a
 credential — becomes a value that must stay redacted for a real reason.
-**M24 deletes all three recognizers**, along with the rest of the
+**M24 deletes all four recognizers**, along with the rest of the
 interception table, once `pg_catalog` tables are answered by ordinary
 queries over real catalog state.
+
+`pg_settings` brought a consequence of its own, and it is a limit rather
+than a cost: a query for a parameter outside
+`crates/server/src/settings.rs` still answers zero rows, so the scalar
+rule is satisfied for the parameters clients actually read and not by
+construction. Lengthening that table is not the guard — **the guard is
+that the answer is now visible**. Since P-93, every query the wire layer
+answers without the engine logs its shape and its row count, so the next
+zero-row answer to a scalar question is one line in the log rather than
+an investigation by elimination. That is the general lesson of both
+entries: this class of defect is only found by driving a real client, so
+what matters is how fast the next one can be read off the evidence.
 
 The cost of getting this wrong is worth naming, because it is the reason
 the rule above is written as a test: fabricating a row is a silent wrong
 answer, the same failure mode P-82 fixed from the other direction (a real
-table shadowed by the catch-all). Three relations that cannot be wrong —
+table shadowed by the catch-all). Four relations that cannot be wrong —
 one database that is the one open file, one role that is the one implicit
-superuser — are a bounded exception. A fourth relation added by analogy,
-without the test above, is how it stops being one.
+superuser, and a fixed table of parameters this server reports about
+itself — are a bounded exception. A fifth relation added by analogy,
+without the two-part test above, is how it stops being one.

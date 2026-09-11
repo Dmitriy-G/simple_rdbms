@@ -19,13 +19,18 @@ query and extended query (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`, with
 `$1` parameters and binary numerics), and answers a client's `pg_catalog`
 introspection by intercepting the known query shapes and reading the real
 catalog (`docs/adr/0007-postgres-wire-protocol.md`). A client's **object
-tree resolves**: `pg_database`, `pg_roles` and `pg_user` are answered from
-configuration with one database row, named after the `--db-path` file
-stem (`engine::Database::database_name`), and one implicit-superuser row,
-which is what gives the schema and table listings below them a root to
+tree resolves**: `pg_database`, `pg_roles`, `pg_user` and `pg_settings`
+are answered from
+configuration — one database row, named after the `--db-path` file
+stem (`engine::Database::database_name`), one implicit-superuser row, and
+the parameter table `SHOW` reads too — which is what gives the schema and
+table listings below them a root to
 hang from (`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`).
-Those three are the only rows this engine fabricates; every other
-`pg_`-named relation still answers zero rows. There is no
+Those four are the only rows this engine fabricates; every other
+`pg_`-named relation still answers zero rows. That ADR's two-part test is
+what decides whether the next relation joins them, and both halves came
+from a real client breaking: an empty relation is read as an empty
+*answer*, and an empty *scalar* query is read as a null. There is no
 authentication of any kind on that port yet — anything that can reach it
 is a superuser, and that fabricated role is a fixed name rather than the
 one the client sent — which is why it binds `127.0.0.1` by default until
