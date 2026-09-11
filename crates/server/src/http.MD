@@ -5,16 +5,31 @@ A hand-rolled, synchronous HTTP responder for exactly three routes:
 server - it reads one request line and ignores headers and any body,
 which every caller this binary actually has (Prometheus's scraper,
 Docker's `HEALTHCHECK`, `curl`) satisfies with a bare `GET` line. Written
-this way on purpose: `metrics-exporter-prometheus`'s own built-in listener
-requires its `http-listener` feature, which pulls in `tokio` - and this
-workspace has no async runtime anywhere else (see
-`docs/adr/0002-crate-splitting.md` and the root `README.md`). Pulling in
-an entire async runtime for three trivial routes would be a much larger
-architectural change than the routes themselves justify, so this crate
-uses `metrics_exporter_prometheus::PrometheusBuilder::install_recorder`
+this way on purpose, though not for the reason it was originally written
+for. When this module was added, the argument was that
+`metrics-exporter-prometheus`'s own built-in listener needs its
+`http-listener` feature, that feature pulls in `tokio`, and the workspace
+had no async runtime anywhere - so three trivial routes were not worth
+introducing one. M13.2 introduced one regardless, for something else
+entirely: `server` now builds a multi-thread `tokio` runtime for the
+`pgwire` listener (`main.MD`), and `tokio` is an ordinary dependency of
+this crate. The old sentence survived that change and claimed the opposite
+until P-83.
+
+**The loop stays synchronous on a different argument, and it is the
+stronger one: this endpoint must keep answering when the runtime does
+not.** `/health/live` and `/health/ready` are what an orchestrator uses to
+decide whether to restart this container, and a runtime wedged by a
+blocking call on a worker thread is exactly the failure they exist to
+report. Serving them from their own `std::net::TcpListener` thread means
+the answer does not depend on the subsystem being asked about - see
+`crates/server/README.md`'s Architecture section, which states the same
+division from the outside and is the place it belongs rather than being
+restated here. So this crate uses
+`metrics_exporter_prometheus::PrometheusBuilder::install_recorder`
 (which only installs the global recorder and hands back a renderable
 `PrometheusHandle` - no listener, no `tokio`) and serves that handle's
-output itself with `std::net::TcpListener`.
+output itself.
 
 ## Key Components
 

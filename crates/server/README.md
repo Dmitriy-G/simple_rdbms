@@ -41,15 +41,25 @@ through the one `on_session` helper, which takes the lock and the
 calls, that helper and the `Database::connect` in `serve`.
 
 `metrics-exporter-prometheus`'s own built-in HTTP listener needs an async
-runtime too (its `http-listener` Cargo feature pulls in `tokio`), but
-pulling one in for three trivial routes would have been a far larger
-architectural change than the routes themselves justified back when this
-crate had no other reason to need one. So this crate still uses the
+runtime too (its `http-listener` Cargo feature pulls in `tokio`), and
+originally that settled it: pulling in a runtime for three trivial routes
+was a far larger change than the routes justified, back when this crate
+had no other reason to need one. M13.2 gave it one anyway, for the wire
+listener, so that argument no longer decides anything — and the metrics
+and health loop stays synchronous on its own thread for a better reason.
+**`/health/live` and `/health/ready` are what an orchestrator uses to
+decide whether to restart this container, so they must not be served by
+the subsystem they report on.** A `tokio` runtime wedged by a blocking
+call on a worker thread is precisely the failure those endpoints exist to
+surface, and an endpoint hosted on that runtime would go silent at the one
+moment it matters. So this crate still uses the
 exporter in manual-render mode (`PrometheusBuilder::install_recorder`,
 `default-features = false` on the dependency) and serves the result
 itself with the same small, synchronous `std::net::TcpListener` loop —
 see `src/http.MD`. The `pgwire` listener's `tokio` runtime and this
-loop's own thread are independent of each other by design.
+loop's own thread are independent of each other by design, and that
+independence is now the design rather than an accident of dependency
+ordering.
 
 ## Key Components
 
@@ -68,10 +78,11 @@ loop's own thread are independent of each other by design.
   `main` and the HTTP listener thread. See `src/health.MD`.
 - `http` - the hand-rolled synchronous responder for `/metrics`,
   `/health/live`, and `/health/ready`. See `src/http.MD`.
-- `pg_catalog` - intercepts `pg_catalog` introspection queries a real
-  client sends before its first statement (`select version()`, and more
-  to come under M13.4) and answers them from the live catalog rather than
-  letting them fail as an undefined table. See `src/pg_catalog.MD`.
+- `pg_catalog` - intercepts the introspection queries a real client sends
+  before its first statement and answers them from the live catalog rather
+  than letting them fail as an undefined table. "Client compatibility"
+  below lists exactly which query shapes are recognized and what an
+  unrecognized one gets; see `src/pg_catalog.MD` for how.
 - `signals` - blocks until `SIGTERM`/`Ctrl-C`, so `main` can run a
   graceful shutdown instead of the process just dying mid-write. See
   `src/signals.MD`.
@@ -260,7 +271,16 @@ docker compose down && docker compose up --build -d   # data must survive
 curl http://localhost:9090/health/ready
 ```
 
-<!-- Transcript of the above, from the pinned bookworm-based images, goes here. -->
+**No transcript of that six-command sequence has ever been captured**, so
+treat it as a procedure rather than as a result. What *is* evidenced is
+its first two steps: the `psql` transcript below was taken against a
+container brought up by `docker compose up -d` from the images this
+`Dockerfile` and `docker-compose.yml` pin, so the image builds and the
+container serves. The `stop`/`start` recovery summary and the
+`down && up --build` persistence check have no recorded output, and a
+reader should not assume they have been run since the images were pinned.
+Anyone who does run them should paste the output here in place of this
+paragraph.
 
 The wire listener needs the same real-container proof: a unit or
 integration test only shows `tokio_postgres` round-tripping through it,

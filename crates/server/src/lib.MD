@@ -19,9 +19,10 @@ existed.
 - `http` - the hand-rolled synchronous responder for `/metrics`,
   `/health/live`, and `/health/ready`. See [http.MD](http.MD).
 - `pg_catalog` - intercepts the `pg_catalog` introspection queries a real
-  PostgreSQL client sends (`select version()`, and more from M13.4) and
+  PostgreSQL client sends and
   answers them from the live catalog instead of letting them fail against
-  `sql`'s own grammar. See [pg_catalog.MD](pg_catalog.MD).
+  `sql`'s own grammar. See [pg_catalog.MD](pg_catalog.MD) for the query
+  shapes it recognizes and what an unrecognized one gets.
 - `signals` - blocks until `SIGTERM`/`Ctrl-C`, so `main` can run a
   graceful shutdown instead of the process just dying mid-write. See
   [signals.MD](signals.MD).

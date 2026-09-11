@@ -1104,6 +1104,40 @@ instead. `docs/adr/0012-bounded-lock-waits.md` and
 `docs/adr/0013-version-identity-and-lifetime.md` both open their Context
 that way and are the shape to copy.
 
+### Two claims that rot without anyone touching the file
+
+A line number goes stale when the file around it moves. These two go stale
+when something *elsewhere* changes, which is worse: the document that
+becomes false is one nobody in that task had open. Both have already
+happened, both were found by a milestone review rather than by the change
+that caused them, and both are a one-command check.
+
+**"The tree has nothing like X" is a claim about the whole workspace, so
+adding an X invalidates it wherever it is written.** When a task adds a
+dependency, a binary, a runtime or a subsystem the repository has never
+had, grep the new thing's name across `crates/**/*.MD`, `crates/*/README.md`,
+`docs/` and this file before finishing, and fix every sentence that says
+the tree does not have one. M13.2 added `tokio` and nobody ran that grep:
+`crates/server/src/http.MD` went on explaining that the metrics listener
+was hand-rolled because "this workspace has no async runtime anywhere
+else" while the same crate built a multi-thread `tokio` runtime two files
+away (P-83), and the root `README.md` said the same thing (P-79). Note
+what the fix is not: the *decision* was still right, and the repair was to
+state the reason that actually holds now, not to delete the paragraph. A
+justification that has outlived its original reason usually has a better
+one available, and finding it is the point of the exercise.
+
+**"…and more to come under Mx" reads as a promise until Mx ships, and as a
+lie afterwards.** A forward reference to a milestone is a claim with an
+expiry date attached, so the milestone's own completion is when it has to
+be re-read. Grep the milestone identifier across the crates it touched —
+`grep -rn "M13.4" crates/` — as part of finishing it. `crates/server/README.md`
+described `pg_catalog` as answering `select version()` "and more to come
+under M13.4" for the whole of M13.4 and past its end (P-84). The repair
+that lasts is to stop restating the list in two places: point at the one
+section that describes the current state, so the next milestone in that
+area has one copy to update rather than three.
+
 ## Lint suppressions
 
 Lint suppressions live in configuration, not in source. A lint that needs
