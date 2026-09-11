@@ -29,7 +29,8 @@ to_physical -> PhysicalPlan` for a `SELECT`; `INSERT`/`CREATE TABLE`/
 
 - `binder` - `Binder`, `BoundColumnDef`, `BoundCreateIndex`,
   `BoundCreateTable`, `BoundExpr`, `BoundInsert`, `BoundSelect`,
-  `BoundStatement`: binds parsed `sql` AST nodes against a `Catalog`. See
+  `BoundStatement`, `SessionContext`: binds parsed `sql` AST nodes
+  against a `Catalog` and a session context. See
   [binder.MD](src/binder.MD).
 - `error` - `PlannerError`, errors raised while binding. See
   [error.MD](src/error.MD).
@@ -60,6 +61,13 @@ workspace's rules don't allow for `executor`.
 
 Binding and lowering work end to end for `CREATE TABLE`, `CREATE INDEX`,
 `INSERT`, and `SELECT` (projection and a `WHERE` filter, single table).
+A session-context expression (`sql::SessionContextName` —
+`current_catalog`, `current_schema`, `current_user`, `session_user`,
+`version()`) is resolved here and nowhere else: `Binder::new` takes a
+`SessionContext` alongside the catalog and replaces each such expression
+with the value it names, so every layer below the binder sees a constant.
+This is an allowlist rather than a function registry, and deliberately
+so — see [binder.MD](src/binder.MD).
 `LogicalPlan` and `PhysicalPlan` both have a `Join`/`NestedLoopJoin` node
 kind and `to_physical` maps one to the other, but nothing produces a
 `Join` node from real SQL today — `sql` has no `JOIN` syntax — so it's

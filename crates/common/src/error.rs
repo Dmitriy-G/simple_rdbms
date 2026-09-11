@@ -68,6 +68,9 @@ pub enum Error {
     #[error("undefined column: {name}")]
     UndefinedColumn { name: String },
 
+    #[error("undefined function: {name}")]
+    UndefinedFunction { name: String },
+
     #[error("undefined parameter: ${index}")]
     UndefinedParameter { index: u32 },
 
@@ -157,6 +160,7 @@ impl Error {
             Error::ParameterCountMismatch { .. } => SqlState::PROTOCOL_VIOLATION,
             Error::UndefinedTable { .. } => SqlState::UNDEFINED_TABLE,
             Error::UndefinedColumn { .. } => SqlState::UNDEFINED_COLUMN,
+            Error::UndefinedFunction { .. } => SqlState::UNDEFINED_FUNCTION,
             Error::UndefinedParameter { .. } => SqlState::UNDEFINED_PARAMETER,
             Error::AmbiguousColumn { .. } => SqlState::AMBIGUOUS_COLUMN,
             Error::DuplicateTable { .. } => SqlState::DUPLICATE_TABLE,
@@ -207,6 +211,7 @@ impl Error {
             | Error::ParameterCountMismatch { .. }
             | Error::UndefinedTable { .. }
             | Error::UndefinedColumn { .. }
+            | Error::UndefinedFunction { .. }
             | Error::UndefinedParameter { .. }
             | Error::AmbiguousColumn { .. }
             | Error::DuplicateTable { .. }
@@ -253,6 +258,7 @@ impl Error {
             | Error::ParameterCountMismatch { .. }
             | Error::UndefinedTable { .. }
             | Error::UndefinedColumn { .. }
+            | Error::UndefinedFunction { .. }
             | Error::UndefinedParameter { .. }
             | Error::AmbiguousColumn { .. }
             | Error::DuplicateTable { .. }

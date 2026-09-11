@@ -61,11 +61,57 @@ pub struct ColumnDef {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Value),
+    SessionContext(SessionContextName),
     Column { table: Option<String>, name: String },
     BinaryOp { left: Box<Expr>, op: BinaryOperator, right: Box<Expr> },
     UnaryOp { op: UnaryOperator, expr: Box<Expr> },
     IsNull { expr: Box<Expr>, negated: bool },
     Parameter { index: u32 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionContextName {
+    CurrentCatalog,
+    CurrentSchema,
+    CurrentUser,
+    SessionUser,
+    Version,
+}
+
+impl SessionContextName {
+    pub fn keyword(word: &str) -> Option<Self> {
+        if word.eq_ignore_ascii_case("current_catalog") {
+            Some(SessionContextName::CurrentCatalog)
+        } else if word.eq_ignore_ascii_case("current_schema") {
+            Some(SessionContextName::CurrentSchema)
+        } else if word.eq_ignore_ascii_case("current_user") || word.eq_ignore_ascii_case("user") {
+            Some(SessionContextName::CurrentUser)
+        } else if word.eq_ignore_ascii_case("session_user") {
+            Some(SessionContextName::SessionUser)
+        } else {
+            None
+        }
+    }
+
+    pub fn function(word: &str) -> Option<Self> {
+        if word.eq_ignore_ascii_case("current_database") {
+            Some(SessionContextName::CurrentCatalog)
+        } else if word.eq_ignore_ascii_case("version") {
+            Some(SessionContextName::Version)
+        } else {
+            Self::keyword(word)
+        }
+    }
+
+    pub fn column_name(self) -> &'static str {
+        match self {
+            SessionContextName::CurrentCatalog => "current_catalog",
+            SessionContextName::CurrentSchema => "current_schema",
+            SessionContextName::CurrentUser => "current_user",
+            SessionContextName::SessionUser => "session_user",
+            SessionContextName::Version => "version",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

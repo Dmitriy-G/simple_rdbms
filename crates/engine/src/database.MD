@@ -99,18 +99,18 @@ dispatch thread or a worker pool exists underneath.
   `execute`'s own `EngineUnavailable` would have surfaced first on any real
   workload.
 - `Database::database_name(&self) -> &str` - the name this database
-  answers to over a client protocol: `DbConfig::db_path`'s file stem
-  (`example.db` -> `example`), falling back to `postgres` when the path
-  has no stem at all. It is computed once, in `open_impl`, and stored in
-  a `String` field that `connect` clones, rather than being asked of the
-  engine thread through an `EngineMessage`: the value is fixed for the
-  lifetime of the process, so a request/reply round trip would buy
-  nothing and would put a channel hop on a path a client hits on every
-  connection. `crates/server/src/pg_catalog.rs` is the caller - a
-  `pg_database` query has to name this database, and a client whose
-  `pg_database` answer is empty shows no database at all - and it is the
-  one place the file-stem-is-the-database-name rule is defined, so
-  nothing downstream reimplements it from `db_path`.
+  answers to over a client protocol. The rule itself lives in
+  `common::DbConfig::database_name` (`db_path`'s file stem, with a
+  `postgres` fallback), because two callers need it and a second
+  derivation is a second answer: this method, for
+  `crates/server/src/pg_catalog.rs`'s `pg_database` row, and
+  `runtime::EngineShared`, for the `planner::SessionContext` that
+  resolves `current_catalog`. Here it is computed once, in `open_impl`,
+  and stored in a `String` field that `connect` clones, rather than being
+  asked of the engine thread through an `EngineMessage`: the value is
+  fixed for the lifetime of the process, so a request/reply round trip
+  would buy nothing and would put a channel hop on a path a client hits
+  on every connection.
 - `Database` has **no `Drop` impl**, and that absence is deliberate. Its
   only field drops in the ordinary way, and `runtime::SessionHandle`'s own
   `Drop` sends `runtime::EngineMessage::Disconnect`, which is the whole of

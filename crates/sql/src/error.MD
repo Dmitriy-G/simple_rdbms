@@ -37,6 +37,14 @@ Errors raised while lexing or parsing SQL text.
   legal (`parser.MD`'s `parse_select`), but `*` has no table whose columns
   it could expand to, so it is refused at the select list's own offset
   rather than binding to zero columns.
+  `UndefinedFunction { name, offset }` is raised when an identifier in
+  call position - followed by `(` - is not one of the session-context
+  spellings `ast.MD`'s `SessionContextName` lists, or when one of those
+  is given arguments. It is the one `SqlError` that is not a syntax
+  error: `engine::runtime`'s `syntax_error` maps it to
+  `common::Error::UndefinedFunction` and SQLSTATE `42883`, since a client
+  can act on "that function does not exist" and cannot act on "your SQL
+  is malformed at byte 8".
 - `SqlError::offset(source) -> usize` - the byte offset in `source` this
   error points at. An `UnexpectedEof` has no token of its own to point at,
   so it points one past the end of `source`.

@@ -92,7 +92,8 @@ use planner::{infer_parameter_types, substitute_parameters};
 
 let param_types = infer_parameter_types(&statement, &catalog)?;
 let substituted = substitute_parameters(statement, &[types::Value::Integer(1)])?;
-let bound = planner::Binder::new(&catalog).bind(substituted)?;
+let bound =
+    planner::Binder::new(&catalog, planner::SessionContext::new("example")).bind(substituted)?;
 ```
 
 `engine::Database::describe` calls `infer_parameter_types` to answer a

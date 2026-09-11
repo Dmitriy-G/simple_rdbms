@@ -114,7 +114,23 @@ cursor rather than by recursing over the input text.
   `Expr::Parameter { index: n }` with no further validation here - the
   lexer has already rejected `$0` and a bare `$` (`lexer.MD`'s
   `lex_dollar`), so every `Parameter` token `parse_primary` sees carries a
-  positive index. This ladder matches Postgres's order exactly,
+  positive index. An unqualified identifier is checked against
+  `SessionContextName` before it becomes a column reference, and the
+  check depends on what follows it. In call position - the next token is
+  `(` - the name must be a `SessionContextName::function` spelling, and
+  anything else is `SqlError::UndefinedFunction`, which `engine` maps to
+  `42883` rather than to a syntax error, because "there is no `now()`" is
+  a different thing to report than "this text is malformed". Outside call
+  position only a `SessionContextName::keyword` spelling is taken; a bare
+  `version` or `current_database` stays `Expr::Column`, since a user table
+  may own a column by that name and only the parenthesized form is the
+  session-context value.
+- `Parser::consume_empty_argument_list(&mut self, name, offset)` -
+  private. Consumes the `()` after a recognized session-context name, and
+  reports `SqlError::UndefinedFunction` if anything at all sits between
+  the parentheses: this engine has no function taking arguments, so
+  `current_schema(1)` is an undefined function rather than a bad
+  argument list. This ladder matches Postgres's order exactly,
   highest to lowest: comparison, `IS`, `NOT`, `AND`, `OR`, with unary
   minus kept separate and high (inside `parse_unary`, above the
   multiplicative/additive levels M15 will add) since Postgres binds unary

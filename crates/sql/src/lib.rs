@@ -9,7 +9,7 @@ mod token;
 
 pub use ast::{
     BinaryOperator, ColumnDef, CreateIndexStatement, CreateTableStatement, Expr, InsertStatement,
-    SelectItem, SelectStatement, Statement, TableRef, UnaryOperator,
+    SelectItem, SelectStatement, SessionContextName, Statement, TableRef, UnaryOperator,
 };
 pub use error::SqlError;
 pub use fingerprint::fingerprint;

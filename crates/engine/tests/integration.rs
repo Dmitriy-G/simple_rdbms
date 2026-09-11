@@ -390,3 +390,61 @@ fn a_parse_error_carries_sqlstate_42601_and_its_byte_offset() {
         other => panic!("expected Error::Syntax, got {other:?}"),
     }
 }
+
+#[test]
+fn session_context_expressions_answer_from_the_database_the_engine_was_opened_with() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    let result = db
+        .execute("SELECT current_catalog, current_schema, current_user, version()")
+        .expect("a select of session-context expressions is ordinary SQL");
+    let (columns, rows) = rows_and_columns_of(result);
+
+    assert_eq!(
+        columns,
+        vec![
+            "current_catalog".to_string(),
+            "current_schema".to_string(),
+            "current_user".to_string(),
+            "version".to_string(),
+        ]
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0][0], Value::Varchar("test".to_string()));
+    assert_eq!(rows[0][1], Value::Varchar("public".to_string()));
+    assert_eq!(rows[0][2], Value::Varchar("postgres".to_string()));
+    match &rows[0][3] {
+        Value::Varchar(version) => {
+            assert!(version.starts_with("PostgreSQL "), "unexpected version string: {version}")
+        }
+        other => panic!("expected a version string, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_session_context_expression_works_inside_a_where_clause_over_a_real_table() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    db.execute("CREATE TABLE t (name TEXT)").expect("create table");
+    db.execute("INSERT INTO t VALUES ('public'), ('other')").expect("insert");
+
+    let (_, rows) = rows_and_columns_of(
+        db.execute("SELECT name FROM t WHERE name = current_schema").expect("select"),
+    );
+    assert_eq!(rows, vec![vec![Value::Varchar("public".to_string())]]);
+}
+
+#[test]
+fn an_unknown_function_call_fails_as_undefined_function_not_as_a_syntax_error() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    let err = db.execute("SELECT now()").expect_err("no function machinery exists yet");
+    assert_eq!(err.sql_state(), SqlState::UNDEFINED_FUNCTION);
+    match err {
+        Error::UndefinedFunction { name } => assert_eq!(name, "now"),
+        other => panic!("expected Error::UndefinedFunction, got {other:?}"),
+    }
+}

@@ -72,6 +72,9 @@ pub(crate) fn projected_column(
             (name, Some(*data_type))
         }
         BoundExpr::Literal(value) => (format!("column{}", position + 1), value.data_type()),
+        BoundExpr::SessionContext { name, value } => {
+            (name.column_name().to_string(), value.data_type())
+        }
         BoundExpr::BinaryOp { data_type, .. } | BoundExpr::UnaryOp { data_type, .. } => {
             (format!("column{}", position + 1), Some(*data_type))
         }
@@ -117,6 +120,7 @@ pub(crate) fn format_data_type(data_type: DataType) -> String {
 pub(crate) fn render_expr(expr: &BoundExpr, cols: &[(String, Option<DataType>)]) -> String {
     match expr {
         BoundExpr::Literal(value) => render_value(value),
+        BoundExpr::SessionContext { name, .. } => name.column_name().to_string(),
         BoundExpr::ColumnRef { index, .. } => {
             cols.get(*index).map(|(name, _)| name.clone()).unwrap_or_else(|| format!("col{index}"))
         }
@@ -135,7 +139,9 @@ fn wrapped(expr: &BoundExpr, cols: &[(String, Option<DataType>)]) -> String {
         BoundExpr::BinaryOp { .. } | BoundExpr::UnaryOp { .. } | BoundExpr::IsNull { .. } => {
             format!("({})", render_expr(expr, cols))
         }
-        BoundExpr::Literal(_) | BoundExpr::ColumnRef { .. } => render_expr(expr, cols),
+        BoundExpr::Literal(_) | BoundExpr::ColumnRef { .. } | BoundExpr::SessionContext { .. } => {
+            render_expr(expr, cols)
+        }
     }
 }
 

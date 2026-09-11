@@ -145,6 +145,36 @@ parse error (not a panic).
 - `oversized_parameter_index_is_a_lexer_error` - a digit run too large for
   `u32` after `$` reports `SqlError::InvalidParameter` quoting the whole
   span.
+- `session_context_items(source) -> Vec<SessionContextName>` - private.
+  Parses a `SELECT` and asserts every select item is a session-context
+  expression, returning the names, so the tests below read as a list of
+  spellings rather than as nested pattern matches.
+- `every_session_context_spelling_parses_with_and_without_parentheses` -
+  `current_catalog`/`current_database()` both yield `CurrentCatalog`,
+  `current_schema`/`current_schema()` both yield `CurrentSchema`,
+  `current_user`/`user` both yield `CurrentUser` while `session_user`
+  stays its own variant, and `version()` yields `Version`.
+- `a_session_context_name_is_recognized_whatever_its_case` -
+  `CURRENT_SCHEMA` and `Current_Catalog()`, since the lexer preserves an
+  identifier's case and the match is deliberately case-insensitive.
+- `a_session_context_name_inside_a_where_clause_is_an_ordinary_expression` -
+  `WHERE a = current_schema` puts a `SessionContext` on the right of a
+  `BinaryOp`, which is the half of P-91 a text-matching interception in
+  the wire layer could never have answered.
+- `a_qualified_name_is_still_a_column_even_when_it_ends_in_a_session_context_word` -
+  `t.version` stays `Expr::Column`; the qualifier decides it before the
+  allowlist is consulted at all.
+- `a_function_spelling_without_parentheses_is_an_ordinary_column` -
+  `SELECT version, current_database FROM t` binds two column references.
+  This is the test that stops the allowlist stealing a user's column
+  name: only the parenthesized form is the session-context value.
+- `a_bare_unknown_name_is_still_a_column_reference` - `SELECT now FROM t`
+  is a column, not an error; the allowlist only applies in call position.
+- `an_unknown_function_call_is_an_undefined_function_not_a_syntax_error` -
+  `now()` reports `SqlError::UndefinedFunction` at the identifier's own
+  offset, which `engine` maps to `42883`.
+- `a_session_context_name_with_arguments_is_an_undefined_function` -
+  `current_schema(1)` is refused rather than having its argument ignored.
 - `render_points_a_caret_at_the_offending_token` - `SqlError::render`
   produces exactly three lines (message, source line, caret) with the
   caret aligned to the offending byte offset.

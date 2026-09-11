@@ -135,7 +135,7 @@ fn collect_expr(
             record(types, *index, None);
             Ok(())
         }
-        sql::Expr::Literal(_) | sql::Expr::Column { .. } => Ok(()),
+        sql::Expr::Literal(_) | sql::Expr::Column { .. } | sql::Expr::SessionContext(_) => Ok(()),
         sql::Expr::UnaryOp { expr, .. } => collect_expr(expr, schema, table_scope, types),
         sql::Expr::IsNull { expr, .. } => collect_expr(expr, schema, table_scope, types),
         sql::Expr::BinaryOp { left, right, .. } => {
@@ -220,7 +220,7 @@ fn scan_expr(expr: &sql::Expr, max: &mut u32) {
                 *max = *index;
             }
         }
-        sql::Expr::Literal(_) | sql::Expr::Column { .. } => {}
+        sql::Expr::Literal(_) | sql::Expr::Column { .. } | sql::Expr::SessionContext(_) => {}
         sql::Expr::UnaryOp { expr, .. } => scan_expr(expr, max),
         sql::Expr::IsNull { expr, .. } => scan_expr(expr, max),
         sql::Expr::BinaryOp { left, right, .. } => {
@@ -272,6 +272,7 @@ fn substitute_expr(expr: sql::Expr, values: &[Value]) -> sql::Expr {
     match expr {
         sql::Expr::Parameter { index } => sql::Expr::Literal(values[(index - 1) as usize].clone()),
         sql::Expr::Literal(value) => sql::Expr::Literal(value),
+        sql::Expr::SessionContext(name) => sql::Expr::SessionContext(name),
         sql::Expr::Column { table, name } => sql::Expr::Column { table, name },
         sql::Expr::BinaryOp { left, op, right } => sql::Expr::BinaryOp {
             left: Box::new(substitute_expr(*left, values)),

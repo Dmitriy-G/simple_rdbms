@@ -11,7 +11,7 @@ mod plan;
 
 pub use binder::{
     Binder, BoundColumnDef, BoundCreateIndex, BoundCreateTable, BoundExpr, BoundInsert,
-    BoundSelect, BoundStatement,
+    BoundSelect, BoundStatement, SessionContext,
 };
 pub use error::PlannerError;
 pub use explain::{explain_logical, explain_physical};

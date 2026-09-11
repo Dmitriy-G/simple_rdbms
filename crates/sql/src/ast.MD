@@ -73,6 +73,37 @@ consumes.
   binder unsubstituted means the statement was run without its parameter
   values, since `planner::parameters::substitute_parameters` replaces
   every `Parameter` with a `Literal` first.
+  `SessionContext(SessionContextName)` is one of the fixed
+  session-context values below, recognized by the parser rather than
+  resolved as a name.
+- `SessionContextName` - the closed set of session-context expressions
+  this engine answers: `CurrentCatalog`, `CurrentSchema`, `CurrentUser`,
+  `SessionUser`, `Version`. It is deliberately **not** a function
+  registry; `planner::binder` replaces each with a value at bind time,
+  and a general scalar-function subsystem - a function catalog,
+  resolution by name and argument types, an evaluator - is a milestone of
+  its own rather than an extension of this enum. An identifier that is
+  *not* on this list and *is* followed by `(` is
+  `SqlError::UndefinedFunction`, so `now()` reports what is actually
+  missing instead of failing as a syntax error.
+- `SessionContextName::keyword(word) -> Option<Self>` - the spellings SQL
+  writes as niladic *keywords*, matched case-insensitively and valid with
+  no parentheses: `current_catalog`, `current_schema`, `current_user`,
+  `session_user` and `user` (the last being another spelling of
+  `current_user`, as in PostgreSQL).
+- `SessionContextName::function(word) -> Option<Self>` - the spellings
+  valid only in call position, `<name>()`: `current_database` (the same
+  value as `current_catalog`) and `version`, plus every keyword spelling,
+  since `current_schema()` is as ordinary as `current_schema`. The split
+  matters because a bare `version` or `current_database` must stay an
+  ordinary column reference - a user table may own a column with that
+  name, and only the parenthesized form can be the session-context value.
+- `SessionContextName::column_name(self) -> &'static str` - the result
+  column's name, which is what a driver reads these back by
+  (`current_catalog`, `current_schema`, `current_user`, `session_user`,
+  `version`). `planner::explain::projected_column` uses it instead of the
+  positional `columnN` every other expression gets, since the grammar has
+  no select-list alias to name one with.
 - `BinaryOperator` - a binary operator that can appear in an
   `Expr::BinaryOp`: `Eq` (`=`), `NotEq` (`<>`/`!=`), `Lt` (`<`), `LtEq`
   (`<=`), `Gt` (`>`), `GtEq` (`>=`), `And` (`AND`), `Or` (`OR`), `Plus`

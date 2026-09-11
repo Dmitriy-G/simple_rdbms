@@ -16,7 +16,7 @@ Asserts the crate compiles and its main types can be constructed.
 #[test]
 fn example_constructs_a_binder() {
     let catalog = catalog::Catalog::new();
-    let _binder = planner::Binder::new(&catalog);
+    let _binder = planner::Binder::new(&catalog, planner::SessionContext::new("smoke"));
 }
 ```
 

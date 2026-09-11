@@ -39,7 +39,7 @@ operation will be executed (e.g. which join algorithm).
 ```rust
 use planner::{Binder, IndexScanRule, Optimizer, to_physical};
 
-let bound = Binder::new(&catalog).bind(statement)?;
+let bound = Binder::new(&catalog, planner::SessionContext::new("example")).bind(statement)?;
 let logical = planner::plan(bound)?;
 let logical = Optimizer::new(vec![Box::new(IndexScanRule)]).optimize(logical, &catalog);
 let physical = to_physical(logical);

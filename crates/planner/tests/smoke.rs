@@ -5,7 +5,7 @@ use planner::{Binder, LogicalPlan, Optimizer, PhysicalPlan};
 #[test]
 fn binder_and_optimizer_construct() {
     let catalog = Catalog::new();
-    let _binder = Binder::new(&catalog);
+    let _binder = Binder::new(&catalog, planner::SessionContext::new("smoke"));
     let _optimizer = Optimizer::new(Vec::new());
 }
 

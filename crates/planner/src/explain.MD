@@ -50,7 +50,12 @@ memcomparable bounds back into a readable condition.
   `IsNull` test - always `Boolean`) gets the positional `column<N>` name
   `planner::binder::BoundSelect::column_names` already uses for the same
   case, so `EXPLAIN`'s labels agree with what a client would see as the
-  result set's own column names.
+  result set's own column names. The one exception is
+  `BoundExpr::SessionContext`, which is named after the expression itself
+  (`current_schema`, `version`) rather than by position: a driver sends
+  `select current_schema` during connection setup and reads the answer
+  back by that name, and with no select-list alias in the grammar this is
+  the only place that name can come from.
 - `cols_line(cols) -> String` - private. The non-verbose `cols=[a, b, c]`
   form: names only.
 - `verbose_cols_line(cols) -> String` - private. The verbose form, each
@@ -70,7 +75,9 @@ memcomparable bounds back into a readable condition.
   (`wrapped`); the expression's own top level never wraps itself, which is
   what turns `(age >= 21) AND (name = 'ada')` into exactly that instead of
   `((age >= 21) AND (name = 'ada'))`. `IsNull { expr, negated }` renders as
-  `<expr> IS NULL` or `<expr> IS NOT NULL`.
+  `<expr> IS NULL` or `<expr> IS NOT NULL`. A `SessionContext` renders as
+  the expression's own spelling (`current_schema`), not as the string it
+  resolved to, so an `EXPLAIN` reads back as the query that was written.
 - `wrapped(expr, cols) -> String` - private. `render_expr`, parenthesized
   if `expr` is itself a compound (`BinaryOp`/`UnaryOp`/`IsNull`) node.
 - `render_unary(op, expr, cols) -> String`, `op_symbol(op) -> &'static str`,

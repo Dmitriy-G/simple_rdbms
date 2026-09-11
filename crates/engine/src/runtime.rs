@@ -8,8 +8,8 @@ use common::sync::recover_lock;
 use common::{DbConfig, Error, Result, Severity, TxnId};
 use executor::ExecutorContext;
 use planner::{
-    Binder, BoundStatement, IndexScanRule, Optimizer, PhysicalPlan, explain_logical,
-    explain_physical, infer_parameter_types, substitute_parameters, to_physical,
+    Binder, BoundStatement, IndexScanRule, Optimizer, PhysicalPlan, SessionContext,
+    explain_logical, explain_physical, infer_parameter_types, substitute_parameters, to_physical,
 };
 use sql::{Lexer, Parser, SqlError, Statement};
 use storage::StorageError;
@@ -580,6 +580,7 @@ struct EngineShared {
     checkpoint_byte_threshold: u64,
     slow_query_warn_threshold_ms: u64,
     idle_in_transaction_timeout: Duration,
+    session_context: SessionContext,
 }
 
 #[cfg(feature = "test-util")]
@@ -642,6 +643,7 @@ impl EngineShared {
             idle_in_transaction_timeout: Duration::from_millis(
                 config.idle_in_transaction_timeout_ms,
             ),
+            session_context: SessionContext::new(config.database_name()),
         })
     }
 
@@ -754,7 +756,7 @@ impl EngineShared {
 
         let columns = match substituted {
             Statement::Select(select) => {
-                let bound = Binder::new(&self.catalog)
+                let bound = Binder::new(&self.catalog, self.session_context.clone())
                     .bind(Statement::Select(select))
                     .map_err(Error::from)?;
                 let BoundStatement::Select(select) = bound else {
@@ -879,7 +881,9 @@ impl EngineShared {
         statement: Statement,
     ) -> Result<ResultSet> {
         let (txn_id, autocommit) = self.txn_for_statement(session)?;
-        let bound = Binder::new(&self.catalog).bind(statement).map_err(Error::from);
+        let bound = Binder::new(&self.catalog, self.session_context.clone())
+            .bind(statement)
+            .map_err(Error::from);
         let result = bound.and_then(|bound| self.execute_bound(bound, txn_id));
 
         if autocommit {
@@ -954,7 +958,9 @@ impl EngineShared {
 
     fn handle_explain(&self, statement: Statement) -> Result<ResultSet> {
         let catalog = &self.catalog;
-        let bound = Binder::new(catalog).bind(statement).map_err(Error::from)?;
+        let bound = Binder::new(catalog, self.session_context.clone())
+            .bind(statement)
+            .map_err(Error::from)?;
         let BoundStatement::Explain { verbose, inner } = bound else {
             unreachable!(
                 "handle_explain is only called for Statement::Explain, whose binder output is \
@@ -1177,7 +1183,10 @@ fn statement_kind(statement: &Statement) -> &'static str {
 }
 
 fn syntax_error(err: &SqlError, sql: &str) -> Error {
-    Error::Syntax { message: err.render(sql), offset: err.offset(sql) }
+    match err {
+        SqlError::UndefinedFunction { name, .. } => Error::UndefinedFunction { name: name.clone() },
+        _ => Error::Syntax { message: err.render(sql), offset: err.offset(sql) },
+    }
 }
 
 fn dummy_value_for_describe(data_type: Option<DataType>) -> Value {

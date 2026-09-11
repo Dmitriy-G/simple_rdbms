@@ -475,7 +475,11 @@ taken at `BEGIN`, does not move even after the inserting session commits.
 - `EngineShared` - private. `catalog: Arc<Catalog>`, `buffer_pool:
   Arc<BufferPool>`, `txn_manager: Mutex<TransactionManager>`,
   `checkpoint: Mutex<CheckpointState>`, `checkpoint_byte_threshold`,
-  `slow_query_warn_threshold_ms`, and `idle_in_transaction_timeout` - see
+  `slow_query_warn_threshold_ms`, `idle_in_transaction_timeout`, and
+  `session_context` (the `planner::SessionContext` every `Binder::new`
+  call here is built with, computed once from the `DbConfig` the engine
+  was opened with so `current_catalog` cannot disagree between two
+  statements) - see
   the file-level note above for why each mutable field is behind its own
   lock rather than requiring `&mut self` the way the pre-M10.2 `EngineState`
   did. `EngineShared::open(config, disk_manager, dwb, log_manager) ->
@@ -736,7 +740,12 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   long enough to log `info!` "connection opened", then exits and returns
   the plain (not entered) `Span` for `SessionState` to store.
 - `statement_kind(&Statement) -> &'static str`/`syntax_error(err, sql) ->
-  Error` - private free functions, unchanged.
+  Error` - private free functions. `syntax_error` maps a `sql::SqlError`
+  to `Error::Syntax` with its rendered caret and byte offset, with one
+  exception: `SqlError::UndefinedFunction` becomes
+  `Error::UndefinedFunction` (`42883`), because a client can act on "this
+  function does not exist" and cannot act on "your SQL is malformed"
+  (`sql::error.MD`).
 
 ## Usage Example
 

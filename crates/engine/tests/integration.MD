@@ -107,6 +107,24 @@ pipeline, against a real (tempfile-backed) database file.
   SqlState::SYNTAX_ERROR`, and `offset` is exactly the byte position of
   the offending character in the original source text - not just baked
   into the rendered message.
+- `session_context_expressions_answer_from_the_database_the_engine_was_opened_with` -
+  `SELECT current_catalog, current_schema, current_user, version()`
+  returns one row of four values, under those four column names, with
+  `current_catalog` equal to the harness's own file stem (`test`, from
+  `open`'s `test.db`). Asserting the file stem rather than any fixed
+  string is what ties the answer to `DbConfig::database_name` instead of
+  to a constant somewhere in the binder.
+- `a_session_context_expression_works_inside_a_where_clause_over_a_real_table` -
+  `WHERE name = current_schema` selects the row whose value is `public`.
+  This is the case an interception in the wire layer structurally cannot
+  answer, and the reason P-91 was settled in the engine rather than by
+  adding one more matched query shape.
+- `an_unknown_function_call_fails_as_undefined_function_not_as_a_syntax_error` -
+  `SELECT now()` comes back as `common::Error::UndefinedFunction { name:
+  "now" }` with `sql_state() == SqlState::UNDEFINED_FUNCTION` (`42883`),
+  which is the error a client can act on; before the allowlist existed
+  the same query failed as `42601`, describing the text rather than what
+  was missing.
 
 ## Usage Example
 

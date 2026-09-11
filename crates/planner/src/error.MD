@@ -47,7 +47,7 @@ Errors raised while binding a parsed statement against the catalog.
 ```rust
 use planner::PlannerError;
 
-match Binder::new(&catalog).bind(statement) {
+match Binder::new(&catalog, planner::SessionContext::new("example")).bind(statement) {
     Err(PlannerError::UnknownTable(name)) => eprintln!("no such table: {name}"),
     _ => {}
 }

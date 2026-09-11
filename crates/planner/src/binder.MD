@@ -23,8 +23,14 @@ becomes "semantically valid against this database's schema".
   over a scan. `projections` are the projected expressions, resolved to
   column ordinals. `column_names` are display names for `projections`, in
   the same order: the source column's name for a bare column reference
-  (including each column a `*` expands to), or a positional `columnN`
-  name for any other expression, which has no name of its own to report.
+  (including each column a `*` expands to), the expression's own spelling
+  for a session-context expression (`current_schema`, `version`), or a
+  positional `columnN` name for any other expression, which has no name
+  of its own to report. The session-context case is named here *and* in
+  `explain::projected_column`, which is the one duplication in this
+  module worth stating outright: a client reads the result set's names
+  from here and `EXPLAIN` reads them from there, and the two disagreeing
+  is exactly the bug a driver would hit first.
   `column_types` is `bind_expr`'s resolved `Option<DataType>` for each
   entry of `projections`, in the same order - `Some` for every ordinary
   projection (a `*`-expanded column always carries its schema type), and
@@ -64,10 +70,30 @@ becomes "semantically valid against this database's schema".
   carrying its resolved result type. `IsNull { expr, negated }` mirrors
   `sql::Expr::IsNull` - its result type is always `Boolean`, so unlike the
   other compound variants it carries no `data_type` field of its own.
+  `SessionContext { name, value }` is a session-context expression
+  (`sql::SessionContextName`) already resolved to the `Value` it will
+  produce - the binder is the last layer that knows these are anything
+  but a constant. It is a variant of its own rather than a plain
+  `Literal` for one reason: `explain::projected_column` names the result
+  column after `name`, and a driver reads `current_schema` back by that
+  name, which a `Literal` would have had to call `columnN`.
+- `SessionContext` - the per-database values a session-context expression
+  resolves to: `database`, `schema`, `user` and `server_version`. It is
+  built once, when the engine opens, from `common::DbConfig` - the
+  database is `DbConfig::database_name()`, the schema is always `public`
+  and the user is always `DbConfig::FIXED_USER_NAME`, since nothing
+  authenticates until M22
+  (`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`).
+- `SessionContext::new(database) -> Self` - the whole constructor: the
+  database name, and the three fixed values above.
 - `Binder` - binds parsed `sql` AST nodes against a `Catalog`. Holds a
-  reference to the catalog it resolves names against.
-- `Binder::new(catalog) -> Self` - creates a binder that resolves names
-  against `catalog`.
+  reference to the catalog it resolves names against and the
+  `SessionContext` a session-context expression evaluates from.
+- `Binder::new(catalog, session) -> Self` - creates a binder that
+  resolves names against `catalog` and session-context expressions
+  against `session`. The session is a required argument rather than an
+  optional one so there is no default that silently answers
+  `current_catalog` with the wrong database.
 - `Binder::bind(&self, statement) -> Result<BoundStatement, PlannerError>` -
   binds a parsed statement, resolving every table/column reference and
   type-checking every expression. Transaction-control statements
@@ -178,10 +204,13 @@ becomes "semantically valid against this database's schema".
 ```rust
 use planner::Binder;
 
-let bound = Binder::new(&catalog).bind(statement)?;
+use planner::SessionContext;
+
+let bound = Binder::new(&catalog, SessionContext::new("example")).bind(statement)?;
 ```
 
-`engine::Database::execute` calls `Binder::new(&self.catalog).bind(statement)`
+`engine::Database::execute` calls
+`Binder::new(&self.catalog, self.session_context.clone()).bind(statement)`
 right after parsing, on the way to `plan::plan` and then `to_physical`;
 `tests/binder_tests.rs` exercises every rejection path (unknown
 table/column, type mismatches, column-count mismatches, out-of-range

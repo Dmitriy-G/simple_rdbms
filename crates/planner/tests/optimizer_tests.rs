@@ -1,6 +1,6 @@
 use catalog::{Catalog, Column, IndexInfo, Schema, TableInfo};
 use common::{IndexId, PageId, Rid, TableId};
-use planner::{Binder, BoundStatement, IndexScanRule, LogicalPlan, Optimizer};
+use planner::{Binder, BoundStatement, IndexScanRule, LogicalPlan, Optimizer, SessionContext};
 use sql::{Lexer, Parser};
 use types::DataType;
 
@@ -24,7 +24,7 @@ fn optimized_plan(catalog: &Catalog, source: &str) -> LogicalPlan {
             Ok(statement) => statement,
             Err(err) => panic!("unexpected parse error for {source:?}: {err}"),
         };
-    let bound = match Binder::new(catalog).bind(statement) {
+    let bound = match Binder::new(catalog, SessionContext::new("optimizer_tests")).bind(statement) {
         Ok(bound) => bound,
         Err(err) => panic!("unexpected bind error for {source:?}: {err}"),
     };
@@ -164,7 +164,8 @@ fn binds_create_index() {
             Ok(statement) => statement,
             Err(err) => panic!("unexpected parse error for {source:?}: {err}"),
         };
-    let bound = match Binder::new(&catalog).bind(statement) {
+    let bound = match Binder::new(&catalog, SessionContext::new("optimizer_tests")).bind(statement)
+    {
         Ok(bound) => bound,
         Err(err) => panic!("unexpected bind error for {source:?}: {err}"),
     };

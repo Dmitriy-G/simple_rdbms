@@ -1,5 +1,5 @@
 use catalog::{Catalog, Schema};
-use common::TableId;
+use common::{DbConfig, TableId};
 use types::{DataType, Value};
 
 use crate::error::PlannerError;
@@ -70,15 +70,51 @@ pub enum BoundExpr {
         expr: Box<BoundExpr>,
         negated: bool,
     },
+    SessionContext {
+        name: sql::SessionContextName,
+        value: Value,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionContext {
+    pub database: String,
+    pub schema: String,
+    pub user: String,
+    pub server_version: String,
+}
+
+impl SessionContext {
+    pub fn new(database: impl Into<String>) -> Self {
+        Self {
+            database: database.into(),
+            schema: DbConfig::DEFAULT_SCHEMA_NAME.to_string(),
+            user: DbConfig::FIXED_USER_NAME.to_string(),
+            server_version: format!("PostgreSQL 15.0 (simple_rdbms {})", env!("CARGO_PKG_VERSION")),
+        }
+    }
+
+    fn value_of(&self, name: sql::SessionContextName) -> Value {
+        let text = match name {
+            sql::SessionContextName::CurrentCatalog => &self.database,
+            sql::SessionContextName::CurrentSchema => &self.schema,
+            sql::SessionContextName::CurrentUser | sql::SessionContextName::SessionUser => {
+                &self.user
+            }
+            sql::SessionContextName::Version => &self.server_version,
+        };
+        Value::Varchar(text.clone())
+    }
 }
 
 pub struct Binder<'a> {
     catalog: &'a Catalog,
+    session: SessionContext,
 }
 
 impl<'a> Binder<'a> {
-    pub fn new(catalog: &'a Catalog) -> Self {
-        Self { catalog }
+    pub fn new(catalog: &'a Catalog, session: SessionContext) -> Self {
+        Self { catalog, session }
     }
 
     pub fn bind(&self, statement: sql::Statement) -> Result<BoundStatement, PlannerError> {
@@ -136,6 +172,7 @@ impl<'a> Binder<'a> {
                     let (bound, data_type) = self.bind_expr(expr, schema, table_scope)?;
                     column_names.push(match expr {
                         sql::Expr::Column { name, .. } => name.clone(),
+                        sql::Expr::SessionContext(name) => name.column_name().to_string(),
                         _ => format!("column{}", column_names.len() + 1),
                     });
                     column_types.push(data_type);
@@ -265,6 +302,11 @@ impl<'a> Binder<'a> {
     ) -> Result<(BoundExpr, Option<DataType>), PlannerError> {
         match expr {
             sql::Expr::Literal(value) => Ok((BoundExpr::Literal(value.clone()), value.data_type())),
+            sql::Expr::SessionContext(name) => {
+                let value = self.session.value_of(*name);
+                let data_type = value.data_type();
+                Ok((BoundExpr::SessionContext { name: *name, value }, data_type))
+            }
             sql::Expr::Column { table, name } => {
                 if let Some(qualifier) = table {
                     if table_scope != Some(qualifier.as_str()) {

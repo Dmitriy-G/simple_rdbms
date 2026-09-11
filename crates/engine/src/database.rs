@@ -10,17 +10,6 @@ use crate::runtime::EngineStats;
 use crate::runtime::{EngineHandle, SessionHandle};
 use crate::statement_description::StatementDescription;
 
-const DEFAULT_DATABASE_NAME: &str = "postgres";
-
-fn database_name_from(config: &DbConfig) -> String {
-    config
-        .db_path
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| DEFAULT_DATABASE_NAME.to_string())
-}
-
 pub struct Database {
     session: SessionHandle,
     database_name: String,
@@ -34,7 +23,7 @@ impl Database {
     }
 
     fn open_impl(config: DbConfig) -> Result<Self> {
-        let database_name = database_name_from(&config);
+        let database_name = config.database_name();
         let engine = EngineHandle::open(&config)?;
         let session = engine.connect()?;
         Ok(Self { session, database_name })
@@ -48,7 +37,7 @@ impl Database {
         wal_segment_size: u64,
         dwb_device: Box<dyn storage::block_device::BlockDevice>,
     ) -> Result<Self> {
-        let database_name = database_name_from(&config);
+        let database_name = config.database_name();
         let engine = EngineHandle::open_with_devices(
             &config,
             db_device,

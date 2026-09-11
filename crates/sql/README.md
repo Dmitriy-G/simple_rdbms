@@ -45,6 +45,17 @@ a bound plan that reaches it), no `UPDATE`, `DELETE`, `DROP TABLE`,
 `ALTER TABLE`, `GROUP BY`/`ORDER BY`/`LIMIT`, aggregate functions, or
 subqueries.
 
+There is also no function-call syntax, with one deliberate exception: a
+closed list of **session-context expressions** — `current_catalog`,
+`current_schema`, `current_user`, `session_user`, `user`,
+`current_database()` and `version()` — parses as
+`Expr::SessionContext`, which `planner`'s binder turns into a value
+([ast.MD](src/ast.MD)'s `SessionContextName`). Every *other* identifier
+followed by `(` is `SqlError::UndefinedFunction` (`42883`) rather than a
+syntax error, so `now()` reports what is missing. That is an allowlist,
+not a function registry: a real scalar-function subsystem is a milestone
+of its own, and nothing here should grow towards one by adding names.
+
 ## Dependencies
 
 Workspace: `common`, `types` (a parsed `ColumnDef`'s type names resolve to

@@ -31,6 +31,9 @@ pub enum SqlError {
 
     #[error("SELECT * with no FROM clause is not valid at offset {offset}")]
     WildcardWithoutFrom { offset: usize },
+
+    #[error("undefined function: {name} at offset {offset}")]
+    UndefinedFunction { name: String, offset: usize },
 }
 
 impl SqlError {
@@ -43,7 +46,8 @@ impl SqlError {
             | SqlError::InvalidParameter { offset, .. }
             | SqlError::ExplainOfTransactionControl { offset }
             | SqlError::NestedExplain { offset }
-            | SqlError::WildcardWithoutFrom { offset } => *offset,
+            | SqlError::WildcardWithoutFrom { offset }
+            | SqlError::UndefinedFunction { offset, .. } => *offset,
             SqlError::UnexpectedEof { .. } => source.len(),
         }
     }

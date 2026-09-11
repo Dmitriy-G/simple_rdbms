@@ -1,6 +1,7 @@
 use sql::{
     BinaryOperator, ColumnDef, CreateIndexStatement, CreateTableStatement, Expr, InsertStatement,
-    Lexer, Parser, SelectItem, SelectStatement, SqlError, Statement, TableRef, UnaryOperator,
+    Lexer, Parser, SelectItem, SelectStatement, SessionContextName, SqlError, Statement, TableRef,
+    UnaryOperator,
 };
 use types::{DataType, Value};
 
@@ -715,6 +716,115 @@ fn oversized_parameter_index_is_a_lexer_error() {
         }
         other => panic!("expected InvalidParameter, got {other:?}"),
     }
+}
+
+fn session_context_items(source: &str) -> Vec<SessionContextName> {
+    let Statement::Select(select) = parse(source) else {
+        panic!("expected a SELECT for {source:?}");
+    };
+    select
+        .items
+        .into_iter()
+        .map(|item| match item {
+            SelectItem::Expr(Expr::SessionContext(name)) => name,
+            other => panic!("expected a session-context item for {source:?}, got {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn every_session_context_spelling_parses_with_and_without_parentheses() {
+    assert_eq!(
+        session_context_items("SELECT current_catalog, current_database()"),
+        vec![SessionContextName::CurrentCatalog, SessionContextName::CurrentCatalog],
+        "current_database() is the same value as the current_catalog keyword"
+    );
+    assert_eq!(
+        session_context_items("SELECT current_schema, current_schema()"),
+        vec![SessionContextName::CurrentSchema, SessionContextName::CurrentSchema]
+    );
+    assert_eq!(
+        session_context_items("SELECT current_user, user, session_user"),
+        vec![
+            SessionContextName::CurrentUser,
+            SessionContextName::CurrentUser,
+            SessionContextName::SessionUser
+        ]
+    );
+    assert_eq!(session_context_items("SELECT version()"), vec![SessionContextName::Version]);
+}
+
+#[test]
+fn a_session_context_name_is_recognized_whatever_its_case() {
+    assert_eq!(
+        session_context_items("SELECT CURRENT_SCHEMA, Current_Catalog()"),
+        vec![SessionContextName::CurrentSchema, SessionContextName::CurrentCatalog]
+    );
+}
+
+#[test]
+fn a_session_context_name_inside_a_where_clause_is_an_ordinary_expression() {
+    let Statement::Select(select) = parse("SELECT a FROM t WHERE a = current_schema") else {
+        panic!("expected a SELECT");
+    };
+    let Some(Expr::BinaryOp { right, .. }) = select.where_clause else {
+        panic!("expected a binary predicate");
+    };
+    assert_eq!(*right, Expr::SessionContext(SessionContextName::CurrentSchema));
+}
+
+#[test]
+fn a_qualified_name_is_still_a_column_even_when_it_ends_in_a_session_context_word() {
+    let Statement::Select(select) = parse("SELECT t.version FROM t") else {
+        panic!("expected a SELECT");
+    };
+    assert_eq!(
+        select.items,
+        vec![SelectItem::Expr(Expr::Column {
+            table: Some("t".to_string()),
+            name: "version".to_string()
+        })]
+    );
+}
+
+#[test]
+fn an_unknown_function_call_is_an_undefined_function_not_a_syntax_error() {
+    let source = "SELECT now()";
+    match parse_err(source) {
+        SqlError::UndefinedFunction { name, offset } => {
+            assert_eq!(name, "now");
+            assert_eq!(offset, byte_offset(source, 'n'));
+        }
+        other => panic!("expected UndefinedFunction, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_session_context_name_with_arguments_is_an_undefined_function() {
+    match parse_err("SELECT current_schema(1)") {
+        SqlError::UndefinedFunction { name, .. } => assert_eq!(name, "current_schema"),
+        other => panic!("expected UndefinedFunction, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_bare_unknown_name_is_still_a_column_reference() {
+    let Statement::Select(select) = parse("SELECT now FROM t") else {
+        panic!("expected a SELECT");
+    };
+    assert_eq!(select.items, vec![SelectItem::Expr(col_expr("now"))]);
+}
+
+#[test]
+fn a_function_spelling_without_parentheses_is_an_ordinary_column() {
+    let Statement::Select(select) = parse("SELECT version, current_database FROM t") else {
+        panic!("expected a SELECT");
+    };
+    assert_eq!(
+        select.items,
+        vec![SelectItem::Expr(col_expr("version")), SelectItem::Expr(col_expr("current_database"))],
+        "a table may own a column called version; only version() is the session-context value"
+    );
 }
 
 #[test]

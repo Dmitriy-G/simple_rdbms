@@ -19,8 +19,12 @@ but not yet supported here — evaluating one is an `ExecutorError`.
 ## Key Components
 
 - `evaluate(expr, tuple) -> Result<Value, ExecutorError>` - evaluates any
-  `BoundExpr` variant (`Literal`, `ColumnRef`, `UnaryOp`, `BinaryOp`,
-  `IsNull`) against `tuple`. `IsNull { expr, negated }` evaluates `expr`
+  `BoundExpr` variant (`Literal`, `SessionContext`, `ColumnRef`,
+  `UnaryOp`, `BinaryOp`, `IsNull`) against `tuple`. A `SessionContext`
+  returns the value the binder already computed, exactly like a
+  `Literal`: by the time a plan reaches this module, `current_schema` is
+  a constant and nothing here knows it was ever anything else
+  (`planner::binder.MD`). `IsNull { expr, negated }` evaluates `expr`
   and returns `Boolean(true)` when its nullness matches `negated` (`IS
   NULL` wants `Value::Null`; `IS NOT NULL` wants anything else).
 - `evaluate_unary(op, expr, tuple)` - private. Evaluates `NOT` (`NULL` in,

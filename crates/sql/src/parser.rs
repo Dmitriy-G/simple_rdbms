@@ -2,7 +2,7 @@ use types::{DataType, Value};
 
 use crate::ast::{
     BinaryOperator, ColumnDef, CreateIndexStatement, CreateTableStatement, Expr, InsertStatement,
-    SelectItem, SelectStatement, Statement, TableRef, UnaryOperator,
+    SelectItem, SelectStatement, SessionContextName, Statement, TableRef, UnaryOperator,
 };
 use crate::error::SqlError;
 use crate::lexer::is_reserved_word;
@@ -353,13 +353,23 @@ impl Parser {
                 Ok(Expr::Parameter { index })
             }
             TokenKind::Identifier(name) => {
+                let offset = token.offset;
                 self.advance();
                 if matches!(self.current().kind, TokenKind::Dot) {
                     self.advance();
                     let column = self.expect_identifier()?;
-                    Ok(Expr::Column { table: Some(name), name: column })
-                } else {
-                    Ok(Expr::Column { table: None, name })
+                    return Ok(Expr::Column { table: Some(name), name: column });
+                }
+                if matches!(self.current().kind, TokenKind::LParen) {
+                    let Some(session_name) = SessionContextName::function(&name) else {
+                        return Err(SqlError::UndefinedFunction { name, offset });
+                    };
+                    self.consume_empty_argument_list(&name, offset)?;
+                    return Ok(Expr::SessionContext(session_name));
+                }
+                match SessionContextName::keyword(&name) {
+                    Some(session_name) => Ok(Expr::SessionContext(session_name)),
+                    None => Ok(Expr::Column { table: None, name }),
                 }
             }
             TokenKind::LParen => {
@@ -369,6 +379,16 @@ impl Parser {
                 Ok(expr)
             }
             _ => Err(self.unexpected("an expression")),
+        }
+    }
+
+    fn consume_empty_argument_list(&mut self, name: &str, offset: usize) -> Result<(), SqlError> {
+        self.advance();
+        if matches!(self.current().kind, TokenKind::RParen) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(SqlError::UndefinedFunction { name: name.to_string(), offset })
         }
     }
 

@@ -96,6 +96,16 @@ unknown columns/tables and type mismatches are rejected.
 - `binding_an_unsubstituted_parameter_is_undefined_parameter` - `WHERE id =
   $1` reaching the binder unsubstituted returns
   `PlannerError::UndefinedParameter { index: 1 }`.
+- `a_session_context_expression_binds_to_a_value_and_names_its_own_column` -
+  `SELECT current_catalog, current_schema, current_user` binds to three
+  `BoundExpr::SessionContext` values taken from the `SessionContext` the
+  binder was built with (`binder_tests`, `public`, `postgres`), under the
+  column names `current_catalog`/`current_schema`/`current_user` rather
+  than `column1`/`column2`/`column3` - the names are the assertion that
+  matters, since a driver reads these back by name.
+- `a_real_column_named_like_a_session_context_function_still_resolves` -
+  the keyword form binds the same way with a `FROM` clause present, so
+  adding the allowlist did not make a from-ful select a special case.
 - `binds_create_table` - `CREATE TABLE t (a INTEGER, b TEXT)` binds to a
   `BoundCreateTable` with the given name and two columns.
 

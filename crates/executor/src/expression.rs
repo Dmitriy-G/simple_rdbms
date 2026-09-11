@@ -8,6 +8,7 @@ use crate::error::ExecutorError;
 pub fn evaluate(expr: &BoundExpr, tuple: &Tuple) -> Result<Value, ExecutorError> {
     match expr {
         BoundExpr::Literal(value) => Ok(value.clone()),
+        BoundExpr::SessionContext { value, .. } => Ok(value.clone()),
         BoundExpr::ColumnRef { index, .. } => {
             let values = tuple.values();
             values.get(*index).cloned().ok_or_else(|| {

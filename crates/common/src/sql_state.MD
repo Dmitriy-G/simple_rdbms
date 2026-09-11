@@ -106,6 +106,7 @@ SQL condition a user's statement raised.
   | `DUPLICATE_TABLE` | `42P07` | 42 - syntax error or access rule violation |
   | `DATATYPE_MISMATCH` | `42804` | 42 - syntax error or access rule violation |
   | `UNDEFINED_OBJECT` | `42704` | 42 - syntax error or access rule violation |
+  | `UNDEFINED_FUNCTION` | `42883` | 42 - syntax error or access rule violation |
   | `DUPLICATE_OBJECT` | `42710` | 42 - syntax error or access rule violation |
   | `FEATURE_NOT_SUPPORTED` | `0A000` | 0A - feature not supported |
   | `DISK_FULL` | `53100` | 53 - insufficient resources |

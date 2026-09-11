@@ -1,6 +1,6 @@
 use catalog::{Catalog, Column, Schema, TableInfo};
 use common::{PageId, TableId};
-use planner::{Binder, PlannerError, infer_parameter_types, substitute_parameters};
+use planner::{Binder, PlannerError, SessionContext, infer_parameter_types, substitute_parameters};
 use sql::{Lexer, Parser, Statement};
 use types::{DataType, Value};
 
@@ -33,7 +33,7 @@ fn infer(catalog: &Catalog, source: &str) -> Result<Vec<Option<DataType>>, Plann
 }
 
 fn bind_debug(catalog: &Catalog, source: &str) -> String {
-    let bound = match Binder::new(catalog).bind(parse(source)) {
+    let bound = match Binder::new(catalog, SessionContext::new("parameters")).bind(parse(source)) {
         Ok(bound) => bound,
         Err(err) => panic!("unexpected bind error for {source:?}: {err}"),
     };
@@ -89,10 +89,11 @@ fn substitution_produces_the_same_bound_plan_as_the_equivalent_literal_statement
         Ok(stmt) => stmt,
         Err(err) => panic!("unexpected substitution error: {err}"),
     };
-    let substituted_bound = match Binder::new(&catalog).bind(substituted) {
-        Ok(bound) => format!("{bound:?}"),
-        Err(err) => panic!("unexpected bind error: {err}"),
-    };
+    let substituted_bound =
+        match Binder::new(&catalog, SessionContext::new("parameters")).bind(substituted) {
+            Ok(bound) => format!("{bound:?}"),
+            Err(err) => panic!("unexpected bind error: {err}"),
+        };
     let literal_bound = bind_debug(&catalog, "SELECT * FROM users WHERE id = 1");
     assert_eq!(substituted_bound, literal_bound);
 }

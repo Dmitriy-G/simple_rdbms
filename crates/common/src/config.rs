@@ -27,6 +27,12 @@ impl DbConfig {
 
     pub const DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS: u64 = 60_000;
 
+    pub const DEFAULT_DATABASE_NAME: &'static str = "postgres";
+
+    pub const FIXED_USER_NAME: &'static str = "postgres";
+
+    pub const DEFAULT_SCHEMA_NAME: &'static str = "public";
+
     pub fn new(db_path: impl Into<PathBuf>) -> Self {
         Self {
             db_path: db_path.into(),
@@ -38,5 +44,13 @@ impl DbConfig {
             lock_wait_timeout_ms: Self::DEFAULT_LOCK_WAIT_TIMEOUT_MS,
             idle_in_transaction_timeout_ms: Self::DEFAULT_IDLE_IN_TRANSACTION_TIMEOUT_MS,
         }
+    }
+
+    pub fn database_name(&self) -> String {
+        self.db_path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| Self::DEFAULT_DATABASE_NAME.to_string())
     }
 }

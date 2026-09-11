@@ -1,6 +1,6 @@
 use catalog::{Catalog, Column, Schema, TableInfo};
 use common::{PageId, TableId};
-use planner::{Binder, BoundExpr, BoundStatement, PlannerError};
+use planner::{Binder, BoundExpr, BoundStatement, PlannerError, SessionContext};
 use sql::{Lexer, Parser};
 use types::{DataType, Value};
 
@@ -29,7 +29,7 @@ fn parse(source: &str) -> sql::Statement {
 }
 
 fn bind(catalog: &Catalog, source: &str) -> Result<BoundStatement, PlannerError> {
-    Binder::new(catalog).bind(parse(source))
+    Binder::new(catalog, SessionContext::new("binder_tests")).bind(parse(source))
 }
 
 fn bind_ok(catalog: &Catalog, source: &str) -> BoundStatement {
@@ -313,6 +313,51 @@ fn binding_an_unsubstituted_parameter_is_undefined_parameter() {
     match bind(&catalog, "SELECT * FROM users WHERE id = $1") {
         Err(PlannerError::UndefinedParameter { index }) => assert_eq!(index, 1),
         other => panic!("expected UndefinedParameter, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_session_context_expression_binds_to_a_value_and_names_its_own_column() {
+    let catalog = catalog_with_users();
+    let BoundStatement::Select(select) =
+        bind_ok(&catalog, "SELECT current_catalog, current_schema, current_user")
+    else {
+        panic!("expected a bound SELECT");
+    };
+    assert_eq!(
+        select.column_names,
+        vec![
+            "current_catalog".to_string(),
+            "current_schema".to_string(),
+            "current_user".to_string()
+        ],
+        "a driver reads these back by name, so the projection must not call them columnN"
+    );
+    let values: Vec<Value> = select
+        .projections
+        .into_iter()
+        .map(|expr| match expr {
+            BoundExpr::SessionContext { value, .. } => value,
+            other => panic!("expected a bound session-context value, got {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        values,
+        vec![
+            Value::Varchar("binder_tests".to_string()),
+            Value::Varchar("public".to_string()),
+            Value::Varchar("postgres".to_string()),
+        ],
+        "the values come from the SessionContext the binder was built with, not from a catalog"
+    );
+}
+
+#[test]
+fn a_real_column_named_like_a_session_context_function_still_resolves() {
+    let catalog = catalog_with_users();
+    match bind(&catalog, "SELECT current_catalog FROM users") {
+        Ok(_) => {}
+        other => panic!("expected the keyword form to bind even with a FROM, got {other:?}"),
     }
 }
 
