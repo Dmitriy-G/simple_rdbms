@@ -151,7 +151,9 @@ ever reaches `engine::Database::execute` - pgjdbc sends
 keywords exists in `sql`'s token list or grammar, so letting them fall
 through would surface as a syntax error. `do_query` calls
 `intercept_set_show_reset` first; on `Some`, that response is returned
-directly and the query is never handed to the session at all. Matching is
+directly and the query is never handed to the session at all - and,
+since P-93, logged on the way out, because a query answered here reaches
+no layer that would otherwise record it. Matching is
 case-insensitive on the leading keyword only - `intercept_set_show_reset`
 upper-cases only the first whitespace-separated word after trimming a
 trailing `;`, so `SET`/`set`/`Set` are all recognized but a parameter name
@@ -495,11 +497,28 @@ SQL statement raised.
   `pgwire::error::ErrorInfo` (SQLSTATE, severity, message) a
   `common::Error` becomes, wrapped in `PgWireError::UserError`; see above
   for why this is a top-level `Err` and not a `Response::Error`.
+- `log_answered_without_the_engine(client, shape, rows, sql)` - private.
+  The one statement log line this crate emits (P-93). At `info`: the
+  `shape` that answered, the `rows` count, and `peer` from
+  `ClientInfo::socket_addr()`; at `debug`, the same plus the raw `sql`.
+  The split is `CLAUDE.md`'s logging rule rather than a preference - the
+  shape is this crate's own vocabulary and carries no user data, while
+  the query text is user data and belongs at `debug`. It exists because
+  `engine::runtime`'s "statement executed" is the project's only
+  statement log, and everything this module answers bypasses it: a client
+  that breaks on an intercepted answer used to leave a log that simply
+  stopped. `peer` is the correlation key rather than the engine's
+  `conn_id`, which is not reachable from this crate; the connection's own
+  accept log carries the same address.
+  `rows` is the field that earns the line - a `0` beside a shape is
+  exactly the fact a client turns into a null (P-94).
 - `intercept_set_show_reset(client, query) -> Option<Response>` - private.
   Recognizes a `SET`/`RESET`/`SHOW` query by its leading keyword (folded
   to uppercase) before it reaches the session at all; `None` for every
   other query, which `do_query` then runs through `engine::Database`
-  exactly as before.
+  exactly as before. It logs what it answered before returning it, so
+  that a `SHOW` of a parameter this server does not carry - answered as
+  one row holding the empty string - is visible rather than silent.
 - `show_response(client, name) -> Response` - private. The one-row,
   one-column `Response::Query` a `SHOW <name>` becomes, its value read
   from `pgwire`'s own `DefaultServerParameterProvider::default()` table -

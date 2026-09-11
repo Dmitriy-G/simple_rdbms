@@ -35,6 +35,20 @@ no other build configuration to distinguish.
   a substitute for asserting behavior through a real counter when a test
   runs alongside others: tracing's callsite-interest cache is
   process-wide, not per-thread.
+- `set_global_capturing_subscriber(capture)` - the same subscriber
+  installed *globally* (`tracing::subscriber::set_global_default`), with
+  no guard to drop. It exists for the one case the thread-local form
+  cannot serve: an event emitted on a thread the test never created. A
+  `tokio` runtime's worker threads are that case, so
+  `crates/server/tests/wire_logging.rs` - which asserts that the pgwire
+  listener logs the queries it answers without calling the engine - has
+  to use this one. The cost is the reason it is not the default: a global
+  subscriber may be installed only once per process, so a test file that
+  calls this **must contain exactly one `#[test]`**, and the call panics
+  rather than silently capturing nothing if a second install is
+  attempted.
+- `capturing_subscriber(capture)` - private. The shared builder behind
+  both, so the two installers can never drift on format or level.
 
 ## Usage Example
 

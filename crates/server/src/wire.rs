@@ -160,6 +160,12 @@ impl SimpleQueryHandler for ConnectionState {
     {
         let introspection = on_session(&self.session, |session| pg_catalog::answer(session, query));
         if let Some(introspection) = introspection {
+            log_answered_without_the_engine(
+                &*client,
+                introspection.shape,
+                introspection.rows.len(),
+                query,
+            );
             return Ok(vec![introspection_response(introspection)]);
         }
         if let Some(response) = intercept_set_show_reset(&*client, query) {
@@ -184,7 +190,7 @@ impl ExtendedQueryHandler for ConnectionState {
 
     async fn do_query<C>(
         &self,
-        _client: &mut C,
+        client: &mut C,
         portal: &Portal<Self::Statement>,
         _max_rows: usize,
     ) -> PgWireResult<Response>
@@ -197,7 +203,15 @@ impl ExtendedQueryHandler for ConnectionState {
         match &portal.statement.statement {
             PreparedStatement::Introspection { sql, .. } => {
                 match on_session(&self.session, |session| pg_catalog::answer(session, sql)) {
-                    Some(introspection) => Ok(introspection_response(introspection)),
+                    Some(introspection) => {
+                        log_answered_without_the_engine(
+                            &*client,
+                            introspection.shape,
+                            introspection.rows.len(),
+                            sql,
+                        );
+                        Ok(introspection_response(introspection))
+                    }
                     None => Err(cached_plan_changed()),
                 }
             }
@@ -251,6 +265,15 @@ fn to_pg_error(err: &Error) -> PgWireError {
     )))
 }
 
+fn log_answered_without_the_engine<C>(client: &C, shape: &'static str, rows: usize, sql: &str)
+where
+    C: ClientInfo,
+{
+    let peer = client.socket_addr();
+    tracing::info!(%peer, shape, rows, "pgwire: answered without the engine");
+    tracing::debug!(%peer, shape, sql, "pgwire: answered without the engine, full text");
+}
+
 fn intercept_set_show_reset<C>(client: &C, query: &str) -> Option<Response>
 where
     C: ClientInfo,
@@ -258,12 +281,14 @@ where
     let trimmed = query.trim().trim_end_matches(';').trim();
     let mut words = trimmed.split_whitespace();
     let leading = words.next()?;
-    match leading.to_uppercase().as_str() {
-        "SET" => Some(Response::Execution(Tag::new("SET"))),
-        "RESET" => Some(Response::Execution(Tag::new("RESET"))),
-        "SHOW" => Some(show_response(client, words.next().unwrap_or(""))),
-        _ => None,
-    }
+    let (shape, rows, response) = match leading.to_uppercase().as_str() {
+        "SET" => ("SET", 0, Response::Execution(Tag::new("SET"))),
+        "RESET" => ("RESET", 0, Response::Execution(Tag::new("RESET"))),
+        "SHOW" => ("SHOW", 1, show_response(client, words.next().unwrap_or(""))),
+        _ => return None,
+    };
+    log_answered_without_the_engine(client, shape, rows, query);
+    Some(response)
 }
 
 fn show_response<C>(client: &C, name: &str) -> Response

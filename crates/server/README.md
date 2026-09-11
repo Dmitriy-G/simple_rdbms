@@ -243,7 +243,13 @@ don't decode as the server's own inferred type reported as a real error
 rather than a dropped connection, and (M13.3 subtask 6) a portal fetched
 in limited batches via `Transaction::query_portal` suspending and
 resuming correctly - respectively - see each file's own
-`.MD` for exactly what it asserts. These, together with the HTTP tests above, are
+`.MD` for exactly what it asserts. `tests/wire_logging.rs` is the odd one
+out: it asserts on *log output* rather than on protocol behaviour,
+because a query this crate answers without calling the engine bypasses
+the project's only statement log, and P-93 showed that a silent bypass
+turns a client-side failure into an unreadable session. It holds exactly
+one `#[test]`, since capturing events emitted on `tokio` worker threads
+needs a global subscriber and one may be installed only once per process. These, together with the HTTP tests above, are
 deterministic, in-process checks; none of them proves the container works
 end to end - that's what spawning the compiled binary as a subprocess
 would be for, the way `crates/cli/tests/crash_recovery.rs` does it, but

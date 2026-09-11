@@ -126,7 +126,12 @@ of always saying "nothing").
 ## Key Components
 
 - `Introspection` - the answer to a recognized query, in the same shape
-  `wire.rs`'s `to_response` already turns into a `pgwire::api::results::Response`:
+  `wire.rs`'s `to_response` already turns into a `pgwire::api::results::Response`.
+  `shape` is the recognizer's own name (`pg_class`,
+  `unrecognized pg_ relation`, ...), carried so `wire.rs` can log which
+  answer it gave without the engine ever seeing the query (P-93). It is
+  fixed text from this module's vocabulary, never anything the client
+  wrote, which is what makes it safe to log above `debug`. The rest is
   `columns: Vec<(String, pgwire::api::Type)>` (name and wire type, in
   order) and `rows: Vec<Vec<Option<String>>>` (one inner `Vec` per row,
   one cell per column, `None` for SQL `NULL`) - text-format values only,

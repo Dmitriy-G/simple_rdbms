@@ -27,9 +27,13 @@ everywhere it's used rather than a normal one.
   fault-injecting or call-counting `storage::block_device::BlockDevice`/
   `storage::wal::SegmentStore` wrapper the test suites build.
 - `logging` (`logging.MD`) - `CaptureBuf`, `captured_events`,
-  `set_capturing_subscriber`: the thread-local tracing capture rig
+  `set_capturing_subscriber` and `set_global_capturing_subscriber`: the
+  tracing capture rig
   `logging.rs`-style tests use to assert on log output where logging
   really is the behavior under test (CLAUDE.md's testing-rules section).
+  The thread-local form is the default; the global one exists for events
+  emitted on threads the test never created, such as a `tokio` runtime's
+  workers, and constrains its test file to a single `#[test]`.
 - `pool` (`pool.MD`) - `PoolOptions`, `open_pool`, `open_pool_at_path`: one
   parameterised way to stand up a `storage::buffer::BufferPool` over a
   temp-dir database, replacing the dozen call-site variants that only

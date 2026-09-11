@@ -35,3 +35,5 @@ bytes = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-postgres = "0.7"
+test-support = { workspace = true }
+serde_json = { workspace = true }

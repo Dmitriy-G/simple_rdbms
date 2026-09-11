@@ -3,6 +3,7 @@ use pgwire::api::Type;
 use pgwire::api::results::{FieldFormat, FieldInfo};
 
 pub struct Introspection {
+    pub shape: &'static str,
     pub columns: Vec<(String, Type)>,
     pub rows: Vec<Vec<Option<String>>>,
 }
@@ -189,6 +190,7 @@ fn answer_pg_namespace(normalized: &str) -> Option<Introspection> {
         ],
     ];
     Some(Introspection {
+        shape: "pg_namespace",
         columns: vec![
             ("oid".to_string(), Type::OID),
             ("nspname".to_string(), Type::VARCHAR),
@@ -249,6 +251,7 @@ fn answer_pg_class(db: &Database, normalized: &str) -> Option<Introspection> {
         .collect();
 
     Some(Introspection {
+        shape: "pg_class",
         columns: vec![
             ("oid".to_string(), Type::OID),
             ("relname".to_string(), Type::VARCHAR),
@@ -323,6 +326,7 @@ fn answer_pg_attribute(db: &Database, normalized: &str) -> Option<Introspection>
     }
 
     Some(Introspection {
+        shape: "pg_attribute",
         columns: vec![
             ("attrelid".to_string(), Type::OID),
             ("attname".to_string(), Type::VARCHAR),
@@ -372,6 +376,7 @@ fn answer_pg_type(normalized: &str) -> Option<Introspection> {
         .collect();
 
     Some(Introspection {
+        shape: "pg_type",
         columns: vec![
             ("oid".to_string(), Type::OID),
             ("typname".to_string(), Type::VARCHAR),
@@ -428,6 +433,7 @@ fn answer_pg_database(db: &Database, normalized: &str) -> Option<Introspection> 
     }
 
     Some(Introspection {
+        shape: "pg_database",
         columns: vec![
             ("oid".to_string(), Type::OID),
             ("datname".to_string(), Type::VARCHAR),
@@ -479,6 +485,7 @@ fn answer_pg_roles(normalized: &str) -> Option<Introspection> {
     }
 
     Some(Introspection {
+        shape: "pg_roles",
         columns: vec![
             ("oid".to_string(), Type::OID),
             ("rolname".to_string(), Type::VARCHAR),
@@ -527,6 +534,7 @@ fn answer_pg_user(normalized: &str) -> Option<Introspection> {
     }
 
     Some(Introspection {
+        shape: "pg_user",
         columns: vec![
             ("usename".to_string(), Type::VARCHAR),
             ("usesysid".to_string(), Type::OID),
@@ -620,7 +628,11 @@ fn answer_unrecognized_pg_relation(normalized: &str) -> Option<Introspection> {
     if !is_pg_relation(relation) {
         return None;
     }
-    Some(Introspection { columns: select_list_columns(normalized), rows: Vec::new() })
+    Some(Introspection {
+        shape: "unrecognized pg_ relation",
+        columns: select_list_columns(normalized),
+        rows: Vec::new(),
+    })
 }
 
 fn shadows_a_real_table(db: &Database, normalized: &str) -> bool {

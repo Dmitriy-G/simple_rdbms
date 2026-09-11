@@ -25,13 +25,23 @@ pub fn captured_events(buf: &CaptureBuf) -> Vec<serde_json::Value> {
 }
 
 pub fn set_capturing_subscriber(capture: &CaptureBuf) -> tracing::subscriber::DefaultGuard {
-    let subscriber = tracing_subscriber::fmt()
+    tracing::subscriber::set_default(capturing_subscriber(capture))
+}
+
+pub fn set_global_capturing_subscriber(capture: &CaptureBuf) {
+    tracing::subscriber::set_global_default(capturing_subscriber(capture))
+        .expect("a global capturing subscriber may be installed only once per test binary");
+}
+
+fn capturing_subscriber(
+    capture: &CaptureBuf,
+) -> impl tracing::Subscriber + Send + Sync + 'static + use<> {
+    tracing_subscriber::fmt()
         .json()
         .with_max_level(tracing::Level::TRACE)
         .with_writer({
             let capture = capture.clone();
             move || capture.clone()
         })
-        .finish();
-    tracing::subscriber::set_default(subscriber)
+        .finish()
 }

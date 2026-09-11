@@ -1001,7 +1001,8 @@ updating it — don't just add the dependency.
 
 `test-support -> common, storage` is the one exception to "no edge beyond
 this list," and it is a `dev-dependency` everywhere it appears rather than
-a normal dependency: `storage`, `catalog`, `executor`, `txn`, and `engine`
+a normal dependency: `storage`, `catalog`, `executor`, `txn`, `engine` and
+`server`
 each add it under `[dev-dependencies]` so their own `tests/` integration
 suites can share one copy of test-only fixtures (`crates/test-support/README.md`)
 instead of the twelve-plus copies `crates/test-support/src/lib.MD` replaced.

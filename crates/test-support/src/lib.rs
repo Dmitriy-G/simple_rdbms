@@ -10,5 +10,7 @@ pub use devices::{
     CountingDevice, CountingSegmentStore, DeviceTriple, FaultySegmentStore, faulty_devices,
     open_file,
 };
-pub use logging::{CaptureBuf, captured_events, set_capturing_subscriber};
+pub use logging::{
+    CaptureBuf, captured_events, set_capturing_subscriber, set_global_capturing_subscriber,
+};
 pub use pool::{PoolOptions, open_pool, open_pool_at_path};
