@@ -61,12 +61,23 @@ the main session with `$CODEX_HOME/<name>.config.toml`. Codex ignores profile
 definitions in project `.codex/config.toml`, so the versioned files under
 `.codex/profile-templates/` must be copied to `$CODEX_HOME` on each machine.
 
-For example, `.codex/profile-templates/coder.config.toml` installs as
-`$CODEX_HOME/coder.config.toml`; then `codex --profile coder` starts the main
-session on Sol. The profile selects configuration, not a role prompt: the
-request is still routed through `AGENTS.md`. Spawn a custom agent only when
-delegation is wanted. New sessions are needed to load profile or agent changes;
-project configuration also depends on the host trusting the checkout.
+Profile names describe their model and reasoning configuration, not a project
+role. The available templates are:
+
+| CLI profile | Model | Reasoning |
+| --- | --- | --- |
+| `astra-xhigh` | `gpt-6-astra` | `xhigh` |
+| `luna-medium` | `gpt-5.6-luna` | `medium` |
+| `sol-medium` | `gpt-5.6-sol` | `medium` |
+| `sol-xhigh` | `gpt-5.6-sol` | `xhigh` |
+
+For example, `.codex/profile-templates/sol-medium.config.toml` installs as
+`$CODEX_HOME/sol-medium.config.toml`; then `codex --profile sol-medium` starts
+the main session on Sol with medium reasoning. The profile selects
+configuration, not a role prompt: the request is still routed through
+`AGENTS.md`. Spawn a custom agent only when delegation is wanted. New sessions
+are needed to load profile or agent changes; project configuration also depends
+on the host trusting the checkout.
 
 | Codex agent | Pinned model | Reasoning |
 | --- | --- | --- |
