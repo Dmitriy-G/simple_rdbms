@@ -241,11 +241,11 @@ async fn an_unrecognized_pg_relation_answers_zero_rows_with_its_own_select_list_
     );
     assert_eq!(row_count(&indexes), 0);
 
-    let settings = client
-        .simple_query("SELECT * FROM pg_catalog.pg_settings")
+    let descriptions = client
+        .simple_query("SELECT * FROM pg_catalog.pg_description")
         .await
-        .expect("pg_settings query succeeds without erroring");
-    assert_eq!(row_count(&settings), 0);
+        .expect("pg_description query succeeds without erroring");
+    assert_eq!(row_count(&descriptions), 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -419,6 +419,44 @@ async fn pg_roles_and_pg_user_answer_the_one_implicit_superuser() {
         .await
         .expect("a rolname filter that matches nothing still succeeds");
     assert_eq!(row_count(&missed), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_settings_answers_a_scalar_question_with_a_row_rather_than_with_nothing() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_pg_settings.db").await;
+
+    let version_num = client
+        .simple_query("SELECT setting FROM pg_settings WHERE name = 'server_version_num'")
+        .await
+        .expect("pg_settings query succeeds");
+    let row = only_row(&version_num);
+    let setting = row.get("setting").expect("a setting value").to_string();
+    let parsed: i64 = setting.parse().expect("server_version_num must parse as an integer");
+    assert!(parsed >= 150_000, "expected a PostgreSQL 15 version number, got {parsed}");
+
+    let all = client
+        .simple_query("SELECT name, setting FROM pg_catalog.pg_settings")
+        .await
+        .expect("an unfiltered pg_settings query succeeds");
+    assert!(row_count(&all) > 1, "pg_settings lists every setting this server reports");
+
+    let shown = client.simple_query("SHOW server_version_num").await.expect("SHOW succeeds");
+    assert_eq!(
+        only_row(&shown).get("server_version_num").map(str::to_string),
+        Some(setting),
+        "SHOW and pg_settings read one table, so they cannot disagree"
+    );
+
+    let isolation = client
+        .simple_query("SHOW TRANSACTION ISOLATION LEVEL")
+        .await
+        .expect("the multi-word SHOW a JDBC driver sends succeeds");
+    assert_eq!(
+        only_row(&isolation).get("transaction_isolation"),
+        Some("read committed"),
+        "the phrase names transaction_isolation, not the word 'transaction'"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

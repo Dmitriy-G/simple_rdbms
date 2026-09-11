@@ -3,7 +3,8 @@
 Intercepts the introspection queries a real PostgreSQL client library sends
 before it will trust a connection - `pg_namespace`,
 `pg_class` (M13.4 subtask 2), `pg_attribute` and `pg_type` (M13.4
-subtask 3), `pg_database`, `pg_roles` and `pg_user` (P-90), and any other
+subtask 3), `pg_database`, `pg_roles` and `pg_user` (P-90),
+`pg_settings` (P-94), and any other
 `pg_`-named relation at all (M13.4 subtask 4) -
 and answers them from this engine's own live catalog rather than letting
 them reach `sql::Parser`, which knows nothing about any relation named
@@ -96,7 +97,12 @@ catalog - one database row whose `datname` is
 `engine::Database::database_name()` (the `db_path` file stem, computed
 once when the database is opened), and one role row for the single
 implicit superuser every connection already is, since nothing
-authenticates until M22. These are the only fabricated rows in this
+authenticates until M22. `pg_settings` joined them for the same reason
+one level down (P-94): a client reads `server_version_num` from it as a
+single value, and a zero-row answer to a scalar question arrives in the
+driver as a null rather than as an empty list. Its values come from
+`settings.MD`'s table, which `wire.rs`'s `SHOW` handler reads too.
+These are the only fabricated rows in this
 module, and they are fabricated from something real and fixed: no value
 in them is invented per query, and the oids are derived the same
 deterministic way `table_oid` derives a table's, so a client that caches
@@ -154,7 +160,7 @@ of always saying "nothing").
   `shadows_a_real_table` first refusal, and then tries
   each recognizer in turn (`pg_namespace`, then
   `pg_class`, then `pg_attribute`, then `pg_type`, then `pg_database`,
-  `pg_roles` and `pg_user`, then the
+  `pg_roles`, `pg_user` and `pg_settings`, then the
   `answer_unrecognized_pg_relation` catch-all, which must stay last or it
   claims every relation the specific recognizers were added for),
   returning the first
@@ -294,6 +300,21 @@ learned to answer `version()` itself - see the module header above.)
   real PostgreSQL type name this engine doesn't model - answers zero rows
   rather than an error, exactly like `answer_pg_class`'s `relname` filter
   does for a table that doesn't exist.
+- `answer_pg_settings(normalized) -> Option<Introspection>` - private.
+  Recognizes a query whose `FROM` names `pg_settings` and answers one row
+  per `settings::SETTINGS` entry, with the columns a client expects of
+  that view (`name`, `setting`, `unit`, `category`, `short_desc`,
+  `vartype`, `source`, `min_val`, `max_val`, `enumvals`, `boot_val`,
+  `reset_val`, `context`); `boot_val`/`reset_val` repeat the setting,
+  since nothing here is ever changed from its default. A
+  `name = '<x>'` predicate narrows to the one setting, matched
+  case-insensitively the way PostgreSQL matches a GUC name. This is the
+  recognizer P-94 added, and the reason it is not simply left to the
+  catch-all is that a client reads `server_version_num` as a *scalar*:
+  zero rows becomes a null in the driver, which kills the connection with
+  a message naming no SQL. The values come from `settings.MD`'s table
+  rather than from constants here, so `SHOW` and this recognizer cannot
+  drift apart.
 - `bool_cell(value) -> Option<String>` - private, pure. `t` or `f`, the
   text-format encoding of a PostgreSQL `bool`. The three recognizers
   below declare their boolean columns as `Type::BOOL` rather than

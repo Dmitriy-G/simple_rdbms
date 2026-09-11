@@ -84,8 +84,11 @@ listener and a `tempfile`-backed database, in the same shape as
   answers a `RowDescription` naming exactly `indexrelid`/`indisunique`
   (from the query's own select list, per `select_item_name`) and zero
   rows, never reaching the engine at all; `SELECT * FROM
-  pg_catalog.pg_settings` (the `pg_catalog.`-prefixed form, with `*`)
-  likewise answers zero rows without erroring.
+  pg_catalog.pg_description` (the `pg_catalog.`-prefixed form, with `*`)
+  likewise answers zero rows without erroring. The second half used to
+  name `pg_settings`, which is now a recognized shape (P-94) - a test of
+  the catch-all has to name a relation the catch-all still claims, and
+  that list shrinks every time a real client finds another gap.
 - `a_query_against_a_real_missing_table_still_fails_as_undefined` -
   `SELECT * FROM nosuchtable` is not `pg_`-prefixed, so
   `answer_unrecognized_pg_relation` never claims it, and it still reaches
@@ -146,6 +149,20 @@ listener and a `tempfile`-backed database, in the same shape as
   `answer_pg_namespace` deliberately honors no `WHERE` clause at all
   (`pg_catalog.MD`). A `rolname` filter naming anyone else answers zero
   rows.
+- `pg_settings_answers_a_scalar_question_with_a_row_rather_than_with_nothing` -
+  the P-94 regression, and the only test here whose subject is the
+  *number of rows* rather than their content. `SELECT setting FROM
+  pg_settings WHERE name = 'server_version_num'` returns exactly one row
+  whose value parses as an integer of at least 150000; before the fix it
+  returned zero rows through the catch-all, which a driver reading the
+  answer as a scalar turns into a null and dies on. The unfiltered form
+  returns more than one row, `SHOW server_version_num` returns the same
+  string as the filtered query - the property the shared
+  `settings::SETTINGS` table exists to make unbreakable - and `SHOW
+  TRANSACTION ISOLATION LEVEL`, which is what a JDBC driver sends for
+  `getTransactionIsolation()`, answers under the column name
+  `transaction_isolation` rather than looking up the word `transaction`
+  and reporting an empty string.
 - `pg_database_over_the_extended_protocol_describes_its_columns` -
   `prepare("SELECT datname FROM pg_database")` reports zero parameters and
   `query` returns the one row, proving the new recognizers are reached

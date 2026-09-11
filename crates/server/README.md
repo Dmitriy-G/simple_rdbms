@@ -83,6 +83,9 @@ ordering.
   than letting them fail as an undefined table. "Client compatibility"
   below lists exactly which query shapes are recognized and what an
   unrecognized one gets; see `src/pg_catalog.MD` for how.
+- `settings` - the configuration parameters this server reports, in one
+  table read by both `pg_settings` and `SHOW` so the two spellings of one
+  question cannot disagree. See `src/settings.MD`.
 - `signals` - blocks until `SIGTERM`/`Ctrl-C`, so `main` can run a
   graceful shutdown instead of the process just dying mid-write. See
   `src/signals.MD`.

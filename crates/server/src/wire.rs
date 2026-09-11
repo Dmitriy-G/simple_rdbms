@@ -9,6 +9,7 @@ use futures::{Sink, stream};
 use pgwire::api::Type;
 
 use crate::pg_catalog::{self, Introspection, field_info, pg_type_of};
+use crate::settings;
 use pgwire::api::auth::noop::NoopStartupHandler;
 use pgwire::api::auth::{DefaultServerParameterProvider, ServerParameterProvider, StartupHandler};
 use pgwire::api::portal::{Format, Portal};
@@ -284,7 +285,10 @@ where
     let (shape, rows, response) = match leading.to_uppercase().as_str() {
         "SET" => ("SET", 0, Response::Execution(Tag::new("SET"))),
         "RESET" => ("RESET", 0, Response::Execution(Tag::new("RESET"))),
-        "SHOW" => ("SHOW", 1, show_response(client, words.next().unwrap_or(""))),
+        "SHOW" => {
+            let rest: Vec<&str> = words.collect();
+            ("SHOW", 1, show_response(client, &settings::parameter_name(&rest)))
+        }
         _ => return None,
     };
     log_answered_without_the_engine(client, shape, rows, query);
@@ -295,10 +299,12 @@ fn show_response<C>(client: &C, name: &str) -> Response
 where
     C: ClientInfo,
 {
-    let value = DefaultServerParameterProvider::default()
-        .server_parameters(client)
-        .and_then(|params| params.get(name).cloned())
-        .unwrap_or_default();
+    let value = settings::lookup(name).map(str::to_string).unwrap_or_else(|| {
+        DefaultServerParameterProvider::default()
+            .server_parameters(client)
+            .and_then(|params| params.get(name).cloned())
+            .unwrap_or_default()
+    });
     let fields =
         vec![FieldInfo::new(name.to_owned(), None, None, Type::VARCHAR, FieldFormat::Text)];
     let schema = Arc::new(fields);

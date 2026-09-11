@@ -162,13 +162,19 @@ become a bare `Response::Execution` with the tag `SET`/`RESET`,
 discarding the rest of the query entirely - there is nothing to change,
 since no session state backs either keyword yet. `SHOW <name>` becomes a
 one-row, one-column `Response::Query` via `show_response`, which answers
-from the exact same fixed parameter table `pgwire`'s own
+from this crate's own `settings` table first (`settings.MD`) and then
+from the fixed parameter table `pgwire`'s own
 `DefaultServerParameterProvider::default()` builds for the startup
 handshake's `ParameterStatus` messages (`server_version`, `TimeZone`,
 `standard_conforming_strings`, and the rest) - `show_response` calls
 `ServerParameterProvider::server_parameters` itself rather than
-duplicating that table, so the two can never drift. A name absent from
-that table (or absent entirely, e.g. a bare `SHOW`) answers with an empty
+duplicating that table, so the two can never drift. The `settings` table
+comes first because it is also what `pg_catalog`'s `pg_settings`
+recognizer answers from, and it carries the parameters a client reads
+that `pgwire`'s table has no entry for at all - `server_version_num`
+above all, which is what a driver gates its introspection on (P-94). A
+name absent from both (or absent entirely, e.g. a bare `SHOW`) answers
+with an empty
 string rather than an error, exactly like `RowsAffected`/`Rows`'s
 `CommandComplete` handling above, `show_response`'s `QueryResponse`
 carries the command tag `SHOW`, and the same `pgwire` row-count-appending
@@ -520,10 +526,20 @@ SQL statement raised.
   that a `SHOW` of a parameter this server does not carry - answered as
   one row holding the empty string - is visible rather than silent.
 - `show_response(client, name) -> Response` - private. The one-row,
-  one-column `Response::Query` a `SHOW <name>` becomes, its value read
-  from `pgwire`'s own `DefaultServerParameterProvider::default()` table -
-  the same one the startup handshake's `ParameterStatus` messages use -
-  or an empty string when `name` is not in it.
+  one-column `Response::Query` a `SHOW <name>` becomes. The value comes
+  from `settings::lookup` first (`settings.MD`), which is the same table
+  `pg_catalog`'s `pg_settings` recognizer answers from, so the two
+  spellings of one question cannot disagree; then from `pgwire`'s own
+  `DefaultServerParameterProvider::default()` table - the same one the
+  startup handshake's `ParameterStatus` messages use - and finally an
+  empty string when `name` is in neither. The empty string is kept
+  deliberately, and `tests/wire_set_show_reset.rs` asserts it: a `SHOW`
+  always produces a row, so it is never the null a client crashes on
+  (P-94), and erroring on an unknown parameter would break a client that
+  probes for an optional one.
+  The `name` itself comes from `settings::parameter_name`, not from the
+  first word, because `SHOW TRANSACTION ISOLATION LEVEL` names
+  `transaction_isolation`.
 - `introspection_response(introspection) -> Response` (M13.4) - private.
   Builds the `Response::Query` a `pg_catalog::Introspection` becomes: one
   `FieldInfo` per `Introspection::columns` entry (always `FieldFormat::Text`)

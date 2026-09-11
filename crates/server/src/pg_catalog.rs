@@ -1,4 +1,6 @@
 use engine::{DataType, Database};
+
+use crate::settings;
 use pgwire::api::Type;
 use pgwire::api::results::{FieldFormat, FieldInfo};
 
@@ -390,6 +392,60 @@ fn answer_pg_type(normalized: &str) -> Option<Introspection> {
     })
 }
 
+fn answer_pg_settings(normalized: &str) -> Option<Introspection> {
+    if !recognizes_relation(normalized, "pg_settings") {
+        return None;
+    }
+
+    let mut entries: Vec<(&str, &str)> = settings::SETTINGS.to_vec();
+    if let Some(clause) = where_clause(normalized) {
+        if let Some(name) = eq_string_predicate(clause, "name") {
+            entries.retain(|(setting, _)| setting.eq_ignore_ascii_case(name));
+        }
+    }
+
+    let rows = entries
+        .into_iter()
+        .map(|(name, value)| {
+            vec![
+                Some(name.to_string()),
+                Some(value.to_string()),
+                None,
+                Some("Preset Options".to_string()),
+                Some(format!("{name} reported by simple_rdbms")),
+                Some("string".to_string()),
+                Some("default".to_string()),
+                None,
+                None,
+                None,
+                Some(value.to_string()),
+                Some(value.to_string()),
+                Some("internal".to_string()),
+            ]
+        })
+        .collect();
+
+    Some(Introspection {
+        shape: "pg_settings",
+        columns: vec![
+            ("name".to_string(), Type::VARCHAR),
+            ("setting".to_string(), Type::VARCHAR),
+            ("unit".to_string(), Type::VARCHAR),
+            ("category".to_string(), Type::VARCHAR),
+            ("short_desc".to_string(), Type::VARCHAR),
+            ("vartype".to_string(), Type::VARCHAR),
+            ("source".to_string(), Type::VARCHAR),
+            ("min_val".to_string(), Type::VARCHAR),
+            ("max_val".to_string(), Type::VARCHAR),
+            ("enumvals".to_string(), Type::VARCHAR),
+            ("boot_val".to_string(), Type::VARCHAR),
+            ("reset_val".to_string(), Type::VARCHAR),
+            ("context".to_string(), Type::VARCHAR),
+        ],
+        rows,
+    })
+}
+
 fn bool_cell(value: bool) -> Option<String> {
     Some(if value { "t" } else { "f" }.to_string())
 }
@@ -669,6 +725,9 @@ pub fn answer(db: &Database, sql: &str) -> Option<Introspection> {
         return Some(introspection);
     }
     if let Some(introspection) = answer_pg_user(&normalized) {
+        return Some(introspection);
+    }
+    if let Some(introspection) = answer_pg_settings(&normalized) {
         return Some(introspection);
     }
     if let Some(introspection) = answer_unrecognized_pg_relation(&normalized) {
