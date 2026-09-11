@@ -173,6 +173,22 @@ everything else exercises exactly one connection.
   that field lives now (behind its own `Mutex<CheckpointState>`,
   `runtime.MD`) is what keeps this test passing even with several
   sessions' statements actually running at once.
+- `dropping_sessions_does_not_multiply_engine_wide_flushes` - the same
+  question about the other engine-wide cost, and the second time this
+  codebase has had one multiply by the number of connections. Reads
+  `Database::stats()?.engine_wide_flushes` (`database.MD`), opens sixteen
+  sessions in turn - each running one `INSERT` so the pool really is dirty
+  - lets each drop at the end of its loop iteration, and asserts the
+  counter has not moved at all. It must not: closing a connection sends
+  `Disconnect` and nothing else, and the whole-pool flush belongs to
+  `Drop for EngineHandle` (`runtime.MD`,
+  `docs/adr/0020-closing-a-connection-is-not-a-flush-point.md`), which has
+  not run yet while the test still holds `db`. It then re-reads the rows to
+  confirm the sixteen inserts landed, so a version of the engine that made
+  the counter zero by doing nothing at all would still fail. The assertion
+  is a count, not a duration: what regressed before was how many flushes
+  happened, and a timing assertion would be both weaker and
+  non-deterministic.
 
 ## Usage Example
 

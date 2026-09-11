@@ -94,9 +94,3 @@ impl Database {
         self.session.lock_count_for_txn(txn_id)
     }
 }
-
-impl Drop for Database {
-    fn drop(&mut self) {
-        self.session.best_effort_flush();
-    }
-}

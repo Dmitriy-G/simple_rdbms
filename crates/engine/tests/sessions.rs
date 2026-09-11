@@ -389,6 +389,31 @@ fn a_dead_engine_thread_fails_every_session_with_a_fatal_error() -> Result<(), B
     Ok(())
 }
 
+#[test]
+fn dropping_sessions_does_not_multiply_engine_wide_flushes() -> Result<(), Box<dyn Error>> {
+    const SESSIONS: usize = 16;
+
+    let dir = tempfile::tempdir()?;
+    let mut db = Database::open(DbConfig::new(dir.path().join("test.db")))?;
+    db.execute("CREATE TABLE t (a INTEGER)")?;
+
+    let before = db.stats()?.engine_wide_flushes;
+    for i in 0..SESSIONS {
+        let mut session = db.connect()?;
+        session.execute(&format!("INSERT INTO t VALUES ({i})"))?;
+    }
+    let after = db.stats()?.engine_wide_flushes;
+
+    assert_eq!(
+        before, after,
+        "closing {SESSIONS} sessions must not flush the whole buffer pool {SESSIONS} times; an \
+         engine-wide flush belongs to the engine's own shutdown, not to a client hanging up \
+         (docs/adr/0020-closing-a-connection-is-not-a-flush-point.md)"
+    );
+    assert_eq!(row_count(db.execute("SELECT * FROM t")?), SESSIONS, "every insert must still land");
+    Ok(())
+}
+
 fn checkpoint_count(
     threshold: u64,
     drive: impl FnOnce(&mut Database, &[String]) -> Result<(), Box<dyn Error>>,

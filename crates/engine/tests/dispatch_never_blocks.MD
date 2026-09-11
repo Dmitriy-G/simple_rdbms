@@ -182,10 +182,15 @@ fit in it.
   the probe's `Connect` at all; before ADR 0016 the `Connect` and the
   lookup passed and the `SELECT` hung on `EngineShared.txn_manager`. Both
   hangs were unbounded, not slow. The probe thread
-  hands both its sessions back to the test rather than dropping them,
-  because `Drop for Database` calls `best_effort_flush`, which would queue
-  behind the very flush the test is holding; joining it is therefore done
-  only after the release. Finally the pause is released and the checkpoint
+  hands both its sessions back to the test rather than dropping them. That
+  was once load-bearing - `Drop for Database` called `best_effort_flush`,
+  which would have queued behind the very flush the test is holding - and
+  since `docs/adr/0020-closing-a-connection-is-not-a-flush-point.md` it is
+  merely tidy: dropping a session now sends `Disconnect` and waits for
+  nothing. It is kept because handing the sessions back also keeps them
+  alive past the assertions, which is what stops the engine shutting down
+  underneath a probe that has not finished.
+  Finally the pause is released and the checkpoint
   thread is joined on its `Result`, confirming the checkpoint completes
   rather than being abandoned mid-write.
 - `a_stalled_rollback_does_not_block_an_unrelated_session` - the same

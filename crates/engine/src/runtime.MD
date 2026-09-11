@@ -244,9 +244,12 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   anything or naming a session at all - see `dispatch_describe` below),
   `TableNames`/`TableSchema` (read
   the live catalog), `Checkpoint` (the engine-wide work `Database::close`
-  needs), `BestEffortFlush` (the engine-wide work `Drop for Database`
-  needs), `Disconnect` (no reply - fire-and-forget session teardown, sent
-  from `Drop for SessionHandle`), and `Shutdown` (`#[cfg(feature =
+  needs), `BestEffortFlush` (the engine-wide work `Drop for EngineHandle`
+  needs, once per process rather than once per connection -
+  `docs/adr/0020-closing-a-connection-is-not-a-flush-point.md`),
+  `Disconnect` (no reply - fire-and-forget session teardown, sent
+  from `Drop for SessionHandle`, and since M13.2 the whole of what closing
+  a connection costs), and `Shutdown` (`#[cfg(feature =
   "test-util")]` - stops the dispatch thread on request, for
   `a_dead_engine_thread_fails_every_session_with_a_fatal_error` in
   `tests/sessions.MD`), `Stats` (`#[cfg(feature = "test-util")]` - reads
@@ -294,7 +297,13 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `EngineHandle::connect(self: &Arc<Self>) -> Result<SessionHandle>` -
   sends `Connect`, awaits the assigned `SessionId`, and returns a
   `SessionHandle` wrapping `Arc::clone(self)` plus the new `SessionId`.
-- `impl Drop for EngineHandle` - `take()`s `sender`, dropping the last
+  `EngineHandle::best_effort_flush(&self)` - private. Sends
+  `BestEffortFlush` and blocks on the reply, discarding whatever it gets
+  and doing nothing at all if the send fails; called from `Drop` below and
+  nowhere else.
+- `impl Drop for EngineHandle` - runs `best_effort_flush` **first**, while
+  the channel and the dispatch thread are both still alive to serve it,
+  then `take()`s `sender`, dropping the last
   live `mpsc::SyncSender<EngineMessage>` unless the dispatch thread's own
   clone-free receiver loop already saw every session's sender go away
   first, then `take()`s and joins `thread`. This runs precisely when the
@@ -305,7 +314,18 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   itself joins every worker thread before `run_engine` can return - so
   `EngineHandle`'s own join transitively waits out every worker too,
   guaranteeing `EngineShared` (and the `DiskManager`/exclusive file lock it
-  owns) is gone before `Database::drop` returns.
+  owns) is gone before the last `Database` drop returns.
+  The flush belongs **here and not in `Drop for Database`**, which is where
+  it lived until M13.2. This destructor runs once per process; that one ran
+  once per connection, so once `server` began opening a `Database` per
+  accepted socket, every client hanging up stalled the whole engine behind
+  a full pool flush holding `BufferPool.flush_sequence`. The flush that
+  used to happen at process exit still happens at process exit, in the same
+  thread at the same point - it is the other N-1 that are gone. See
+  `docs/adr/0020-closing-a-connection-is-not-a-flush-point.md`, and note
+  that this flush is an optimization of the next startup's redo and never a
+  durability guarantee: a `COMMIT` is made durable by the log, and
+  `Database::close` is what syncs the data file.
 - `SessionHandle` - `pub(crate)`. `engine: Arc<EngineHandle>` (the sole
   thing keeping the dispatch thread alive on this session's behalf) plus
   `session_id`. `connect(&self) -> Result<SessionHandle>` - forwards to
@@ -321,8 +341,6 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `describe` sends no `session_id` at all - unlike every other request
   here, describing a statement touches no per-connection state, since it
   never begins a transaction.
-  `best_effort_flush(&self)` sends `BestEffortFlush` and waits for the
-  reply, discarding whatever it gets - used only from `Drop for Database`.
   `kill_engine_for_test(&self)`/`stats(&self) -> Result<EngineStats>`/
   `current_txn_id(&self) -> Result<Option<TxnId>>`/`lock_count_for_txn(&self,
   txn_id) -> Result<usize>` - `#[cfg(feature = "test-util")]`, test-only.
@@ -444,10 +462,16 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   blocking is fine on a worker thread) and, if it held an `Active`/
   `Aborted` transaction, aborts it, reloads the catalog, and logs a
   `warn!` - the session left connected mid-transaction case.
-- `CheckpointState` - private. `bytes_at_last_checkpoint`/
-  `checkpoints_written`, the two checkpoint counters, grouped into one
-  struct so a single `Mutex` covers both without them drifting apart under
-  concurrent commits from different sessions.
+- `CheckpointState` - private. `bytes_at_last_checkpoint`,
+  `checkpoints_written` and `engine_wide_flushes`, grouped into one
+  struct so a single `Mutex` covers them without them drifting apart under
+  concurrent commits from different sessions. The third counts the times
+  the whole buffer pool was flushed as one engine-wide act -
+  `checkpoint_and_flush` and `best_effort_flush`, not `maybe_checkpoint`,
+  which flushes no data pages of its own - and exists so a test can assert
+  that number against the number of sessions opened and closed
+  (`tests/sessions.MD`'s
+  `dropping_sessions_does_not_multiply_engine_wide_flushes`).
 - `EngineShared` - private. `catalog: Arc<Catalog>`, `buffer_pool:
   Arc<BufferPool>`, `txn_manager: Mutex<TransactionManager>`,
   `checkpoint: Mutex<CheckpointState>`, `checkpoint_byte_threshold`,
@@ -469,8 +493,13 @@ taken at `BEGIN`, does not move even after the inserting session commits.
 - `EngineShared::record_checkpoint_written(&self)` - locks `checkpoint`,
   increments `checkpoints_written` and
   `metrics::counter!("checkpoints_written_total")` together.
+  `record_engine_wide_flush(&self)` - the same shape for
+  `engine_wide_flushes` and `metrics::counter!("engine_wide_flushes_total")`,
+  called by `checkpoint_and_flush` and by `best_effort_flush` once it is
+  past its poisoning check, so the counter records flushes that actually
+  happened rather than flushes that were asked for.
   `stats(&self) -> EngineStats` - `#[cfg(feature = "test-util")]`. Copies
-  the current checkpoint counter and reads
+  the two checkpoint-state counters and reads
   `txn_manager.version_store().chain_count()` and
   `txn_manager.lock_manager().finished_count()` under a brief
   `txn_manager` lock into `EngineStats::version_chains` and
@@ -494,9 +523,13 @@ taken at `BEGIN`, does not move even after the inserting session commits.
   `txn::write_checkpoint`, which runs both phases in one go, would
   reintroduce exactly that - it exists for callers that hold the
   transaction manager exclusively anyway, which the engine never does.
-  `best_effort_flush(&self)` - the work `Drop for Database`
+  `best_effort_flush(&self)` - the work `Drop for EngineHandle`
   needs: skip entirely if `buffer_pool.is_flush_poisoned()`, otherwise
-  attempt `flush_log_all`/`flush_all` and discard any error.
+  record the flush and attempt `flush_log_all`/`flush_all`, discarding any
+  error - there is nowhere to report one from a destructor. It syncs
+  nothing and is not a durability guarantee; it shortens the next
+  startup's redo, which is why moving it off the per-connection path cost
+  nothing (`docs/adr/0020-closing-a-connection-is-not-a-flush-point.md`).
   `maybe_checkpoint(&self)` - skips if poisoned, skips if the log hasn't
   grown `checkpoint_byte_threshold` bytes since the last checkpoint
   (read under a brief `checkpoint` lock), otherwise checkpoints in the

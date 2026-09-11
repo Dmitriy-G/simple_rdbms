@@ -82,7 +82,9 @@ name a branch:
    across its page flush), 0017 (`CREATE INDEX` locks the table it indexes
    and publishes only a finished index), 0018 (an abort holds no lock
    across its undo, and stays in the active set while it runs), 0019 (one
-   double-write batch at a time, and what a page fetch may wait for).
+   double-write batch at a time, and what a page fetch may wait for), 0020
+   (engine-wide work belongs to the handle whose lifetime is the engine,
+   so closing a connection flushes nothing).
 3. `docs/backlog.md` — the problems this project knows about and has
    decided not to do. Something listed there is not a finding to report
    again; it is a decision already made.

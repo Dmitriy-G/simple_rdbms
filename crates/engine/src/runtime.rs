@@ -207,10 +207,18 @@ impl EngineHandle {
         let session_id = reply_rx.recv().map_err(|_| engine_unavailable())?;
         Ok(SessionHandle { engine: Arc::clone(self), session_id })
     }
+
+    fn best_effort_flush(&self) {
+        let (reply, reply_rx) = mpsc::sync_channel(1);
+        if self.send(EngineMessage::BestEffortFlush { reply }).is_ok() {
+            let _ = reply_rx.recv();
+        }
+    }
 }
 
 impl Drop for EngineHandle {
     fn drop(&mut self) {
+        self.best_effort_flush();
         self.sender.take();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -271,13 +279,6 @@ impl SessionHandle {
         let (reply, reply_rx) = mpsc::sync_channel(1);
         self.engine.send(EngineMessage::Checkpoint { reply })?;
         reply_rx.recv().map_err(|_| engine_unavailable())?
-    }
-
-    pub(crate) fn best_effort_flush(&self) {
-        let (reply, reply_rx) = mpsc::sync_channel(1);
-        if self.engine.send(EngineMessage::BestEffortFlush { reply }).is_ok() {
-            let _ = reply_rx.recv();
-        }
     }
 
     #[cfg(feature = "test-util")]
@@ -568,6 +569,7 @@ fn disconnect_session(shared: &EngineShared, session: &Mutex<SessionState>, sess
 struct CheckpointState {
     bytes_at_last_checkpoint: u64,
     checkpoints_written: u64,
+    engine_wide_flushes: u64,
 }
 
 struct EngineShared {
@@ -584,6 +586,7 @@ struct EngineShared {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EngineStats {
     pub checkpoints_written: u64,
+    pub engine_wide_flushes: u64,
     pub version_chains: usize,
     pub finished_txn_count: usize,
 }
@@ -632,6 +635,7 @@ impl EngineShared {
             checkpoint: Mutex::new(CheckpointState {
                 bytes_at_last_checkpoint,
                 checkpoints_written: 0,
+                engine_wide_flushes: 0,
             }),
             checkpoint_byte_threshold: config.checkpoint_byte_threshold,
             slow_query_warn_threshold_ms: config.slow_query_warn_threshold_ms,
@@ -647,12 +651,19 @@ impl EngineShared {
         metrics::counter!("checkpoints_written_total").increment(1);
     }
 
+    fn record_engine_wide_flush(&self) {
+        let mut checkpoint = recover_lock(self.checkpoint.lock(), "EngineShared.checkpoint");
+        checkpoint.engine_wide_flushes += 1;
+        metrics::counter!("engine_wide_flushes_total").increment(1);
+    }
+
     #[cfg(feature = "test-util")]
     fn stats(&self) -> EngineStats {
         let checkpoint = recover_lock(self.checkpoint.lock(), "EngineShared.checkpoint");
         let txn_manager = recover_lock(self.txn_manager.lock(), "EngineShared.txn_manager");
         EngineStats {
             checkpoints_written: checkpoint.checkpoints_written,
+            engine_wide_flushes: checkpoint.engine_wide_flushes,
             version_chains: txn_manager.version_store().chain_count(),
             finished_txn_count: txn_manager.lock_manager().finished_count(),
         }
@@ -671,6 +682,7 @@ impl EngineShared {
         };
         finish_checkpoint(&self.buffer_pool, pending)?;
         self.record_checkpoint_written();
+        self.record_engine_wide_flush();
         self.buffer_pool.flush_log_all()?;
         self.buffer_pool.flush_all()?;
         self.buffer_pool.sync()?;
@@ -681,6 +693,7 @@ impl EngineShared {
         if self.buffer_pool.is_flush_poisoned() {
             return;
         }
+        self.record_engine_wide_flush();
         let _ = self.buffer_pool.flush_log_all();
         let _ = self.buffer_pool.flush_all();
     }

@@ -628,8 +628,8 @@ same thread.
   sets it and its `flush_in_flight` mirror, and hands back the `FlushLease`
   whose `Drop` clears both and notifies the next waiter. `deadline` is
   `None` for every caller that came to write - `flush_page`, `flush_all`,
-  the checkpoint's page-0 flush, recovery, the drop-time best-effort flush
-  - which wait indefinitely, since failing them on a slow device would
+  the checkpoint's page-0 flush, recovery, the engine's best-effort flush
+  at shutdown - which wait indefinitely, since failing them on a slow device would
   turn latency into a lost write. `acquire_free_frame` is the one caller
   that passes `Some(deadline)`, and gets
   `StorageError::BufferPoolWaitTimedOut { waited_ms }` when it expires -
@@ -704,8 +704,8 @@ same thread.
   itself failing), the just-synced `dwb` batch is left in place,
   uncleared, exactly the state `recover_double_write` needs to repair a
   torn real page on the next open. A second, later `flush_pages` call -
-  another eviction, a checkpoint, even just `Drop for Database`'s
-  best-effort flush - has no way to know that batch is still needed, and
+  another eviction, a checkpoint, even just the engine's best-effort flush
+  as the last handle drops - has no way to know that batch is still needed, and
   writing a *new* one reuses the same slots: if that second write is
   itself interrupted, it can overwrite the first batch's still-valid
   backup with bytes that fail their own checksum, at which point

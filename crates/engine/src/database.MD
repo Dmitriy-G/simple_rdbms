@@ -98,22 +98,24 @@ dispatch thread or a worker pool exists underneath.
   blocking forever - a real gap only if the engine has already died, which
   `execute`'s own `EngineUnavailable` would have surfaced first on any real
   workload.
-- `impl Drop for Database` - forwards to `SessionHandle::best_effort_flush`,
-  which blocks on the engine's reply (the flush itself runs on a worker
-  pool thread, submitted the same way `close`'s checkpoint is) so the
-  flush this used to do synchronously (before any thread existed to hand
-  it to) still completes
-  before `Database::drop` returns. Skips the flush entirely once the pool
-  is poisoned, and swallows any other error - there is nowhere to report
-  one from `Drop` - matching the pre-split behavior exactly; see
-  `runtime.MD`'s `EngineState::best_effort_flush` and
-  `storage::buffer::BufferPool`'s poisoning paragraph (`buffer.MD`) for
-  why a destructor must not attempt a second, uncoordinated flush once
-  poisoning has already happened. `close()` is unaffected and still
-  attempts its own flush and still returns the error, since an explicit
-  close has somewhere to report a failure to and a destructor does not.
-  Dropping `session` right after (an ordinary field drop, not this
-  method) sends `runtime::EngineMessage::Disconnect` - see `runtime.MD`.
+- `Database` has **no `Drop` impl**, and that absence is deliberate. Its
+  only field drops in the ordinary way, and `runtime::SessionHandle`'s own
+  `Drop` sends `runtime::EngineMessage::Disconnect`, which is the whole of
+  per-connection cleanup: the engine removes the session and a worker
+  thread aborts whatever transaction it left open and reloads the catalog,
+  with the dropping thread waiting for none of it. Until M13.2 this
+  destructor also ran an engine-wide best-effort flush of the buffer pool,
+  which was right while a process held one `Database` and dropped it once
+  at exit, and wrong the moment `server` began calling `connect()` per
+  accepted socket - every client hanging up then stalled the whole engine
+  for a full pool flush. That flush now lives in `Drop for
+  runtime::EngineHandle`, which runs exactly once, when the last handle in
+  the process goes; see
+  `docs/adr/0020-closing-a-connection-is-not-a-flush-point.md` for why
+  nothing durable depended on the old placement, and `runtime.MD` for the
+  mechanism. `close()` is unaffected and still checkpoints, flushes, syncs
+  and returns the error, since an explicit close has somewhere to report a
+  failure to and a destructor does not.
 - `Database::kill_engine_for_test(&self)` - `#[cfg(any(test, feature =
   "test-util"))]`. Forwards to `SessionHandle::kill_engine_for_test`,
   sending `runtime::EngineMessage::Shutdown` to stop the engine thread
@@ -122,11 +124,12 @@ dispatch thread or a worker pool exists underneath.
   instead of hanging.
 - `Database::stats(&self) -> Result<runtime::EngineStats>` - `#[cfg(any(test,
   feature = "test-util"))]`. Forwards to `SessionHandle::stats`, reading
-  engine-wide counters (`checkpoints_written`, `version_chains` and
-  `finished_txn_count`)
+  engine-wide counters (`checkpoints_written`, `engine_wide_flushes`,
+  `version_chains` and `finished_txn_count`)
   straight off `EngineState` rather than through a tracing capture
   buffer, so a test asserting a behavioral invariant like "checkpoints
-  don't multiply with sessions" (`crates/engine/tests/sessions.rs`),
+  don't multiply with sessions" or "whole-pool flushes don't multiply with
+  sessions" (`crates/engine/tests/sessions.rs`),
   "the version store doesn't grow without bound"
   (`crates/engine/tests/version_store_growth.rs`), or "the lock manager's
   finished-transaction set doesn't grow without bound"
