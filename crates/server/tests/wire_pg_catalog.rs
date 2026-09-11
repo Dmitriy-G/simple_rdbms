@@ -328,3 +328,111 @@ async fn a_pg_prefixed_table_created_after_parse_invalidates_the_cached_plan() {
     assert_eq!(rows.len(), 1, "re-preparing must reach the real table");
     assert_eq!(rows[0].get::<_, i32>("a"), 9);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_database_names_the_one_database_this_process_serves() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_pg_database.db").await;
+
+    let all = client
+        .simple_query("SELECT oid, datname, datdba, datallowconn FROM pg_database")
+        .await
+        .expect("pg_database query succeeds");
+    let row = only_row(&all);
+    assert_eq!(
+        row.get("datname"),
+        Some("wire_pg_catalog_pg_database"),
+        "datname must be the db_path file stem, not a fabricated constant"
+    );
+    assert_eq!(row.get("datallowconn"), Some("t"));
+    assert_eq!(row.get("datdba"), Some("10"));
+    let oid = row.get("oid").expect("a database oid").to_string();
+
+    let matched = client
+        .simple_query(
+            "SELECT datname FROM pg_catalog.pg_database \
+             WHERE datname = 'wire_pg_catalog_pg_database'",
+        )
+        .await
+        .expect("a datname filter succeeds");
+    assert_eq!(row_count(&matched), 1);
+
+    let missed = client
+        .simple_query("SELECT datname FROM pg_database WHERE datname = 'nope'")
+        .await
+        .expect("a datname filter that matches nothing still succeeds");
+    assert_eq!(row_count(&missed), 0);
+
+    let by_oid = client
+        .simple_query(&format!("SELECT datname FROM pg_database WHERE oid = {oid}"))
+        .await
+        .expect("an oid filter succeeds");
+    assert_eq!(row_count(&by_oid), 1, "the fabricated oid must be stable within a connection");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_roles_and_pg_user_answer_the_one_implicit_superuser() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_pg_roles.db").await;
+
+    let roles = client
+        .simple_query("SELECT oid, rolname, rolsuper, rolcanlogin FROM pg_roles")
+        .await
+        .expect("pg_roles query succeeds");
+    let role = only_row(&roles);
+    assert_eq!(role.get("rolname"), Some("postgres"));
+    assert_eq!(role.get("rolsuper"), Some("t"));
+    assert_eq!(role.get("rolcanlogin"), Some("t"));
+    let role_oid = role.get("oid").expect("a role oid").to_string();
+
+    let users = client
+        .simple_query("SELECT usename, usesysid, usesuper FROM pg_catalog.pg_user")
+        .await
+        .expect("pg_user query succeeds");
+    let user = only_row(&users);
+    assert_eq!(user.get("usename"), Some("postgres"));
+    assert_eq!(user.get("usesuper"), Some("t"));
+    assert_eq!(
+        user.get("usesysid").map(str::to_string),
+        Some(role_oid.clone()),
+        "pg_user and pg_roles must describe the same role"
+    );
+
+    let namespaces = client
+        .simple_query("SELECT nspname, nspowner FROM pg_namespace")
+        .await
+        .expect("pg_namespace query succeeds");
+    let owners: Vec<String> = namespaces
+        .iter()
+        .filter_map(|m| match m {
+            SimpleQueryMessage::Row(row) => row.get("nspowner").map(str::to_string),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !owners.is_empty() && owners.iter().all(|owner| *owner == role_oid),
+        "a schema's owner must resolve to a role pg_roles actually lists, got {owners:?}"
+    );
+
+    let missed = client
+        .simple_query("SELECT rolname FROM pg_roles WHERE rolname = 'nobody'")
+        .await
+        .expect("a rolname filter that matches nothing still succeeds");
+    assert_eq!(row_count(&missed), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_database_over_the_extended_protocol_describes_its_columns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let client = open(&dir, "wire_pg_catalog_pg_database_extended.db").await;
+
+    let stmt = client
+        .prepare("SELECT datname FROM pg_database")
+        .await
+        .expect("prepare succeeds without ever reaching the engine");
+    assert_eq!(stmt.params().len(), 0);
+
+    let rows = client.query(&stmt, &[]).await.expect("query succeeds");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, &str>("datname"), "wire_pg_catalog_pg_database_extended");
+}

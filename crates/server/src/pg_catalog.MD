@@ -3,7 +3,8 @@
 Intercepts the introspection queries a real PostgreSQL client library sends
 before it will trust a connection - `select version()`, `pg_namespace`,
 `pg_class` (M13.4 subtask 2), `pg_attribute` and `pg_type` (M13.4
-subtask 3), and any other `pg_`-named relation at all (M13.4 subtask 4) -
+subtask 3), `pg_database`, `pg_roles` and `pg_user` (P-90), and any other
+`pg_`-named relation at all (M13.4 subtask 4) -
 and answers them from this engine's own live catalog rather than letting
 them reach `sql::Parser`, which knows nothing about any relation named
 `pg_*` and would fail every one of them with `42P01 undefined_table`,
@@ -71,8 +72,26 @@ every recognizer that reports a real column's type reuses, so
 `pg_attribute`'s `atttypid` and an ordinary `SELECT`'s `RowDescription`
 can never disagree about what oid a given `DataType` maps to.
 
-This module never fabricates a row for data the engine doesn't have:
-where nothing backs an answer, the answer is zero rows - the general
+**Zero rows is the answer for a relation nothing backs - except for the
+three that decide whether the client has a tree to draw at all.** A
+client reads an empty `pg_database` as "this server serves no databases"
+and stops there, never asking about the schemas and tables the
+recognizers above could already list, which is exactly what P-90
+reported: a connection that worked, a console that ran statements, and an
+empty object tree above it. So `pg_database`, `pg_roles` and `pg_user`
+are answered from the server's own *configuration* rather than from a
+catalog - one database row whose `datname` is
+`engine::Database::database_name()` (the `db_path` file stem, computed
+once when the database is opened), and one role row for the single
+implicit superuser every connection already is, since nothing
+authenticates until M22. These are the only fabricated rows in this
+module, and they are fabricated from something real and fixed: no value
+in them is invented per query, and the oids are derived the same
+deterministic way `table_oid` derives a table's, so a client that caches
+one gets the same answer after a reconnect.
+
+Everywhere else the principle still holds - where nothing backs an
+answer, the answer is zero rows. The general
 fallback `answer_unrecognized_pg_relation` (M13.4 subtask 4) is where that
 principle is most visible, since it recognizes the *shape* of any
 `pg_`-prefixed relation without knowing anything at all about what it
@@ -111,8 +130,11 @@ of always saying "nothing").
 - `answer(db, sql) -> Option<Introspection>` - normalizes `sql`, gives
   `shadows_a_real_table` first refusal, and then tries
   each recognizer in turn (`select version()`, then `pg_namespace`, then
-  `pg_class`, then `pg_attribute`, then `pg_type`, then the
-  `answer_unrecognized_pg_relation` catch-all), returning the first
+  `pg_class`, then `pg_attribute`, then `pg_type`, then `pg_database`,
+  `pg_roles` and `pg_user`, then the
+  `answer_unrecognized_pg_relation` catch-all, which must stay last or it
+  claims every relation the specific recognizers were added for),
+  returning the first
   match's `Introspection` or `None` when nothing recognizes it, in which
   case the caller runs the query through the engine exactly as before.
 - `shadows_a_real_table(db, normalized) -> bool` - private. The one
@@ -257,6 +279,48 @@ of always saying "nothing").
   real PostgreSQL type name this engine doesn't model - answers zero rows
   rather than an error, exactly like `answer_pg_class`'s `relname` filter
   does for a table that doesn't exist.
+- `bool_cell(value) -> Option<String>` - private, pure. `t` or `f`, the
+  text-format encoding of a PostgreSQL `bool`. The three recognizers
+  below declare their boolean columns as `Type::BOOL` rather than
+  `Type::VARCHAR`, which the older recognizers use, because
+  `wire.rs`'s `introspection_response` always encodes a cell in text
+  format and `t`/`f` is exactly what a text-format `bool` is on the wire -
+  so the declared type and the bytes agree, and a driver asking for a
+  boolean gets one.
+- `database_oid(name) -> u32` - private, pure. `table_oid` over
+  `"pg_database.<name>"`, so a database and a table of the same name
+  never collide on one oid while both stay deterministic across restarts.
+- `answer_pg_database(db, normalized) -> Option<Introspection>` -
+  private. Recognizes a query whose `FROM` names `pg_database` and
+  answers exactly one row, because one server process serves exactly one
+  database file: `oid` (`database_oid`), `datname`
+  (`Database::database_name()`), `datdba` (`10`, the same fixed owner oid
+  `answer_pg_namespace` reports and the oid `answer_pg_roles` below
+  actually lists), `encoding` (`6`, `UTF8`), `datcollate`/`datctype`
+  (`C`), `datistemplate` (`f`), `datallowconn` (`t`), `datconnlimit`
+  (`-1`, no limit), `dattablespace` (`1663`, real PostgreSQL's
+  `pg_default`) and `datacl` (`NULL`). A `datname = '<x>'` or `oid = <n>`
+  predicate that does not match this one database answers zero rows;
+  every other predicate is ignored rather than rejected, exactly as in
+  `answer_pg_class`.
+- `answer_pg_roles(normalized) -> Option<Introspection>` - private. One
+  row for the single implicit superuser: `oid` `10`, `rolname`
+  `postgres`, every capability flag (`rolsuper`, `rolinherit`,
+  `rolcreaterole`, `rolcreatedb`, `rolcanlogin`, `rolreplication`,
+  `rolbypassrls`) `t`, `rolconnlimit` `-1`, `rolvaliduntil`/`rolconfig`
+  `NULL`. The name is fixed rather than echoed from the client's startup
+  message on purpose: nothing authenticates until M22, so the connecting
+  user's name is unverified text, and a `pg_namespace.nspowner` of `10`
+  has to resolve to a role this recognizer actually lists. A
+  `rolname = '<x>'` or `oid = <n>` predicate naming anything else answers
+  zero rows.
+- `answer_pg_user(normalized) -> Option<Introspection>` - private. The
+  same single role under `pg_user`'s own column names - `usename`,
+  `usesysid` (`10`), `usecreatedb`/`usesuper`/`userepl` (`t`), `passwd`
+  (`********`, never a credential), `valuntil`/`useconfig` (`NULL`) - and
+  filtered on `usename`/`usesysid`. It is a separate recognizer rather
+  than an alias of `answer_pg_roles` because a client selecting `usename`
+  from a `pg_roles`-shaped row set would find no such column.
 - `is_pg_relation(token) -> bool` - private, pure. `true` for a `FROM`
   token that is `pg_`-prefixed, either bare (`pg_index`) or
   `pg_catalog.`-prefixed (`pg_catalog.pg_settings`); the guard for

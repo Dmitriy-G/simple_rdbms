@@ -90,6 +90,9 @@ fn version_row() -> Vec<Option<String>> {
 const PG_CATALOG_NAMESPACE_OID: u32 = 11;
 const PUBLIC_NAMESPACE_OID: u32 = 2200;
 const FIXED_OWNER_OID: u32 = 10;
+const FIXED_ROLE_NAME: &str = "postgres";
+const DEFAULT_TABLESPACE_OID: u32 = 1663;
+const UTF8_ENCODING: u32 = 6;
 const TABLE_OID_BASE: u32 = 16384;
 
 fn fnv1a_32(input: &str) -> u32 {
@@ -398,6 +401,162 @@ fn answer_pg_type(normalized: &str) -> Option<Introspection> {
     })
 }
 
+fn bool_cell(value: bool) -> Option<String> {
+    Some(if value { "t" } else { "f" }.to_string())
+}
+
+fn database_oid(name: &str) -> u32 {
+    table_oid(&format!("pg_database.{name}"))
+}
+
+fn answer_pg_database(db: &Database, normalized: &str) -> Option<Introspection> {
+    if !recognizes_relation(normalized, "pg_database") {
+        return None;
+    }
+
+    let name = db.database_name().to_string();
+    let oid = database_oid(&name);
+    let mut rows = vec![vec![
+        Some(oid.to_string()),
+        Some(name.clone()),
+        Some(FIXED_OWNER_OID.to_string()),
+        Some(UTF8_ENCODING.to_string()),
+        Some("C".to_string()),
+        Some("C".to_string()),
+        bool_cell(false),
+        bool_cell(true),
+        Some("-1".to_string()),
+        Some(DEFAULT_TABLESPACE_OID.to_string()),
+        None,
+    ]];
+
+    if let Some(clause) = where_clause(normalized) {
+        if let Some(datname) = eq_string_predicate(clause, "datname") {
+            if datname != name {
+                rows.clear();
+            }
+        }
+        if let Some(filter) = eq_number_predicate(clause, "oid") {
+            if filter != u64::from(oid) {
+                rows.clear();
+            }
+        }
+    }
+
+    Some(Introspection {
+        columns: vec![
+            ("oid".to_string(), Type::OID),
+            ("datname".to_string(), Type::VARCHAR),
+            ("datdba".to_string(), Type::OID),
+            ("encoding".to_string(), Type::INT4),
+            ("datcollate".to_string(), Type::VARCHAR),
+            ("datctype".to_string(), Type::VARCHAR),
+            ("datistemplate".to_string(), Type::BOOL),
+            ("datallowconn".to_string(), Type::BOOL),
+            ("datconnlimit".to_string(), Type::INT4),
+            ("dattablespace".to_string(), Type::OID),
+            ("datacl".to_string(), Type::VARCHAR),
+        ],
+        rows,
+    })
+}
+
+fn answer_pg_roles(normalized: &str) -> Option<Introspection> {
+    if !recognizes_relation(normalized, "pg_roles") {
+        return None;
+    }
+
+    let mut rows = vec![vec![
+        Some(FIXED_OWNER_OID.to_string()),
+        Some(FIXED_ROLE_NAME.to_string()),
+        bool_cell(true),
+        bool_cell(true),
+        bool_cell(true),
+        bool_cell(true),
+        bool_cell(true),
+        bool_cell(true),
+        bool_cell(true),
+        Some("-1".to_string()),
+        None,
+        None,
+    ]];
+
+    if let Some(clause) = where_clause(normalized) {
+        if let Some(rolname) = eq_string_predicate(clause, "rolname") {
+            if rolname != FIXED_ROLE_NAME {
+                rows.clear();
+            }
+        }
+        if let Some(filter) = eq_number_predicate(clause, "oid") {
+            if filter != u64::from(FIXED_OWNER_OID) {
+                rows.clear();
+            }
+        }
+    }
+
+    Some(Introspection {
+        columns: vec![
+            ("oid".to_string(), Type::OID),
+            ("rolname".to_string(), Type::VARCHAR),
+            ("rolsuper".to_string(), Type::BOOL),
+            ("rolinherit".to_string(), Type::BOOL),
+            ("rolcreaterole".to_string(), Type::BOOL),
+            ("rolcreatedb".to_string(), Type::BOOL),
+            ("rolcanlogin".to_string(), Type::BOOL),
+            ("rolreplication".to_string(), Type::BOOL),
+            ("rolbypassrls".to_string(), Type::BOOL),
+            ("rolconnlimit".to_string(), Type::INT4),
+            ("rolvaliduntil".to_string(), Type::VARCHAR),
+            ("rolconfig".to_string(), Type::VARCHAR),
+        ],
+        rows,
+    })
+}
+
+fn answer_pg_user(normalized: &str) -> Option<Introspection> {
+    if !recognizes_relation(normalized, "pg_user") {
+        return None;
+    }
+
+    let mut rows = vec![vec![
+        Some(FIXED_ROLE_NAME.to_string()),
+        Some(FIXED_OWNER_OID.to_string()),
+        bool_cell(true),
+        bool_cell(true),
+        bool_cell(true),
+        Some("********".to_string()),
+        None,
+        None,
+    ]];
+
+    if let Some(clause) = where_clause(normalized) {
+        if let Some(usename) = eq_string_predicate(clause, "usename") {
+            if usename != FIXED_ROLE_NAME {
+                rows.clear();
+            }
+        }
+        if let Some(filter) = eq_number_predicate(clause, "usesysid") {
+            if filter != u64::from(FIXED_OWNER_OID) {
+                rows.clear();
+            }
+        }
+    }
+
+    Some(Introspection {
+        columns: vec![
+            ("usename".to_string(), Type::VARCHAR),
+            ("usesysid".to_string(), Type::OID),
+            ("usecreatedb".to_string(), Type::BOOL),
+            ("usesuper".to_string(), Type::BOOL),
+            ("userepl".to_string(), Type::BOOL),
+            ("passwd".to_string(), Type::VARCHAR),
+            ("valuntil".to_string(), Type::VARCHAR),
+            ("useconfig".to_string(), Type::VARCHAR),
+        ],
+        rows,
+    })
+}
+
 fn is_pg_relation(token: &str) -> bool {
     token.strip_prefix("pg_catalog.").unwrap_or(token).starts_with("pg_")
 }
@@ -511,6 +670,15 @@ pub fn answer(db: &Database, sql: &str) -> Option<Introspection> {
         return Some(introspection);
     }
     if let Some(introspection) = answer_pg_type(&normalized) {
+        return Some(introspection);
+    }
+    if let Some(introspection) = answer_pg_database(db, &normalized) {
+        return Some(introspection);
+    }
+    if let Some(introspection) = answer_pg_roles(&normalized) {
+        return Some(introspection);
+    }
+    if let Some(introspection) = answer_pg_user(&normalized) {
         return Some(introspection);
     }
     if let Some(introspection) = answer_unrecognized_pg_relation(&normalized) {

@@ -115,6 +115,37 @@ listener and a `tempfile`-backed database, in the same shape as
   deserialization failure), so it returns `0A000` - and re-preparing the
   identical text then reads the real row, which is what proves the error
   is about the cached plan and not about the table.
+- `pg_database_names_the_one_database_this_process_serves` - the P-90
+  regression, and the reason every assertion here is about row *content*:
+  before the fix `pg_database` was claimed by the zero-row catch-all, so a
+  query that merely "succeeded" proved nothing at all. `SELECT oid,
+  datname, datdba, datallowconn FROM pg_database` answers exactly one row
+  whose `datname` is the harness's own file stem
+  (`wire_pg_catalog_pg_database`, from `open(dir, name)`), not a constant -
+  which is what ties the answer to `Database::database_name()` rather than
+  to a fabricated name - with `datallowconn = 't'` and `datdba = '10'`.
+  The filters are then exercised both ways: `datname =` the real name
+  answers one row, `datname = 'nope'` answers zero, and `oid =` the oid
+  the first query reported answers one, proving the fabricated oid is
+  stable rather than recomputed per query.
+- `pg_roles_and_pg_user_answer_the_one_implicit_superuser` - `pg_roles`
+  answers one row, `postgres`, with `rolsuper`/`rolcanlogin` as the
+  text-format `t`; `pg_user` answers the same role under its own column
+  names, with `usesysid` equal to that role's `oid`. The last assertion is
+  the one worth keeping: every `nspowner` `pg_namespace` reports must
+  equal that same oid, so a client resolving a schema's owner finds a role
+  the server actually lists instead of a dangling oid. It reads both
+  namespace rows rather than filtering on `nspname`, because
+  `answer_pg_namespace` deliberately honors no `WHERE` clause at all
+  (`pg_catalog.MD`). A `rolname` filter naming anyone else answers zero
+  rows.
+- `pg_database_over_the_extended_protocol_describes_its_columns` -
+  `prepare("SELECT datname FROM pg_database")` reports zero parameters and
+  `query` returns the one row, proving the new recognizers are reached
+  from `StatementParser::parse_sql` and `ExtendedQueryHandler::do_query`
+  and not only from the simple query path - the same two-call shape
+  `pg_class_over_the_extended_protocol_sees_a_table_created_after_parse`
+  checks for `pg_class`.
 
 ## Usage Example
 

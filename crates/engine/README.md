@@ -122,7 +122,12 @@ placeholder (`planner::substitute_parameters`) before binding; a count
 mismatch is `common::Error::ParameterCountMismatch` (`08P01`).
 `Database::describe(sql)` answers a placeholder's inferred type and a
 `SELECT`'s result column shape (`planner::infer_parameter_types`) without
-starting a transaction, taking a lock, or executing a plan. Plain
+starting a transaction, taking a lock, or executing a plan.
+`Database::database_name()` answers what this database is called over a
+client protocol — `DbConfig::db_path`'s file stem, fixed at open time —
+which is what `server`'s `pg_database` answer reports; it is defined here
+so nothing downstream re-derives a name from the path
+([database.MD](src/database.MD)). Plain
 `Database::execute` is unaffected: a statement containing an
 unsubstituted `$n` still reaches `planner::Binder`, which rejects it as
 `common::Error::UndefinedParameter` (`42P02`), exactly as it did before
