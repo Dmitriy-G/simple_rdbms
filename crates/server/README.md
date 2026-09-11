@@ -360,7 +360,8 @@ client this crate promises works when nobody has actually run it:
 | --- | --- | --- | --- |
 | `tokio_postgres` | Simple query: `CREATE TABLE`/`INSERT`/`SELECT`/`BEGIN`/`COMMIT`/`ROLLBACK`/`EXPLAIN`/`SET`/`SHOW`/`RESET` | Works | Automated (`tests/wire_startup.rs`, `tests/wire_simple_query.rs`, `tests/wire_errors.rs`, `tests/wire_set_show_reset.rs`) |
 | `tokio_postgres` | Extended query: `prepare`/`prepare_typed`/`query`/`execute`, bound parameters (text and binary), portal suspension via `query_portal` | Works | Automated (`tests/wire_extended_query.rs`) |
-| `tokio_postgres` | `pg_catalog` introspection over both protocols: `select version()`, `pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`, and an unrecognized `pg_`-relation | Works | Automated (`tests/wire_pg_catalog.rs`) |
+| `tokio_postgres` | `pg_catalog` introspection over both protocols: `pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`, and an unrecognized `pg_`-relation | Works | Automated (`tests/wire_pg_catalog.rs`) |
+| `tokio_postgres` | `select version()` — answered by the engine as a session-context expression, no longer intercepted here | Works | Automated (`tests/wire_pg_catalog.rs`, unchanged across the move) |
 | `tokio_postgres` | `pg_database`, `pg_roles` and `pg_user` over both protocols: the one database row is named after the db file, the one role row is the owner `pg_namespace` reports | Works | Automated (`tests/wire_pg_catalog.rs`) |
 | DataGrip (PostgreSQL JDBC) | Object tree: a database node, its schemas and its tables | Not verified | The gap P-90 reported was found in a real DataGrip session, but only the automated tests above have been run against the fix |
 | `psql` | Simple query: `CREATE TABLE`/`INSERT`/`SELECT`/`BEGIN`/`COMMIT` | Works | Manual, real container - transcript above in "Verify, don't assume" |
@@ -384,8 +385,8 @@ would answer with come from `answer_pg_attribute` alone, not from
 whatever the join actually asked for, so `\d <table>`'s real output
 against this server is unknown rather than assumed working.
 
-`pg_catalog` recognizes exactly eight query shapes today (`src/pg_catalog.MD`):
-`select version()`, and a single-table `FROM` naming `pg_namespace`,
+`pg_catalog` recognizes exactly seven query shapes today (`src/pg_catalog.MD`),
+every one of them a single-table `FROM` naming `pg_namespace`,
 `pg_class`, `pg_attribute`, `pg_type`, `pg_database`, `pg_roles` or
 `pg_user` (each honoring the specific
 predicates `src/pg_catalog.MD` lists - `relkind IN (...)`, `nspname =`,

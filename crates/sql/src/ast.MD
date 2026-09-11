@@ -81,8 +81,12 @@ consumes.
   `SessionUser`, `Version`. It is deliberately **not** a function
   registry; `planner::binder` replaces each with a value at bind time,
   and a general scalar-function subsystem - a function catalog,
-  resolution by name and argument types, an evaluator - is a milestone of
-  its own rather than an extension of this enum. An identifier that is
+  resolution by name and argument types, an evaluator - belongs to
+  `docs/ROADMAP.md`'s M20 rather than to this enum. The test for whether
+  a new name belongs here is in
+  `docs/adr/0022-session-context-expressions.md`: a value the connection
+  knows about itself, with no arguments and no per-row variation, may
+  join the list; anything else waits for M20. An identifier that is
   *not* on this list and *is* followed by `(` is
   `SqlError::UndefinedFunction`, so `now()` reports what is actually
   missing instead of failing as a syntax error.

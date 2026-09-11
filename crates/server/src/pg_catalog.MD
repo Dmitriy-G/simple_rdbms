@@ -1,7 +1,7 @@
 # pg_catalog
 
 Intercepts the introspection queries a real PostgreSQL client library sends
-before it will trust a connection - `select version()`, `pg_namespace`,
+before it will trust a connection - `pg_namespace`,
 `pg_class` (M13.4 subtask 2), `pg_attribute` and `pg_type` (M13.4
 subtask 3), `pg_database`, `pg_roles` and `pg_user` (P-90), and any other
 `pg_`-named relation at all (M13.4 subtask 4) -
@@ -9,6 +9,18 @@ and answers them from this engine's own live catalog rather than letting
 them reach `sql::Parser`, which knows nothing about any relation named
 `pg_*` and would fail every one of them with `42P01 undefined_table`,
 killing the client's connection before its first real statement.
+
+**Every shape here is a relation reached through a `FROM`, and that is
+now the module's whole remit.** `select version()` used to be intercepted
+here too, and was deleted when the engine learned to answer `version()`
+as an ordinary expression (P-91,
+`docs/adr/0022-session-context-expressions.md`): a name the engine
+answers is never also matched as text by this module, because two layers
+answering one question means two places to change and this one wins
+silently, running first. The same rule keeps `current_catalog`,
+`current_schema` and `current_user` out of this file - a client sends
+them in a select list of several items, and an interception can only
+answer a statement it matches whole.
 `crates/server/src/wire.rs` calls `answer` at the very front of
 `SimpleQueryHandler::do_query`, ahead of `intercept_set_show_reset`, so a
 recognized introspection query never reaches `engine::Database::execute`
@@ -135,7 +147,7 @@ of always saying "nothing").
   is sufficient for every recognized shape this module matches.
 - `answer(db, sql) -> Option<Introspection>` - normalizes `sql`, gives
   `shadows_a_real_table` first refusal, and then tries
-  each recognizer in turn (`select version()`, then `pg_namespace`, then
+  each recognizer in turn (`pg_namespace`, then
   `pg_class`, then `pg_attribute`, then `pg_type`, then `pg_database`,
   `pg_roles` and `pg_user`, then the
   `answer_unrecognized_pg_relation` catch-all, which must stay last or it
@@ -156,16 +168,8 @@ of always saying "nothing").
   `pg_catalog.`-qualified name is excluded: it names the catalog rather
   than whatever the bare name resolves to, and the engine's grammar could
   not run it anyway.
-- `is_select_version(normalized)` - private, pure. `true` for
-  `"select version()"` and the same with a trailing bare or `as`-prefixed
-  single-word alias (`"select version() v"`, `"select version() as v"`),
-  matching how a real client may write it; `false` for anything else,
-  including a second call or extra arguments.
-- `version_row()` - private, pure. The one-cell row `answer` returns for
-  `select version()`: `PostgreSQL 15.0 (simple_rdbms <CARGO_PKG_VERSION>)`.
-  Real clients gate feature detection on the leading `PostgreSQL <major>`
-  token, which is why that prefix is fixed text rather than derived from
-  anything.
+(`is_select_version` and `version_row` were deleted when the engine
+learned to answer `version()` itself - see the module header above.)
 - `recognizes_relation(normalized, relation)` / `relation_after_from(normalized)` /
   `relation_matches(token, relation)` - private, pure. `relation_after_from`
   splits the normalized query on spaces and returns the token immediately

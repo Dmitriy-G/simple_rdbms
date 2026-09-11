@@ -583,6 +583,16 @@ group yields `NULL` except `COUNT`, which yields 0). Hash aggregation
 with a spill path when the group table exceeds its memory budget, and a
 grouping-key check that rejects a select-list column that is neither
 grouped nor aggregated with `42803`.
+**This milestone owns the scalar-function subsystem, for the whole
+project.** `COUNT(*)` cannot be parsed without a function-call grammar,
+resolved without a function catalog, or evaluated without an evaluator —
+so the machinery every later function needs is built here whether or not
+it is called that. `docs/adr/0022-session-context-expressions.md` names
+M20 as its owner and forbids the alternative: the closed allowlist of
+session-context expressions (`current_schema`, `version()`, and the four
+others) that answers a driver's connection setup today is **not** to be
+extended one name at a time into a substitute for it. Until this lands,
+any other identifier in call position is `42883 undefined_function`.
 
 ## M21 — Dates, times and exact numerics 🆕 New
 **Problem:** `DataType` is `Boolean`, `Integer`, `BigInt`, `Double`,
@@ -593,7 +603,10 @@ stored at all, which rules out most real schemas.
 plus `NUMERIC(p, s)`/`DECIMAL` with exact arithmetic. Memcomparable
 encodings for each so they can be indexed, `now()`/`current_timestamp`,
 date arithmetic against `INTERVAL`, and a text format matching Postgres's
-so clients parse it. Do this before M13.2: every column in a
+so clients parse it. `now()` and `current_timestamp` are *consumers* of
+M20's function subsystem, not a reason to build a second one and not
+names to add to the session-context allowlist: they vary per call, which
+is exactly the line `docs/adr/0022-session-context-expressions.md` draws. Do this before M13.2: every column in a
 `RowDescription` needs a real Postgres type OID, and mapping a type
 system that is still growing means doing that work twice.
 
@@ -616,7 +629,11 @@ server actually lists
 (`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`). This
 milestone is what turns that fabrication into the session's real
 authenticated identity, and what gives `passwd`'s `********` a credential
-to be redacting.
+to be redacting. The same fixed name is what `current_user`,
+`session_user` and `user` evaluate to
+(`docs/adr/0022-session-context-expressions.md`), so this milestone has
+to replace it in one place — `planner::SessionContext`, built from
+`common::DbConfig` — rather than in each of them.
 
 ## M23 — Joins and cost-based planning ⏸️ Hold
 **Problem:** three things the planner cannot do are really one thing it

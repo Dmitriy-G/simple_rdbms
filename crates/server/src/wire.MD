@@ -128,8 +128,8 @@ M13.4 subtask 1 intercepts real clients' introspection queries even
 earlier than that: `do_query` calls `pg_catalog::answer` (`src/pg_catalog.MD`)
 through the same `on_session` door every other query path takes, before
 `intercept_set_show_reset` ever runs, so a recognized `pg_catalog` query
-(`select version()`, `pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`
-as of M13.4 subtask 3) never reaches `sql::Parser` at all - that grammar
+(`pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`, `pg_database`,
+`pg_roles`, `pg_user`) never reaches `sql::Parser` at all - that grammar
 has no notion of any `pg_*` relation and would fail every one
 of them with `42P01 undefined_table`, which is exactly what killed a real
 client's connection before this subtask. `db.table_names()`/
@@ -597,8 +597,9 @@ fetched in limited batches via `Transaction::query_portal` suspends and
 resumes correctly, returning the same rows exactly once and completing in
 a single `Execute` when the limit exceeds the row count.
 `crates/server/tests/wire_pg_catalog.rs` proves `pg_catalog::answer`'s
-interception (M13.4) over both protocols: `select version()`,
-`pg_namespace`, `pg_class`, `pg_attribute`, `pg_type` and any other
+interception (M13.4) over both protocols:
+`pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`, `pg_database`,
+`pg_roles`, `pg_user` and any other
 `pg_`-prefixed relation all answer correctly over `simple_query`, an
 ordinary `SELECT` is unaffected, and (subtask 5) preparing a `pg_class`
 query over the extended protocol succeeds with zero reported parameters

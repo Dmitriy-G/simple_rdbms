@@ -52,12 +52,19 @@ as a projection over `planner::LogicalPlan::OneRow`.
 What does not exist yet: `DELETE`/`UPDATE`, multi-table joins, column
 constraints (`NOT NULL`/`UNIQUE`/`FOREIGN KEY`), authentication and access
 control, serializable isolation, and any SQL for choosing an isolation
-level. Nor is there any **scalar function machinery**: the binder
-resolves every bare name as a column reference, so `current_catalog`,
-`current_schema` and `current_database()` in a select list fail as
-`42703 undefined_column` — `select version()` looks like an exception
-only because the server's `pg_catalog` interception matches its text
-before the engine ever sees it. See
+level. There is no **scalar function machinery** either, and one closed
+exception to that: `current_catalog`, `current_schema`, `current_user`,
+`session_user`, `user`, `current_database()` and `version()` are
+**session-context expressions**, recognized by the parser and turned into
+a constant by the binder, so they work in a select list of several items,
+inside a `WHERE`, over both wire protocols and from `cli`. Every other
+identifier in call position — `now()`, `count(*)` — is `42883
+undefined_function`. That list is an allowlist and is not to be extended:
+`docs/adr/0022-session-context-expressions.md` gives M20, the aggregation
+milestone, the whole scalar-function subsystem, and states the test for
+which side a new name falls on. It is also why `select version()` is no
+longer intercepted by the server — a name the engine answers is never
+also matched as text by the wire layer. See
 `docs/ROADMAP.md` for exactly what closes each of those gaps and in what
 order.
 

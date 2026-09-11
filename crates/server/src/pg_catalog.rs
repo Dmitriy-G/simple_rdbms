@@ -71,22 +71,6 @@ pub fn normalize(sql: &str) -> String {
     out.trim_end_matches(';').trim().to_string()
 }
 
-fn is_select_version(normalized: &str) -> bool {
-    let Some(rest) = normalized.strip_prefix("select version()") else {
-        return false;
-    };
-    let rest = rest.trim();
-    if rest.is_empty() {
-        return true;
-    }
-    let rest = rest.strip_prefix("as ").unwrap_or(rest);
-    !rest.is_empty() && !rest.contains(' ')
-}
-
-fn version_row() -> Vec<Option<String>> {
-    vec![Some(format!("PostgreSQL 15.0 (simple_rdbms {})", env!("CARGO_PKG_VERSION")))]
-}
-
 const PG_CATALOG_NAMESPACE_OID: u32 = 11;
 const PUBLIC_NAMESPACE_OID: u32 = 2200;
 const FIXED_OWNER_OID: u32 = 10;
@@ -653,12 +637,6 @@ pub fn answer(db: &Database, sql: &str) -> Option<Introspection> {
     let normalized = normalize(sql);
     if shadows_a_real_table(db, &normalized) {
         return None;
-    }
-    if is_select_version(&normalized) {
-        return Some(Introspection {
-            columns: vec![("version".to_string(), Type::VARCHAR)],
-            rows: vec![version_row()],
-        });
     }
     if let Some(introspection) = answer_pg_namespace(&normalized) {
         return Some(introspection);

@@ -28,10 +28,17 @@ listener and a `tempfile`-backed database, in the same shape as
   tests that only need to know how many rows came back.
 - `select_version_lowercase_answers_a_postgresql_version_string` -
   `select version()` answers one row whose `version` column starts with
-  `PostgreSQL `.
+  `PostgreSQL `. These two tests outlived the code they were written
+  for: `version()` used to be matched as text by `pg_catalog::answer` and
+  is now an ordinary session-context expression the engine answers
+  (P-91, `docs/adr/0022-session-context-expressions.md`). Neither
+  assertion changed when the answering layer did, which is the evidence
+  that the move was transparent to a client - the contract is a column
+  named `version` starting `PostgreSQL `, not which layer produced it.
 - `select_version_uppercase_with_semicolon_answers_a_postgresql_version_string` -
-  the same, but `SELECT VERSION();` - proving `pg_catalog::normalize`'s
-  case-folding and trailing-semicolon stripping both work.
+  the same, but `SELECT VERSION();` - now proving the *lexer's*
+  case-insensitive keyword match and the parser's trailing-semicolon
+  handling rather than `pg_catalog::normalize`'s.
 - `an_ordinary_select_is_unaffected` - a real table's `SELECT a FROM t`
   still round-trips normally, and a FROM-less `SELECT 1` - a query
   `pg_catalog::answer` does not recognize - still passes straight through
