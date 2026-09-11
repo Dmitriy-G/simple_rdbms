@@ -19,8 +19,9 @@ parse error (not a panic).
   hand-counting bytes.
 - `col_expr(name) -> Expr` - private. `Expr::Column { table: None, name }`,
   shorthand for the bare-column case every pre-B-2 test still exercises.
-- `table_ref(name) -> TableRef` - private. `TableRef { name, alias: None }`,
-  shorthand for an unaliased `FROM` target.
+- `table_ref(name) -> Option<TableRef>` - private.
+  `Some(TableRef { name, alias: None })`, shorthand for an unaliased
+  `FROM` target in the `Option` shape `SelectStatement::from` now has.
 - `parses_create_table` - a `CREATE TABLE` with `INTEGER`, `TEXT`, and
   `BOOLEAN` columns parses to the expected AST.
 - `create_table_type_names_are_case_insensitive` - lowercase `create
@@ -46,6 +47,12 @@ parse error (not a panic).
 - `parses_qualified_column_reference` - `t.a` in the select list and `t.b`
   in the `WHERE` clause both parse to `Expr::Column { table: Some("t"),
   .. }`.
+- `parses_a_select_with_no_from_clause` - `SELECT 1` and `SELECT 'keep
+  alive'` parse with `from: None` instead of failing on a missing `FROM`.
+- `parses_several_expressions_with_no_from_clause` - `SELECT 1, 'x'`
+  keeps both items in order with no `FROM` clause.
+- `a_wildcard_with_no_from_clause_is_a_syntax_error` - `SELECT *` alone
+  reports `SqlError::WildcardWithoutFrom`.
 - `parses_table_alias_with_and_without_as` - `FROM t AS u` and `FROM t u`
   both parse to the same `TableRef { name: "t", alias: Some("u") }`.
 - `from_without_an_alias_still_allows_a_where_clause` - `FROM t WHERE a =

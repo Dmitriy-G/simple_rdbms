@@ -21,6 +21,15 @@ unknown columns/tables and type mismatches are rejected.
   expect a successful bind.
 - `binds_select_wildcard_to_every_column` - `SELECT * FROM users` expands
   to one projection per column and no predicate.
+- `binds_a_select_with_no_from_clause_against_no_table` - `SELECT 1,
+  'keep alive'` binds with `table_id: None` and one projection per select
+  item.
+- `a_column_in_a_select_with_no_from_clause_is_unknown` - `SELECT id` with
+  no `FROM` returns `PlannerError::UnknownColumn`, since the select list
+  is bound in an empty column scope.
+- `a_select_with_no_from_clause_plans_a_projection_over_one_row` -
+  `planner::plan` lowers that bound statement to `Projection` over
+  `LogicalPlan::OneRow`.
 - `binds_select_with_matching_where_clause` - a `WHERE` clause comparing
   an `Integer` column and an `AND`-ed `Boolean` column binds successfully.
 - `rejects_unknown_table` - selecting from a table absent from the catalog

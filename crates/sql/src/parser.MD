@@ -47,7 +47,13 @@ cursor rather than by recursing over the input text.
   else, including `SELECT verbose FROM t`, it lexes and parses as a plain
   column reference.
 - `Parser::parse_select(&mut self) -> Result<SelectStatement, SqlError>` -
-  private. Parses a `SELECT` statement.
+  private. Parses a `SELECT` statement. The `FROM` clause is optional: a
+  select list not followed by the `FROM` keyword yields `from: None`,
+  which is how `SELECT 1` and a JDBC client's `SELECT 'keep alive'`
+  parse. The one shape refused there is a `*` in the select list, which
+  has no columns to expand with no table named and so raises
+  `SqlError::WildcardWithoutFrom` at the select list's own offset, the
+  same syntax error PostgreSQL reports for `SELECT *`.
 - `Parser::parse_select_list(&mut self) -> Result<Vec<SelectItem>, SqlError>` -
   private. Parses a `select_list`: either a bare `*` or a comma-separated
   list of expressions. No `AS alias` here yet - `SelectItem` has no alias

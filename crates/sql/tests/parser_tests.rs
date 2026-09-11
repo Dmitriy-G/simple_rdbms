@@ -8,8 +8,8 @@ fn col_expr(name: &str) -> Expr {
     Expr::Column { table: None, name: name.to_string() }
 }
 
-fn table_ref(name: &str) -> TableRef {
-    TableRef { name: name.to_string(), alias: None }
+fn table_ref(name: &str) -> Option<TableRef> {
+    Some(TableRef { name: name.to_string(), alias: None })
 }
 
 fn try_parse(source: &str) -> Result<Statement, SqlError> {
@@ -212,14 +212,59 @@ fn parses_qualified_column_reference() {
 }
 
 #[test]
+fn parses_a_select_with_no_from_clause() {
+    let stmt = parse("SELECT 1");
+    assert_eq!(
+        stmt,
+        Statement::Select(SelectStatement {
+            items: vec![SelectItem::Expr(Expr::Literal(Value::BigInt(1)))],
+            from: None,
+            where_clause: None,
+        })
+    );
+
+    let stmt = parse("SELECT 'keep alive'");
+    assert_eq!(
+        stmt,
+        Statement::Select(SelectStatement {
+            items: vec![SelectItem::Expr(Expr::Literal(Value::Varchar("keep alive".to_string())))],
+            from: None,
+            where_clause: None,
+        })
+    );
+}
+
+#[test]
+fn parses_several_expressions_with_no_from_clause() {
+    let stmt = parse("SELECT 1, 'x'");
+    assert_eq!(
+        stmt,
+        Statement::Select(SelectStatement {
+            items: vec![
+                SelectItem::Expr(Expr::Literal(Value::BigInt(1))),
+                SelectItem::Expr(Expr::Literal(Value::Varchar("x".to_string()))),
+            ],
+            from: None,
+            where_clause: None,
+        })
+    );
+}
+
+#[test]
+fn a_wildcard_with_no_from_clause_is_a_syntax_error() {
+    let err = try_parse("SELECT *").expect_err("SELECT * with no FROM must not parse");
+    assert!(matches!(err, SqlError::WildcardWithoutFrom { .. }), "unexpected error: {err}");
+}
+
+#[test]
 fn parses_table_alias_with_and_without_as() {
     let stmt = parse("SELECT * FROM t AS u");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
-    assert_eq!(select.from, TableRef { name: "t".to_string(), alias: Some("u".to_string()) });
+    assert_eq!(select.from, Some(TableRef { name: "t".to_string(), alias: Some("u".to_string()) }));
 
     let stmt = parse("SELECT * FROM t u");
     let Statement::Select(select) = stmt else { panic!("expected a SELECT") };
-    assert_eq!(select.from, TableRef { name: "t".to_string(), alias: Some("u".to_string()) });
+    assert_eq!(select.from, Some(TableRef { name: "t".to_string(), alias: Some("u".to_string()) }));
 }
 
 #[test]

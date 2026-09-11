@@ -33,7 +33,8 @@ reused across transactions.
 - `expression` - `evaluate`, evaluates a bound expression against a
   tuple. See [expression.MD](src/expression.MD).
 - `operators` - `FilterExecutor`, `IndexScanExecutor`, `InsertExecutor`,
-  `NestedLoopJoinExecutor`, `ProjectionExecutor`, `SeqScanExecutor`: the
+  `NestedLoopJoinExecutor`, `OneRowExecutor`, `ProjectionExecutor`,
+  `SeqScanExecutor`: the
   concrete operators, one per physical plan node kind. See
   [operators/mod.MD](src/operators/mod.MD).
 

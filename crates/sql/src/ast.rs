@@ -15,7 +15,7 @@ pub enum Statement {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectStatement {
     pub items: Vec<SelectItem>,
-    pub from: TableRef,
+    pub from: Option<TableRef>,
     pub where_clause: Option<Expr>,
 }
 

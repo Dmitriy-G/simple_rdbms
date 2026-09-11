@@ -291,7 +291,7 @@ distinct from the interactive `cli` REPL; and container packaging
 file on a named volume, and `SIGTERM` handled as a graceful checkpoint
 -and-close instead of every restart paying for a full crash recovery.
 
-## M13 — Speaking SQL over the network 🚧 In Progress
+## M13 — Speaking SQL over the network ✅ Done
 **Problem:** everything built so far requires an in-process `Database`
 handle - `cli`'s REPL and `server`'s metrics/health endpoints both open
 the database directly in the same process that uses it. Nothing external
@@ -307,7 +307,6 @@ Postgres's protocol was chosen over Arrow Flight SQL or a bespoke driver.
 is the reference to study for M13.4's `pg_catalog` support - another
 `pgwire`-based engine that had to answer the same catalog-introspection
 queries.
-Reviewed: 2026-09-11 — full pass; gating: P-77, P-78, P-79; non-gating: P-80, P-81, P-82, P-83, P-84, P-85
 
 ### M13.1 — Many connections against one engine ✅ Done
 **Problem:** a wire listener serves many connections, each able to submit
@@ -378,7 +377,7 @@ as a new grammar element, parameter type inference, binary format for
 numerics, and `PortalSuspended` for fetch limits. Target: pgjdbc
 `PreparedStatement` works. Simple query alone gets a demo, not a driver.
 
-### M13.4 — `pg_catalog` for real SQL clients 🚧 In Progress
+### M13.4 — `pg_catalog` for real SQL clients ✅ Done
 **Problem:** ODBC needs no separate driver work - psqlODBC speaks the
 same protocol as M13.2/M13.3 - but every real SQL client, ODBC or
 otherwise, runs introspection queries against `pg_class`, `pg_namespace`,

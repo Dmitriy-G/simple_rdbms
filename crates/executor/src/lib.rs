@@ -11,6 +11,6 @@ pub use error::ExecutorError;
 pub use executor::Executor;
 pub use expression::evaluate;
 pub use operators::{
-    FilterExecutor, IndexScanExecutor, InsertExecutor, NestedLoopJoinExecutor, ProjectionExecutor,
-    SeqScanExecutor,
+    FilterExecutor, IndexScanExecutor, InsertExecutor, NestedLoopJoinExecutor, OneRowExecutor,
+    ProjectionExecutor, SeqScanExecutor,
 };

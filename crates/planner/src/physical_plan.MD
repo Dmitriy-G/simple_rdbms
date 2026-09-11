@@ -8,7 +8,11 @@ optimizer's algorithm-selection rules have a type that can only represent
 
 ## Key Components
 
-- `PhysicalPlan` - the enum. `SeqScan { table_id }` is a sequential scan
+- `PhysicalPlan` - the enum. `OneRow` is the single-row, zero-column
+  source under a `SELECT` with no `FROM` clause, run by
+  `executor::OneRowExecutor` (`executor::operators::one_row.MD`) and
+  mirroring `LogicalPlan::OneRow` exactly, since producing one row admits
+  only one algorithm. `SeqScan { table_id }` is a sequential scan
   of a table's heap file. `IndexScan { index_id, table_id, start, end }`
   is a `storage::btree::BTreeIndex` range scan over `[start, end)`,
   fetching each matching row from the table's heap by `Rid` - mirrors

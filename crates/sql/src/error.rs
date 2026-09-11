@@ -28,6 +28,9 @@ pub enum SqlError {
 
     #[error("EXPLAIN cannot be nested at offset {offset}")]
     NestedExplain { offset: usize },
+
+    #[error("SELECT * with no FROM clause is not valid at offset {offset}")]
+    WildcardWithoutFrom { offset: usize },
 }
 
 impl SqlError {
@@ -39,7 +42,8 @@ impl SqlError {
             | SqlError::InvalidNumericLiteral { offset, .. }
             | SqlError::InvalidParameter { offset, .. }
             | SqlError::ExplainOfTransactionControl { offset }
-            | SqlError::NestedExplain { offset } => *offset,
+            | SqlError::NestedExplain { offset }
+            | SqlError::WildcardWithoutFrom { offset } => *offset,
             SqlError::UnexpectedEof { .. } => source.len(),
         }
     }

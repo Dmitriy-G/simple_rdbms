@@ -6,6 +6,7 @@ use crate::explain::{self, ColumnList};
 
 #[derive(Debug, Clone)]
 pub enum LogicalPlan {
+    OneRow,
     SeqScan { table_id: TableId },
     IndexScan { index_id: IndexId, table_id: TableId, start: Option<Vec<u8>>, end: Option<Vec<u8>> },
     Filter { predicate: BoundExpr, input: Box<LogicalPlan> },
@@ -35,7 +36,8 @@ pub(crate) fn output_columns(plan: &LogicalPlan, catalog: &Catalog) -> ColumnLis
             cols.extend(output_columns(right, catalog));
             cols
         }
-        LogicalPlan::Insert { .. }
+        LogicalPlan::OneRow
+        | LogicalPlan::Insert { .. }
         | LogicalPlan::CreateTable { .. }
         | LogicalPlan::CreateIndex { .. } => Vec::new(),
     }
@@ -50,6 +52,12 @@ pub(crate) fn render(
 ) {
     let indent = "  ".repeat(depth);
     match plan {
+        LogicalPlan::OneRow => {
+            out.push(format!("{indent}One Row"));
+            if verbose {
+                explain::push_verbose_line(out, depth, vec![explain::verbose_cols_line(&[])]);
+            }
+        }
         LogicalPlan::SeqScan { table_id } => {
             out.push(format!(
                 "{indent}Seq Scan  table={}",

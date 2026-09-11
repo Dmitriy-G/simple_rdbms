@@ -7,7 +7,10 @@ use crate::logical_plan::LogicalPlan;
 pub fn plan(statement: BoundStatement) -> Result<LogicalPlan, PlannerError> {
     let plan = match statement {
         BoundStatement::Select(select) => {
-            let scan = LogicalPlan::SeqScan { table_id: select.table_id };
+            let scan = match select.table_id {
+                Some(table_id) => LogicalPlan::SeqScan { table_id },
+                None => LogicalPlan::OneRow,
+            };
             let input = match select.predicate {
                 Some(predicate) => LogicalPlan::Filter { predicate, input: Box::new(scan) },
                 None => scan,

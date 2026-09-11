@@ -20,6 +20,15 @@ pipeline, against a real (tempfile-backed) database file.
 - `create_insert_and_select_star_preserves_insertion_order` - `CREATE
   TABLE`, a multi-row `INSERT`, and `SELECT *` come back in insertion
   order.
+- `a_select_with_no_from_clause_returns_exactly_one_row` - `SELECT 1,
+  'keep alive'`, the shape a JDBC client sends as a keep-alive, answers
+  one row of positional `columnN` names rather than a syntax error.
+- `a_select_with_no_from_clause_keeps_its_where_clause` - `SELECT 1 WHERE
+  FALSE` filters that single row away and `WHERE TRUE` keeps it, which is
+  the `Filter` sitting between the projection and `OneRow`.
+- `a_wildcard_with_no_from_clause_is_rejected` - `SELECT *` with no table
+  named stays a `42601` syntax error, since there are no columns for `*`
+  to expand to.
 - `select_list_can_subset_and_reorder_columns` - `SELECT b, a` returns
   exactly those two columns in that order.
 - `where_clause_evaluates_eq_lt_and_or_and_excludes_null_predicate_rows` -

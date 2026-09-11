@@ -7,6 +7,7 @@ use crate::logical_plan::LogicalPlan;
 
 #[derive(Debug, Clone)]
 pub enum PhysicalPlan {
+    OneRow,
     SeqScan { table_id: TableId },
     IndexScan { index_id: IndexId, table_id: TableId, start: Option<Vec<u8>>, end: Option<Vec<u8>> },
     Filter { predicate: BoundExpr, input: Box<PhysicalPlan> },
@@ -19,6 +20,7 @@ pub enum PhysicalPlan {
 
 pub fn to_physical(plan: LogicalPlan) -> PhysicalPlan {
     match plan {
+        LogicalPlan::OneRow => PhysicalPlan::OneRow,
         LogicalPlan::SeqScan { table_id } => PhysicalPlan::SeqScan { table_id },
         LogicalPlan::IndexScan { index_id, table_id, start, end } => {
             PhysicalPlan::IndexScan { index_id, table_id, start, end }
@@ -63,7 +65,8 @@ pub(crate) fn output_columns(plan: &PhysicalPlan, catalog: &Catalog) -> ColumnLi
             cols.extend(output_columns(right, catalog));
             cols
         }
-        PhysicalPlan::Insert { .. }
+        PhysicalPlan::OneRow
+        | PhysicalPlan::Insert { .. }
         | PhysicalPlan::CreateTable { .. }
         | PhysicalPlan::CreateIndex { .. } => Vec::new(),
     }
@@ -78,6 +81,12 @@ pub(crate) fn render(
 ) {
     let indent = "  ".repeat(depth);
     match plan {
+        PhysicalPlan::OneRow => {
+            out.push(format!("{indent}One Row"));
+            if verbose {
+                explain::push_verbose_line(out, depth, vec![explain::verbose_cols_line(&[])]);
+            }
+        }
         PhysicalPlan::SeqScan { table_id } => {
             out.push(format!(
                 "{indent}Seq Scan  table={}",

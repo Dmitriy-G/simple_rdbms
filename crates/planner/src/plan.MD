@@ -7,7 +7,10 @@ Lowers a bound statement into a `LogicalPlan`.
 - `plan(statement) -> Result<LogicalPlan, PlannerError>` - lowers a bound
   statement into a `LogicalPlan`. A `SELECT` always builds the fixed shape
   `Projection(Filter(SeqScan))` (dropping the `Filter` node when there is
-  no `WHERE` clause) - always a `SeqScan` at this stage, never an
+  no `WHERE` clause), with `OneRow` in the `SeqScan`'s place when the
+  bound statement carries no `table_id` - the `SELECT` had no `FROM`
+  clause, so there is nothing to scan and the projection evaluates against
+  one anonymous row - always a `SeqScan` at this stage, never an
   `IndexScan`; choosing an access path is `optimizer::IndexScanRule`'s job,
   run afterward, not this function's (`// TODO(M23.2): cost-based
   optimization` marks the larger, still-missing piece: choosing *among*

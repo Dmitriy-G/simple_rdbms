@@ -19,11 +19,15 @@ consumes.
   handle (`Select`, `Insert`, `CreateTable`, `CreateIndex`) - a
   transaction-control statement or another `Explain` as the target is a
   parse error, not something that reaches this variant.
-- `SelectStatement` - a `SELECT` query: `SELECT <items> FROM <table>
-  [[AS] alias] [WHERE <expr>]`. No joins, `GROUP BY`, or `ORDER BY` yet.
-  `items` are the projected items, in output order. `from` is the single
-  source table, with its optional alias. `where_clause` is the optional
-  filter predicate.
+- `SelectStatement` - a `SELECT` query: `SELECT <items> [FROM <table>
+  [[AS] alias]] [WHERE <expr>]`. No joins, `GROUP BY`, or `ORDER BY` yet.
+  `items` are the projected items, in output order. `from` is the
+  optional single source table, with its optional alias; `None` is a
+  select list of pure expressions - `SELECT 1`, `SELECT 'keep alive'` -
+  which the binder resolves in an empty column scope and the planner
+  runs over a `LogicalPlan::OneRow` source. `where_clause` is the
+  optional filter predicate, and it is allowed with `from: None`, as in
+  PostgreSQL, where it filters that single anonymous row.
 - `TableRef` - the single source table of a `FROM` clause: `name` is the
   table as it exists in the catalog; `alias` is the optional `[AS]
   alias` naming a range variable for it. This is the one place `M23.1`'s

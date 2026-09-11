@@ -15,7 +15,7 @@ pub enum BoundStatement {
 
 #[derive(Debug, Clone)]
 pub struct BoundSelect {
-    pub table_id: TableId,
+    pub table_id: Option<TableId>,
     pub projections: Vec<BoundExpr>,
     pub column_names: Vec<String>,
     pub column_types: Vec<Option<DataType>>,
@@ -105,13 +105,19 @@ impl<'a> Binder<'a> {
     }
 
     fn bind_select(&self, select: sql::SelectStatement) -> Result<BoundSelect, PlannerError> {
-        let table = self
-            .catalog
-            .get_table(&select.from.name)
-            .map_err(|_| PlannerError::UnknownTable(select.from.name.clone()))?;
-        let table_id = table.table_id;
-        let schema = &table.schema;
-        let table_scope = select.from.alias.as_deref().unwrap_or(select.from.name.as_str());
+        let table = match &select.from {
+            Some(from) => Some(
+                self.catalog
+                    .get_table(&from.name)
+                    .map_err(|_| PlannerError::UnknownTable(from.name.clone()))?,
+            ),
+            None => None,
+        };
+        let table_id = table.as_ref().map(|table| table.table_id);
+        let empty_schema = Schema::new(Vec::new());
+        let schema = table.as_ref().map_or(&empty_schema, |table| &table.schema);
+        let table_scope =
+            select.from.as_ref().map(|from| from.alias.as_deref().unwrap_or(from.name.as_str()));
 
         let mut projections = Vec::new();
         let mut column_names = Vec::new();
@@ -127,7 +133,7 @@ impl<'a> Binder<'a> {
                     }
                 }
                 sql::SelectItem::Expr(expr) => {
-                    let (bound, data_type) = self.bind_expr(expr, schema, Some(table_scope))?;
+                    let (bound, data_type) = self.bind_expr(expr, schema, table_scope)?;
                     column_names.push(match expr {
                         sql::Expr::Column { name, .. } => name.clone(),
                         _ => format!("column{}", column_names.len() + 1),
@@ -140,7 +146,7 @@ impl<'a> Binder<'a> {
 
         let predicate = match &select.where_clause {
             Some(expr) => {
-                let (bound, data_type) = self.bind_expr(expr, schema, Some(table_scope))?;
+                let (bound, data_type) = self.bind_expr(expr, schema, table_scope)?;
                 if let Some(data_type) = data_type {
                     if data_type != DataType::Boolean {
                         return Err(PlannerError::TypeMismatch(format!(

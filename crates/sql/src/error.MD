@@ -32,6 +32,11 @@ Errors raised while lexing or parsing SQL text.
   plan to show. `NestedExplain { offset }` is raised when `EXPLAIN`'s
   target is itself an `EXPLAIN`; both point at the offset of the outer
   `EXPLAIN` keyword, not the rejected inner statement.
+  `WildcardWithoutFrom { offset }` is raised when a select list containing
+  `*` has no `FROM` clause after it: every other from-less select list is
+  legal (`parser.MD`'s `parse_select`), but `*` has no table whose columns
+  it could expand to, so it is refused at the select list's own offset
+  rather than binding to zero columns.
 - `SqlError::offset(source) -> usize` - the byte offset in `source` this
   error points at. An `UnexpectedEof` has no token of its own to point at,
   so it points one past the end of `source`.

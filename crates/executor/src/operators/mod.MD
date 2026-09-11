@@ -9,6 +9,7 @@ Concrete `Executor` implementations, one per physical plan node kind.
 - `InsertExecutor` - re-exported from `insert`. See `insert.MD`.
 - `NestedLoopJoinExecutor` - re-exported from `nested_loop_join`. See
   `nested_loop_join.MD`.
+- `OneRowExecutor` - re-exported from `one_row`. See `one_row.MD`.
 - `ProjectionExecutor` - re-exported from `projection`. See
   `projection.MD`.
 - `SeqScanExecutor` - re-exported from `seq_scan`. See `seq_scan.MD`.

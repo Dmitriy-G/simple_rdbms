@@ -18,7 +18,9 @@ becomes "semantically valid against this database's schema".
   unwraps this variant itself rather than ever handing it to
   `planner::plan` (`plan.MD`).
 - `BoundSelect` - a `SELECT` after binding. `table_id` is the resolved
-  source table. `projections` are the projected expressions, resolved to
+  source table, or `None` for a `SELECT` with no `FROM` clause, which
+  `plan.MD` turns into a projection over `LogicalPlan::OneRow` instead of
+  over a scan. `projections` are the projected expressions, resolved to
   column ordinals. `column_names` are display names for `projections`, in
   the same order: the source column's name for a bare column reference
   (including each column a `*` expands to), or a positional `columnN`
@@ -78,11 +80,16 @@ becomes "semantically valid against this database's schema".
   statement or another `Explain` (`sql::parser.MD`'s `parse_explain`), so
   this recursive call can never hit the unreachable arm above.
 - `Binder::bind_select(&self, select) -> Result<BoundSelect, PlannerError>` -
-  private. Resolves the source table by `select.from.name` (always the
+  private. Resolves the source table by `select.from`'s `name` (always the
   real catalog name, never the alias), expands `*` or binds each selected
   expression, and type-checks the optional `WHERE` predicate as `Boolean`.
-  Computes `table_scope` as `select.from.alias`, falling back to
-  `select.from.name` when there is no alias, and passes it to every
+  A `select.from` of `None` - a `SELECT` of pure expressions, such as a
+  JDBC client's `SELECT 'keep alive'` - resolves no table at all and binds
+  the select list and the predicate against an empty schema with
+  `table_scope: None`, exactly as `bind_insert` binds its values, so a
+  column reference in that position is an `UnknownColumn` rather than a
+  silent `NULL`. Computes `table_scope` as the alias, falling back to the
+  table name when there is no alias, and passes it to every
   `bind_expr` call so a qualified column reference (`sql::Expr::Column {
   table: Some(_), .. }`) can be checked against it. Once an alias is
   given, it - not the original table name - is the only valid qualifier;

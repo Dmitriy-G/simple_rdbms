@@ -40,7 +40,8 @@ impl Optimizer {
                 right: Box::new(self.optimize(*right, catalog)),
                 predicate,
             },
-            leaf @ (LogicalPlan::SeqScan { .. }
+            leaf @ (LogicalPlan::OneRow
+            | LogicalPlan::SeqScan { .. }
             | LogicalPlan::IndexScan { .. }
             | LogicalPlan::Insert { .. }
             | LogicalPlan::CreateTable { .. }

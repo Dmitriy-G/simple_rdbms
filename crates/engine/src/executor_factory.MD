@@ -12,8 +12,9 @@ stream to pull.
 ## Key Components
 
 - `build_executor(plan) -> Box<dyn Executor>` - recursively lowers a
-  `PhysicalPlan` into an `executor` operator tree: `SeqScan` to
-  `SeqScanExecutor`, `IndexScan` to `IndexScanExecutor`, `Filter` to
+  `PhysicalPlan` into an `executor` operator tree: `OneRow` to
+  `OneRowExecutor`, the single-row source under a `SELECT` with no `FROM`
+  clause, `SeqScan` to `SeqScanExecutor`, `IndexScan` to `IndexScanExecutor`, `Filter` to
   `FilterExecutor` wrapping its lowered input, `Projection` to
   `ProjectionExecutor` wrapping its lowered input, `NestedLoopJoin` to
   `NestedLoopJoinExecutor` wrapping both lowered sides, `Insert` to

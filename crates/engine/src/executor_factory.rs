@@ -1,11 +1,12 @@
 use executor::{
     Executor, FilterExecutor, IndexScanExecutor, InsertExecutor, NestedLoopJoinExecutor,
-    ProjectionExecutor, SeqScanExecutor,
+    OneRowExecutor, ProjectionExecutor, SeqScanExecutor,
 };
 use planner::PhysicalPlan;
 
 pub fn build_executor(plan: PhysicalPlan) -> Box<dyn Executor> {
     match plan {
+        PhysicalPlan::OneRow => Box::new(OneRowExecutor::new()),
         PhysicalPlan::SeqScan { table_id } => Box::new(SeqScanExecutor::new(table_id)),
         PhysicalPlan::IndexScan { index_id, table_id, start, end } => {
             Box::new(IndexScanExecutor::new(index_id, table_id, start, end))

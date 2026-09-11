@@ -48,6 +48,38 @@ fn create_insert_and_select_star_preserves_insertion_order() {
 }
 
 #[test]
+fn a_select_with_no_from_clause_returns_exactly_one_row() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    let (columns, rows) =
+        rows_and_columns_of(db.execute("SELECT 1, 'keep alive'").expect("select with no FROM"));
+    assert_eq!(columns, vec!["column1", "column2"]);
+    assert_eq!(rows, vec![vec![Value::BigInt(1), Value::Varchar("keep alive".to_string())]]);
+}
+
+#[test]
+fn a_select_with_no_from_clause_keeps_its_where_clause() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    let (_, rows) = rows_and_columns_of(db.execute("SELECT 1 WHERE FALSE").expect("select false"));
+    assert!(rows.is_empty(), "a false predicate must filter the single row away: {rows:?}");
+
+    let (_, rows) = rows_and_columns_of(db.execute("SELECT 1 WHERE TRUE").expect("select true"));
+    assert_eq!(rows, vec![vec![Value::BigInt(1)]]);
+}
+
+#[test]
+fn a_wildcard_with_no_from_clause_is_rejected() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let mut db = open(&dir);
+
+    let err = db.execute("SELECT *").expect_err("SELECT * with no FROM must fail");
+    assert_eq!(err.sql_state(), SqlState::SYNTAX_ERROR);
+}
+
+#[test]
 fn select_list_can_subset_and_reorder_columns() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let mut db = open(&dir);

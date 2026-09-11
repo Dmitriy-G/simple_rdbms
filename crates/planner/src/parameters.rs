@@ -65,19 +65,25 @@ fn collect_select(
     catalog: &Catalog,
     types: &mut BTreeMap<u32, Option<DataType>>,
 ) -> Result<(), PlannerError> {
-    let table = catalog
-        .get_table(&select.from.name)
-        .map_err(|_| PlannerError::UnknownTable(select.from.name.clone()))?;
-    let schema = &table.schema;
-    let table_scope = select.from.alias.as_deref().unwrap_or(select.from.name.as_str());
+    let table = match &select.from {
+        Some(from) => Some(
+            catalog
+                .get_table(&from.name)
+                .map_err(|_| PlannerError::UnknownTable(from.name.clone()))?,
+        ),
+        None => None,
+    };
+    let schema = table.as_ref().map(|table| &table.schema);
+    let table_scope =
+        select.from.as_ref().map(|from| from.alias.as_deref().unwrap_or(from.name.as_str()));
 
     for item in &select.items {
         if let sql::SelectItem::Expr(expr) = item {
-            collect_expr(expr, Some(schema), Some(table_scope), types)?;
+            collect_expr(expr, schema, table_scope, types)?;
         }
     }
     if let Some(where_clause) = &select.where_clause {
-        collect_expr(where_clause, Some(schema), Some(table_scope), types)?;
+        collect_expr(where_clause, schema, table_scope, types)?;
     }
     Ok(())
 }

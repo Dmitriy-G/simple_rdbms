@@ -87,9 +87,17 @@ impl Parser {
 
     fn parse_select(&mut self) -> Result<SelectStatement, SqlError> {
         self.expect_kind(TokenKind::Select, "SELECT")?;
+        let list_offset = self.current().offset;
         let items = self.parse_select_list()?;
-        self.expect_kind(TokenKind::From, "FROM")?;
-        let from = self.parse_table_ref()?;
+        let from = if matches!(self.current().kind, TokenKind::From) {
+            self.advance();
+            Some(self.parse_table_ref()?)
+        } else {
+            if items.iter().any(|item| matches!(item, SelectItem::Wildcard)) {
+                return Err(SqlError::WildcardWithoutFrom { offset: list_offset });
+            }
+            None
+        };
         let where_clause = if matches!(self.current().kind, TokenKind::Where) {
             self.advance();
             Some(self.parse_expr()?)

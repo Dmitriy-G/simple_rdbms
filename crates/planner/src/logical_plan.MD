@@ -7,7 +7,12 @@ made when lowering to a `PhysicalPlan`.
 
 ## Key Components
 
-- `LogicalPlan` - the enum. `SeqScan { table_id }` reads every row of a
+- `LogicalPlan` - the enum. `OneRow` is the source a `SELECT` with no
+  `FROM` clause reads from: it produces exactly one row of zero columns,
+  so a projection above it evaluates its expressions once. It is named
+  for what it does rather than `Values`, which is left free for the
+  multi-row row-set source `INSERT ... VALUES` and a future `VALUES`
+  statement would want. `SeqScan { table_id }` reads every row of a
   table. `IndexScan { index_id, table_id, start, end }` reads the rows of
   `table_id` whose indexed column falls in `[start, end)` (either bound
   `None` for unbounded), via the index `index_id` - never constructed by
@@ -33,6 +38,7 @@ made when lowering to a `PhysicalPlan`.
   resolve column names against: a scan's full table schema, a
   `Projection`'s per-expression names (`explain::projected_column`), a
   `Join`'s two input schemas concatenated, and no columns at all for
+  `OneRow` (one row, but no columns to name) or for
   `Insert`/`CreateTable`/`CreateIndex`, which produce no output rows.
 - `render(plan, catalog, verbose, depth, out)` - private. `explain_logical`'s
   actual work: an exhaustive match with no wildcard arm over every

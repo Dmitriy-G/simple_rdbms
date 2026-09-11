@@ -74,12 +74,12 @@ async fn an_ordinary_select_is_unaffected() {
     let row = only_row(&result);
     assert_eq!(row.get("a"), Some("1"));
 
-    let err = client
+    let result = client
         .simple_query("SELECT 1")
         .await
-        .expect_err("a FROM-less SELECT must still be the engine's ordinary syntax error");
-    let db_error = err.as_db_error().expect("expected a database error, not a connection failure");
-    assert_eq!(db_error.code().code(), "42601");
+        .expect("a FROM-less SELECT is ordinary SQL the engine answers, not an intercepted shape");
+    let row = only_row(&result);
+    assert_eq!(row.get("column1"), Some("1"));
 }
 
 fn row_count(messages: &[SimpleQueryMessage]) -> usize {

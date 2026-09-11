@@ -45,9 +45,39 @@ fn binds_select_wildcard_to_every_column() {
     let BoundStatement::Select(select) = bind_ok(&catalog, "SELECT * FROM users") else {
         panic!("expected a bound SELECT");
     };
-    assert_eq!(select.table_id, TableId(1));
+    assert_eq!(select.table_id, Some(TableId(1)));
     assert_eq!(select.projections.len(), 3);
     assert!(select.predicate.is_none());
+}
+
+#[test]
+fn binds_a_select_with_no_from_clause_against_no_table() {
+    let catalog = catalog_with_users();
+    let BoundStatement::Select(select) = bind_ok(&catalog, "SELECT 1, 'keep alive'") else {
+        panic!("expected a bound SELECT");
+    };
+    assert_eq!(select.table_id, None);
+    assert_eq!(select.projections.len(), 2);
+    assert!(matches!(select.projections[0], BoundExpr::Literal(Value::BigInt(1))));
+    assert!(select.predicate.is_none());
+}
+
+#[test]
+fn a_column_in_a_select_with_no_from_clause_is_unknown() {
+    let catalog = catalog_with_users();
+    let err = bind(&catalog, "SELECT id").expect_err("a column with no FROM must not bind");
+    assert!(matches!(err, PlannerError::UnknownColumn(_)), "unexpected error: {err}");
+}
+
+#[test]
+fn a_select_with_no_from_clause_plans_a_projection_over_one_row() {
+    let catalog = catalog_with_users();
+    let bound = bind_ok(&catalog, "SELECT 1");
+    let plan = planner::plan(bound).expect("planning a from-less SELECT must succeed");
+    let planner::LogicalPlan::Projection { input, .. } = plan else {
+        panic!("expected a projection");
+    };
+    assert!(matches!(*input, planner::LogicalPlan::OneRow));
 }
 
 #[test]

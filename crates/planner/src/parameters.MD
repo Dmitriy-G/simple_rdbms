@@ -61,7 +61,8 @@ to see one (`binder.MD`).
   private. Walks one expression, recording a bare placeholder as `None`
   and delegating a `BinaryOp` to `collect_binary`; `schema`/`table_scope`
   mirror `Binder::bind_expr`'s own parameters, `None` where there is no
-  table in scope (as inside `INSERT ... VALUES`).
+  table in scope (as inside `INSERT ... VALUES`, or in a `SELECT` with no
+  `FROM` clause, where `collect_select` resolves no table at all).
 - `collect_binary(left, right, schema, table_scope, types) -> Result<(), PlannerError>` -
   private. For each side that is a bare placeholder, infers its type from
   the *other* side via `column_type` rather than recursing into it; a

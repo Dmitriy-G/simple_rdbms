@@ -34,10 +34,12 @@ listener and a `tempfile`-backed database, in the same shape as
   case-folding and trailing-semicolon stripping both work.
 - `an_ordinary_select_is_unaffected` - a real table's `SELECT a FROM t`
   still round-trips normally, and a FROM-less `SELECT 1` - a query
-  `pg_catalog::answer` does not recognize - still reaches `sql::Parser`
-  and fails with its ordinary `42601 syntax_error`, exactly as it would
-  without this module in the path at all; a version-like answer is never
-  invented for something that wasn't actually recognized.
+  `pg_catalog::answer` does not recognize - still passes straight through
+  to the engine, which now answers it as ordinary SQL (a projection over
+  `planner::LogicalPlan::OneRow`) rather than reporting a syntax error.
+  The point of the assertion is unchanged: what comes back is the
+  engine's own answer, `column1 = 1`, never a value this module invented
+  for a shape it did not recognize.
 - `pg_class_lists_a_created_table` - after `CREATE TABLE t (a INTEGER)`, a
   `pg_class` query returns exactly one row naming `t`, `relkind = 'r'`,
   and `relnamespace = '2200'` (the fixed `public` oid).
