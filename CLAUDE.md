@@ -1255,13 +1255,39 @@ unclean), a statement past `DbConfig::slow_query_warn_threshold_ms`,
 buffer-pool eviction pressure (every frame pinned). `info` — startup and
 shutdown, connection open/close, the recovery summary (records scanned,
 winners, losers, duration), checkpoint completion with its LSN, and a
-statement's fingerprint once it succeeds. `debug` — a statement's full SQL
+statement's fingerprint once it succeeds, and a query answered by a layer
+above the engine without reaching it (see the rule below). `debug` — a
+statement's full SQL
 and the physical plan chosen for it. `trace` — page fetch/evict, WAL
 record append, page flush. The startup line (`engine::Database::open_with_managers`)
 is the most valuable one in the whole system: it records the durability
 configuration — page size, buffer pool frames, DWB capacity, whether
 checksums are on — and the recovery outcome, so a later question of
 whether a lost write was possible has a one-line answer.
+
+**A layer that answers a client without calling the layer below it logs
+that it did, at `info`.** The statement log lives in one place —
+`engine::runtime` writes a line per statement it executes — so any layer
+that short-circuits the engine also short-circuits the log, and the
+result is not a missing line but a log that *stops*: a session ends with
+a client-side failure and the last thing recorded is the last statement
+that happened to reach the engine. Two such layers exist today, both in
+`server`: `pg_catalog`'s introspection interception
+(`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`) and the
+`SET`/`SHOW`/`RESET` handler, and both log through
+`wire.rs`'s `log_answered_without_the_engine`. That line is what a client
+bug is diagnosed from, so it carries the answer's **shape**, its **row
+count** and the peer address — a zero-row answer is exactly what a driver
+turns into a null, and P-94 is the entry that exists because nobody could
+see one. Any future interception, cache or fast path inherits this: if it
+can answer, it logs.
+
+This does not weaken the rule above it. The shape is fixed text from the
+answering module's own vocabulary and a row count is a number, so neither
+is user data; the query text stays at `debug`, exactly as a
+fingerprint-versus-raw-SQL split already requires. A new log line at
+`info` that would carry client text is a bug in the line, not an
+exception to the rule.
 
 Hot-path discipline: `trace!` inside `BufferPool::fetch_page` and
 `LogManager::append` is fine — a disabled level compiles down to a cheap
