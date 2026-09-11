@@ -8,8 +8,7 @@ acting. These are instructions, not optional background.
 ## Route the request
 
 Start every project reply with `Role: <role name>`. Select the role from
-the request; a main session can change roles between requests. A deliberately
-selected subagent keeps its assigned role and reports a routing mismatch.
+the request.
 
 | Request | Role | Read before acting |
 | --- | --- | --- |
@@ -19,8 +18,10 @@ selected subagent keeps its assigned role and reports a routing mismatch.
 | Review a finished milestone | Milestone Reviewer | `docs/agents/milestone-reviewer.md` |
 | Questions and explanations | Helper (read-only) | `docs/agents/helper.md` |
 
-Roles are procedures, not an instruction to spawn agents. Delegate only
-when requested. Never run concurrent writers against the shared queue.
+Roles are procedures, not an instruction to spawn agents. A main session may
+execute the selected role directly; Codex CLI profiles pin its model, while
+`.codex/agents/*.toml` pins spawned subagent models. Delegate only when the
+human requests it. Never run concurrent writers against the shared queue.
 
 ## Shared working state and review gates
 

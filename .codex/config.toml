@@ -1,3 +1,4 @@
-# Project agents inherit the user's model and host permission settings.
+# Enables project custom agents. CLI profiles are machine-local files under
+# $CODEX_HOME and cannot be declared in this project-scoped config.
 [agents]
 enabled = true

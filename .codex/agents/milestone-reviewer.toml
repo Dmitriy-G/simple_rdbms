@@ -1,5 +1,6 @@
 name = "milestone-reviewer"
 description = "Reviews a finished milestone as a whole against its roadmap entry. Writes problems.md and sets the milestone status."
+model = "gpt-6-astra"
 model_reasoning_effort = "xhigh"
 
 developer_instructions = """

@@ -18,7 +18,8 @@ loaded as needed, not imported in full into every conversation.
 | `.claude/agents/*.md` | Claude frontmatter and pointers to shared procedures |
 | `.claude/settings.json` | Claude project permissions |
 | `.codex/agents/*.toml` | Codex custom agents and pointers to shared procedures |
-| `.codex/config.toml` | Enables Codex agents; inherits model and permissions |
+| `.codex/profile-templates/*.config.toml` | Versioned templates for machine-local CLI profiles |
+| `.codex/config.toml` | Enables spawned Codex custom agents |
 | `.claude/task.md`, `.claude/problems.md` | Shared, gitignored working state for both tools |
 
 The Architect maintains instructions, role definitions and host configuration.
@@ -39,7 +40,7 @@ handled as described in `AGENTS.md`; never fabricate a task to fill a gap.
 
 ## Using the roles
 
-In either tool, ordinary prompts select the main session's role:
+Requests map to these roles:
 
 - "Do next task" reads the task's `For:` line and works one subtask.
 - "Write the next task" selects Task writer.
@@ -54,11 +55,26 @@ dependent model IDs. There is no project-wide forced Helper agent: that
 read-only role must not trap requests that require another role's edits.
 
 Codex automatically discovers project custom agents in `.codex/agents/`.
-All five are provided, including `task-writer`. These define delegated roles;
-they do not force the main session into that role. Ask explicitly for a
-subagent when delegation is wanted. Otherwise the main session follows the
-same procedures directly. New sessions may be needed to load changed agents;
+All five are provided, including `task-writer`, and each pins the model of a
+spawned subagent. They do not configure `codex --profile`: that command starts
+the main session with `$CODEX_HOME/<name>.config.toml`. Codex ignores profile
+definitions in project `.codex/config.toml`, so the versioned files under
+`.codex/profile-templates/` must be copied to `$CODEX_HOME` on each machine.
+
+For example, `.codex/profile-templates/coder.config.toml` installs as
+`$CODEX_HOME/coder.config.toml`; then `codex --profile coder` starts the main
+session on Sol. The profile selects configuration, not a role prompt: the
+request is still routed through `AGENTS.md`. Spawn a custom agent only when
+delegation is wanted. New sessions are needed to load profile or agent changes;
 project configuration also depends on the host trusting the checkout.
+
+| Codex agent | Pinned model | Reasoning |
+| --- | --- | --- |
+| `architect` | `gpt-6-astra` | `xhigh` |
+| `coder` | `gpt-5.6-sol` | `medium` |
+| `helper` | `gpt-5.6-luna` | `medium` |
+| `milestone-reviewer` | `gpt-6-astra` | `xhigh` |
+| `task-writer` | `gpt-5.6-sol` | `xhigh` |
 
 Claude permissions and Codex sandbox/approval settings are independent.
 The Codex project file does not lower approval requirements, grant network
