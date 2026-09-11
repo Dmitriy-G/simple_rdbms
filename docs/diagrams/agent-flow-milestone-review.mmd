@@ -22,7 +22,7 @@ flowchart TD
 
     VERIFY["Verification pass — scope is exactly the<br/>repairs: did each gating entry's fix land and<br/>do what the entry asked, and what did those<br/>commits change? No re-audit of the milestone"]
 
-    SPLIT{"Each finding:<br/>does it violate a named Done-when line,<br/>the Solution, or a CLAUDE.md invariant?"}
+    SPLIT{"Each finding:<br/>does it violate a named Done-when line,<br/>the Solution, or a docs/agent-guide.md invariant?"}
     GATE["Gating — entry in .claude/problems.md<br/>naming that line. The parent stays 🚧"]:::channel
     NONGATE["Non-gating — entry in .claude/problems.md<br/>like any other problem. Triaged and<br/>scheduled by Importance; the milestone<br/>passes with it still open"]:::channel
     FWD["Write a forward dependency into the<br/>later milestone's docs/ROADMAP.md entry"]

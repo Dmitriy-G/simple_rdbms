@@ -172,7 +172,7 @@ level the dirty set is a consequence of whatever DDL, inserts and
 checkpoints the test happened to run, so keeping one frame clean through a
 `ROLLBACK`'s undo would be a tuned test rather than a deterministic one,
 and tuning a concurrency test until it reproduces is the practice
-`CLAUDE.md` bans outright.
+`docs/agent-guide.md` bans outright.
 
 The honest claim, and the one the tests should assert, is: **an unrelated
 read stalls behind a device write only when every evictable frame in the

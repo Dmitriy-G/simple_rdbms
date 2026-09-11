@@ -58,7 +58,7 @@ particular storage engine (unlike embedding a full Postgres-compatible
 SQL layer), and exposes exactly the seam this project needs: a trait for
 handling parsed queries and returning rows, which `crates/server` (or a
 new frontend crate depending on it, per the workspace's dependency-edge
-rules in `CLAUDE.md`) implements against `engine::Database`.
+rules in `docs/agent-guide.md`) implements against `engine::Database`.
 
 ## Consequences
 

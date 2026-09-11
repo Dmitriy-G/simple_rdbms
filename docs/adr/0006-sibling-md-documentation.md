@@ -15,7 +15,7 @@ been stripped from the `.rs` files. `scripts/check_docs.sh` enforces both
 halves of this in CI: every `.rs` has a paired `.MD` (and vice versa),
 every `.MD` has a `## Key Components` heading, and no disallowed comment
 survives in code. This ADR records that decision now that it is fully
-applied, rather than leaving the convention implicit in `CLAUDE.md` and a
+applied, rather than leaving the convention implicit in `docs/agent-guide.md` and a
 run of commit messages.
 
 The alternative was the standard one: `///`/`//!` doc comments compiled
@@ -76,5 +76,5 @@ design.
   comment, fails the build the same way an unformatted file or a clippy
   warning does.
 - New `.rs` files must ship their `.MD` sibling in the same commit
-  (`CLAUDE.md` already states this); this ADR does not change that
+  (`docs/agent-guide.md` already states this); this ADR does not change that
   requirement, only records why it exists.

@@ -25,13 +25,13 @@ flowchart TD
     PROB[".claude/problems.md"]:::channel
 
     CLOSES{"Does it settle an existing entry?"}
-    GRAD["Graduate the conclusion first —<br/>ADR, roadmap entry or CLAUDE.md —<br/>then delete the entry. The file is<br/>gitignored: deleting without<br/>graduating loses it"]
+    GRAD["Graduate the conclusion first —<br/>ADR, roadmap entry or docs/agent-guide.md —<br/>then delete the entry. The file is<br/>gitignored: deleting without<br/>graduating loses it"]
     NEWPROB["Uncovered something else on the way?<br/>New numbered entry in .claude/problems.md"]:::channel
 
     KIND{"What does the recommendation require?"}
-    DOC["Architect does it: an ADR recording the<br/>decision, roadmap prose, CLAUDE.md,<br/>a role definition, a diagram"]:::role
-    CODE["Architect writes .claude/task.md itself<br/>for its own entries, bound by<br/>task-writer.md — empty file only,<br/>🚧, keep it short"]:::role
-    NOTHING["Recommendation is 'leave it'.<br/>Say so in the reply and delete the entry:<br/>next time the question is already answered"]:::stop
+    DOC["Architect does it: an ADR recording the<br/>decision, roadmap prose, docs/agent-guide.md,<br/>a role definition, a diagram"]:::role
+    CODE["Architect writes .claude/task.md itself<br/>for its own triaged Will do entries, bound by<br/>task-writer.md — empty file only,<br/>🚧, keep it short"]:::role
+    NOTHING["Recommendation is 'leave it'.<br/>If disproved, document evidence and close it.<br/>If real but deferred, retain it for triage"]:::stop
     ACCEPTED["Real, but minor and expensive:<br/>leave it in problems.md for the next<br/>triage — see agent-flow-problem-lifecycle.mmd.<br/>Backlogging needs the human's approval,<br/>so it is never done inside an investigation"]:::stop
     HUMAN["Human decides and commits"]:::human
 

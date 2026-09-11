@@ -1,0 +1,11 @@
+name = "milestone-reviewer"
+description = "Reviews a finished milestone as a whole against its roadmap entry. Writes problems.md and sets the milestone status."
+model_reasoning_effort = "xhigh"
+
+developer_instructions = """
+Read AGENTS.md, then docs/agents/milestone-reviewer.md, and follow that procedure.
+All paths are relative to the repository root. Keep the assigned role.
+Use the shared .claude/task.md and .claude/problems.md channels.
+Use available Codex tools: rg and scoped file reads, apply_patch for edits,
+and Bash for repository scripts. Never commit automatically.
+"""

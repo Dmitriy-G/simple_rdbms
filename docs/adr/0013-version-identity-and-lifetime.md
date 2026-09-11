@@ -83,7 +83,7 @@ that instruction was reserving space for.
 
 - **`RowId(0)` is reserved** and means "unstamped". A tuple whose id
   reads zero was written before this field existed, which keeps the
-  all-zero-page invariant in `CLAUDE.md` intact: an untouched page still
+  all-zero-page invariant in `docs/agent-guide.md` intact: an untouched page still
   decodes as a valid, empty page.
 - **Allocation is from a durable high-water mark**, a `next_row_id: u64`
   field in the page-0 file header beside `header::VERSION_RANGE`

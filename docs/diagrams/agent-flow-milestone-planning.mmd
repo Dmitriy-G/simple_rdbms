@@ -21,7 +21,7 @@ flowchart TD
 
     UNCLEAR{"Is the next sub-milestone's shape<br/>settled enough to specify?"}
     ARCH["Architect<br/>investigates: options, dependencies,<br/>what the milestone actually requires"]:::role
-    INV["The conclusion lands where it survives:<br/>docs/adr/**, the docs/ROADMAP.md entry<br/>itself, or CLAUDE.md"]:::channel
+    INV["The conclusion lands where it survives:<br/>docs/adr/**, the docs/ROADMAP.md entry<br/>itself, or docs/agent-guide.md"]:::channel
 
     READ["Reads the docs/ROADMAP.md entry:<br/>Problem, Solution, Done-when,<br/>plus any ADR it names"]
     SPLIT["Decompose into subtasks:<br/>each independently completable<br/>and independently reviewable"]
@@ -34,7 +34,11 @@ flowchart TD
 
     START --> QUEUE
     QUEUE -- yes --> FIRST
-    QUEUE -- no --> TW --> ACCEPTED
+    PENDING{"Any entries still awaiting triage<br/>or an approved backlog move?"}
+    TRIAGE["Report pending entries; wait for triage"]:::stop
+    QUEUE -- no --> PENDING
+    PENDING -- yes --> TRIAGE
+    PENDING -- no --> TW --> ACCEPTED
     ACCEPTED -- "no, a task is still open" --> KEEP
     ACCEPTED -- yes --> CLOSE --> MORE
     MORE -- no --> ASK

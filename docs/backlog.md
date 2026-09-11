@@ -7,7 +7,7 @@ before filing a finding, because re-filing one of these re-runs a
 decision that was already made. An entry leaves only when the human
 approves a revive or when the problem stops being true. The process
 around it — who writes here, the four criteria every entry carries, how a
-revive works — is in `CLAUDE.md`'s "Problem triage".
+revive works — is in `docs/agent-guide.md`'s "Problem triage".
 
 ---
 

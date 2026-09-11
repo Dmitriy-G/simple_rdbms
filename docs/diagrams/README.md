@@ -9,15 +9,15 @@ repository and CI does not check them — GitHub and most IDEs render
 - [`crate-dependencies.mmd`](crate-dependencies.mmd) — the layered
   workspace and every allowed dependency edge, including `test-support`'s
   dev-dependency-only edges drawn dashed. The authoritative list is the
-  table in `CLAUDE.md`; this is its picture. See
+  table in `docs/agent-guide.md`; this is its picture. See
   [`../adr/0002-crate-splitting.md`](../adr/0002-crate-splitting.md) for
   why the layers are crates rather than modules.
 
 ## Agent flows
 
-How the five LLM roles in `CLAUDE.md`'s "LLM roles and channels" section
+How the five LLM roles in `docs/agent-guide.md`'s "LLM roles and channels" section
 actually move work between each other. Each role's own rules live in
-`.claude/agents/<role>.md`; these diagrams are the view across roles that
+`docs/agents/<role>.md`; these diagrams are the view across roles that
 no single agent file has.
 
 - [`agent-flow-overview.mmd`](agent-flow-overview.mmd) — all five roles
@@ -30,14 +30,13 @@ no single agent file has.
   starts the next one; and a question to the human rather than a task
   when the parent has no sub-milestone left.
 - [`agent-flow-task-implementation.mmd`](agent-flow-task-implementation.mmd)
-  — the Coder's loop: one subtask, the gate, mark it done, stop for
+  — the Coder's loop: one subtask, the gate, mark it 👀 Review, stop for
   review. Includes the three conditions that stop the Coder instead.
 - [`agent-flow-problem-lifecycle.mmd`](agent-flow-problem-lifecycle.mmd)
   — a finding by any role, into `.claude/problems.md`, out of it again as
   a scheduled subtask, to a fix that ships with its prevention. Also
-  shows the other two exits: an Architect-signed entry, which the Task
-  writer never touches and the Architect either settles or writes the
-  task for itself, and the triage — the Architect estimating every entry,
+  shows the other two exits: a settled Architect entry whose conclusion becomes durable,
+  and a triaged entry scheduled for its rated role, and the triage — the Architect estimating every entry,
   the human approving, and the backlogged ones moving to
   `docs/backlog.md` — plus the one way back out of that file, which is a
   revive the human has approved.
@@ -58,5 +57,5 @@ no single agent file has.
 - [`agent-flow-questions.mmd`](agent-flow-questions.mmd) — routing an
   incoming request to the role that owns it.
 
-A flow diagram that disagrees with `.claude/agents/` or `CLAUDE.md` is
+A flow diagram that disagrees with `docs/agents/` or `docs/agent-guide.md` is
 wrong by definition: those two are the contract, these are the map.

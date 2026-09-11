@@ -17,7 +17,7 @@ boundaries better serve this project.
 Each layer is its own crate (`common`, `types`, `storage`, `catalog`,
 `sql`, `txn`, `planner`, `executor`, `engine`, `cli`), with a strict,
 explicitly enumerated set of allowed dependency edges between them (see
-`CLAUDE.md`). No crate may depend on anything not on that list, and there
+`docs/agent-guide.md`). No crate may depend on anything not on that list, and there
 are no cycles.
 
 We chose crates over modules for one reason: `cargo` enforces crate

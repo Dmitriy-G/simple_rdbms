@@ -54,8 +54,8 @@ cargo test --workspace --no-fail-fast
 ```
 
 `check_docs.sh` enforces the sibling-`.MD` documentation rule described
-under [Docs](#docs). `CLAUDE.md` is the single source for this list — if
-the two disagree, `CLAUDE.md` is right.
+under [Docs](#docs). `docs/agent-guide.md` is the single source for this list — if
+the two disagree, `docs/agent-guide.md` is right.
 
 ## Crate map
 
@@ -187,10 +187,10 @@ See `crates/server/README.md`, `Dockerfile`, `docker-compose.yml`, and
   same directory (`buffer.rs` → `buffer.MD`) carrying that module's design
   rationale and API reference — there are no `///`/`//!` rustdoc comments
   in this codebase, so `cargo doc` won't have them either. See
-  `docs/adr/0006-sibling-md-documentation.md` for why, and `CLAUDE.md` for
+  `docs/adr/0006-sibling-md-documentation.md` for why, and `docs/agent-guide.md` for
   the exact structure every `.MD` file follows.
 - `docs/ROADMAP.md` — milestones, framed as the database problem each one
   solves.
 - `docs/adr/` — architecture decision records.
-- `CLAUDE.md` — commands, conventions, and the dependency-edge rules for
+- `docs/agent-guide.md` — commands, conventions, and the dependency-edge rules for
   anyone (human or agent) working in this repo.

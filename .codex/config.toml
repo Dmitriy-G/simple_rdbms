@@ -1,0 +1,3 @@
+# Project agents inherit the user's model and host permission settings.
+[agents]
+enabled = true

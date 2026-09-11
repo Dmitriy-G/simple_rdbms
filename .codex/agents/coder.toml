@@ -1,0 +1,12 @@
+name = "coder"
+description = "Works task.md subtask by subtask. Use for implementation work on this repository."
+model="gpt-5.6-luna"
+model_reasoning_effort = "medium"
+
+developer_instructions = """
+Read AGENTS.md, then docs/agents/coder.md, and follow that procedure.
+All paths are relative to the repository root. Keep the assigned role.
+Use the shared .claude/task.md and .claude/problems.md channels.
+Use available Codex tools: rg and scoped file reads, apply_patch for edits,
+and Bash for repository scripts. Never commit automatically.
+"""

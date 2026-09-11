@@ -41,7 +41,7 @@ just changed.
 The live instance at the time: M10 stood at 🚧 with M10.1 through M10.4 all
 ✅ Done and its Solution and Done-when met, held open by a single entry
 listing four stale line numbers in three ADRs — a class of defect a later
-commit re-breaks by construction. Meanwhile `CLAUDE.md` requires that
+commit re-breaks by construction. Meanwhile `docs/agent-guide.md` requires that
 exactly one parent carry 🚧, so an unclosable milestone blocks every
 milestone after it.
 
@@ -55,7 +55,7 @@ Alternatives considered and rejected:
 - **Leave it.** ✅ on a parent stops meaning anything and the roadmap loses
   its answer to "what is finished".
 - **Persist a review report** under `docs/reviews/`. A new checked-in
-  channel, against `CLAUDE.md`'s rule that nothing is written that nobody
+  channel, against `docs/agent-guide.md`'s rule that nothing is written that nobody
   reads, when the only fact a later pass needs is one line.
 - **Enumerate the checks as a finite checklist and stop there.** Worth
   doing, and adopted below as part of the decision, but alone it does not
@@ -69,7 +69,7 @@ repair.** Two rules make it bounded, and neither works without the other.
 
 **1. Only a gating finding holds a parent at 🚧.** A finding is gating when
 it violates a named line of the milestone's own Done-when, its Solution, or
-an invariant in `CLAUDE.md`'s "Invariants that must not be broken". Every
+an invariant in `docs/agent-guide.md`'s "Invariants that must not be broken". Every
 other finding — a stale citation, a documentation sentence that is merely
 imprecise, a limitation nobody has hit, anything belonging to a different
 milestone — is filed in `.claude/problems.md` exactly as before, triaged
@@ -107,7 +107,7 @@ the roadmap keeps no review history — the line exists to carry one fact
 across one gap between sessions, and a finished milestone has no gap left.
 This is a new write permission for the Milestone Reviewer inside an
 Architect-owned file, granted the same way its parent-✅ permission already
-is, and it is recorded in `CLAUDE.md`'s ownership table rather than left
+is, and it is recorded in `docs/agent-guide.md`'s ownership table rather than left
 implicit.
 
 **4. The checks are a finite enumerated list, reported in full.** The
@@ -139,8 +139,8 @@ Non-gating findings do not disappear: they enter the ordinary queue, where
 whether or not it gated a milestone, because the queue's own rules say so
 and `Decision:` is never argued from one criterion alone.
 
-`.claude/agents/milestone-reviewer.md` carries the procedure,
-`CLAUDE.md`'s "Status, and who may set it" and its ownership table carry
+`docs/agents/milestone-reviewer.md` carries the procedure,
+`docs/agent-guide.md`'s "Status, and who may set it" and its ownership table carry
 what ✅ asserts and who may write `Reviewed:`, and
 `docs/diagrams/agent-flow-milestone-review.mmd` draws it. This ADR is what
 those three are checked against when they disagree.

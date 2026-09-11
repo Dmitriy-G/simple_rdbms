@@ -92,7 +92,7 @@ and none of them can:
   durable.** `flush_log_all` in phase one makes `CheckpointBegin` and
   `CheckpointEnd` durable *before* the header is stamped, and the header
   write is itself an ordinary logged page mutation, redone by recovery
-  like any other (`CLAUDE.md`, "The page-0 header is versioned and
+  like any other (`docs/agent-guide.md`, "The page-0 header is versioned and
   logged"). Phase two's flush only makes an already-logged value reach its
   home location sooner. A crash between the phases loses nothing:
   recovery starts from the previous checkpoint's LSN and redoes the header
@@ -132,7 +132,7 @@ tight bound the P-14 probe uses. Before this change the `SELECT` hung
 indefinitely while the other two passed, which is precisely the difference
 between the dispatch thread being free and the database being usable.
 
-The rule generalizes, and `CLAUDE.md`'s invariant list now carries it: an
+The rule generalizes, and `docs/agent-guide.md`'s invariant list now carries it: an
 engine-level lock that a statement takes may not be held across a data
 page flush or a device sync. ADR 0014 said it for the catalog, this ADR
 says it for the transaction manager, and the next component to acquire a

@@ -25,10 +25,10 @@ flowchart LR
     HUMAN --> MR
     HUMAN --> HELP
 
-    ARCH -- "findings with their evidence;<br/>deletes only its own, once settled<br/>or once it has written the task" --> PROB
+    ARCH -- "findings with evidence; closes settled<br/>own entries and fixes in its own files;<br/>moves backlog after human approval" --> PROB
     ARCH -- "conclusions that must survive" --> ADR
-    ARCH -- "CLAUDE.md, entry prose, agent files" --> ROADMAP
-    ARCH -- "writes the task for its own entries" --> TASK
+    ARCH -- "docs/agent-guide.md, entry prose, agent files" --> ROADMAP
+    ARCH -- "writes a task for its own triaged entries" --> TASK
 
     PROB -- "read first, whoever filed them:<br/>Thinking 1–7 becomes a For: Coder task,<br/>8–10 a For: Architect task once no<br/>1–7 is left. Both outrank milestone work" --> TW
     TW -- "deletes each entry it schedules" --> PROB
@@ -46,7 +46,7 @@ flowchart LR
     MR -- "defects and open questions" --> PROB
     MR -- "sets ✅ Done on a parent" --> ROADMAP
 
-    TASK -- "For: Architect — ADRs, roadmap prose,<br/>CLAUDE.md, role definitions" --> ARCH
+    TASK -- "For: Architect — prose or difficult code;<br/>one subtask, then human review" --> ARCH
     ARCH -- "subtask Status: lines only" --> TASK
     PROB -- read --> ARCH
     HELP -- "answers, or names the right role" --> HUMAN

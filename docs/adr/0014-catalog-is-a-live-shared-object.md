@@ -103,7 +103,7 @@ Specifically:
 - **Lock ordering: the catalog's mutation lock is taken before any buffer
   pool latch, never after.** A mutator holds it across heap writes and a
   reload holds it across `Catalog::open`'s reads, so it sits above the
-  buffer pool in the ordering that `CLAUDE.md`'s "Latch ordering" invariant
+  buffer pool in the ordering that `docs/agent-guide.md`'s "Latch ordering" invariant
   governs. No code may take it while holding a page latch or a page guard.
 - **A reload may block for an unbounded time, and that is allowed, because
   it only ever runs on a worker thread.** It waits on the mutation lock and
