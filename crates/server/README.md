@@ -130,9 +130,9 @@ client `tests/wire_*.rs` drive the listener with).
 
 ## Configuration
 
-`--metrics-addr` (default `0.0.0.0:9090`, also readable from the
+`--metrics-addr` (default `127.0.0.1:9090`, also readable from the
 `SIMPLE_RDBMS_METRICS_ADDR` environment variable as a fallback via clap's
-`env`), `--pg-addr` (default `0.0.0.0:5432`, same shape via
+`env`), `--pg-addr` (default `127.0.0.1:5432`, same shape via
 `SIMPLE_RDBMS_PG_ADDR` - the `pgwire` listener's address), and
 `--health-check` (a bare flag; queries this process's own
 `/health/ready` and exits `0`/`1` - see `src/main.MD`) are the flags
@@ -141,7 +141,38 @@ fallback exists so `docker-compose.yml` can override the listener address
 and have the `HEALTHCHECK`'s own `--health-check` invocation (which reads
 the same variable) follow automatically - see "Container image" below;
 without it, overriding the address only via `command:` would leave the
-healthcheck silently probing the wrong port forever. Every database sizing
+healthcheck silently probing the wrong port forever.
+
+**Both default to loopback, and the image overrides both.** Neither port
+asks for a credential: the SQL port has no authentication until M22
+(`docs/ROADMAP.md`), so anything that can reach it can run arbitrary SQL -
+`CREATE TABLE` and `INSERT` included - as a superuser-equivalent session,
+and `/metrics` and `/health/*` answer anyone who asks. The metrics port is
+the milder of the two, since every metric is an engine-internal counter,
+gauge or histogram and none carries user data (no table names, no rows, no
+SQL text - see `src/http.MD`), but it still describes a running database's
+workload and sizing. So a binary started on a host answers on `127.0.0.1`
+for both, and binding anywhere else is an explicit opt-in - pass
+`--pg-addr 0.0.0.0:5432` or set `SIMPLE_RDBMS_PG_ADDR`, and likewise for
+the metrics address. What that opt-in costs is that the exposure is taken
+on knowingly: put the port behind something that does the authentication
+this engine does not, or keep it on a private network.
+
+Inside a container the same default would be wrong, because Docker
+forwards a published port to the container's own interface and never to
+its loopback, so an `EXPOSE`d port bound to `127.0.0.1` refuses every
+connection. `Dockerfile` therefore sets `ENV
+SIMPLE_RDBMS_METRICS_ADDR=0.0.0.0:9090` and `ENV
+SIMPLE_RDBMS_PG_ADDR=0.0.0.0:5432` beside its `EXPOSE` lines: binding
+every interface of a namespace that belongs to one container is not an
+exposure decision, and what exposes the port is the operator publishing
+it. `docker run -p 5432:5432 simple_rdbms_server` therefore works with no
+`-e` flags, and `docker-compose.yml` publishes both ports on the host's
+loopback (`127.0.0.1:9090:9090`, `127.0.0.1:5432:5432`) while leaving its
+`environment:` entries as overridable restatements of the image's own
+defaults rather than as the thing that makes the container reachable.
+
+Every database sizing
 knob comes from `common::DbConfig`'s defaults, the same as `cli` - this
 binary does not yet expose flags for them. Logging is controlled by
 `RUST_LOG`, same as `cli` - see CLAUDE.md's logging section.
@@ -175,7 +206,13 @@ back when this crate had only a `[[bin]]` target and nothing under
 `tests/` could `use server::...` at all. A `#[cfg(test)]` unit test in
 `src/` is reserved for the rare case that needs access to something that
 should stay private (see CLAUDE.md's testing section); nothing in `health`
-or `http` does.
+or `http` does. `src/main.rs` has exactly two such tests,
+`the_default_pg_addr_is_loopback` and `the_default_metrics_addr_is_loopback`:
+`DEFAULT_PG_ADDR` and `DEFAULT_METRICS_ADDR` are private to the binary and
+unreachable from `tests/`, and each assertion is pure - a string constant
+parsed as a `SocketAddr` and checked for a loopback IP, no I/O and no
+shared state - so widening either unauthenticated port's default back to
+every interface fails the suite instead of shipping quietly.
 
 `tests/wire_startup.rs`, `tests/wire_simple_query.rs`,
 `tests/wire_errors.rs`, `tests/wire_set_show_reset.rs` and

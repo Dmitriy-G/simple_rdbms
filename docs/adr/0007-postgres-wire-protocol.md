@@ -100,11 +100,13 @@ manager and version store are wired into every read and write path
 `insert.rs`). The listener therefore inherits the isolation
 `docs/adr/0004-acid-scope.md` now describes - snapshot reads over
 two-phase-locked writes, with a lock wait bounded per
-`docs/adr/0012-bounded-lock-waits.md` - and **M13.2 must plan against
-that, not against a serialization that no longer exists**: concurrent
-sessions on the wire meet concurrent execution underneath, so a client
-can now be handed `40P01 deadlock_detected` or `55P03 lock_not_available`
-where the serial model promised neither was reachable.
+`docs/adr/0012-bounded-lock-waits.md` - and **M13.2 planned against that
+rather than against a serialization that no longer exists**: it inherited
+M10's concurrency unchanged, accepted the eight-worker ceiling on
+simultaneously blocked statements as a documented throughput limit, and
+reports `55P03 lock_not_available` and `40P01 deadlock_detected` to
+clients as ordinary retryable errors, where the serial model had promised
+neither was reachable.
 
 What survives from the original reasoning is the independence, not the
 mechanism. Sharing the engine across connections was a **design choice**

@@ -71,6 +71,21 @@ USER simple_rdbms
 EXPOSE 9090
 EXPOSE 5432
 
+# The binary defaults both listeners to 127.0.0.1 - correct for a process
+# started on a host, where the SQL port has no authentication until M22
+# and the metrics port exposes internal state, so neither should answer on
+# a routable interface unless the operator asks for it. Inside a container
+# the same default would make both EXPOSEd ports unreachable: Docker
+# forwards a published port to this container's own interface, never to
+# its loopback. Binding 0.0.0.0 *here* is not an exposure decision - the
+# namespace is this container's own, and what exposes a port is publishing
+# it, which the operator does explicitly (docker-compose.yml publishes
+# both on the host's loopback). Setting them as ENV rather than in the
+# ENTRYPOINT keeps them overridable by `docker run -e` and by
+# docker-compose.yml's `environment:` block.
+ENV SIMPLE_RDBMS_METRICS_ADDR=0.0.0.0:9090
+ENV SIMPLE_RDBMS_PG_ADDR=0.0.0.0:5432
+
 # Long start period: ARIES recovery on a large log can take minutes, and
 # readiness must stay false (503) for the whole window rather than the
 # container being killed for taking a while to recover - see

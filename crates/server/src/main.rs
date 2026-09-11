@@ -14,6 +14,8 @@ use server::{http, signals, wire};
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 const PG_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_METRICS_ADDR: &str = "127.0.0.1:9090";
+const DEFAULT_PG_ADDR: &str = "127.0.0.1:5432";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -24,10 +26,10 @@ struct Args {
     #[arg(default_value = "simple_rdbms.db")]
     db_path: String,
 
-    #[arg(long, default_value = "0.0.0.0:9090", env = "SIMPLE_RDBMS_METRICS_ADDR")]
+    #[arg(long, default_value = DEFAULT_METRICS_ADDR, env = "SIMPLE_RDBMS_METRICS_ADDR")]
     metrics_addr: String,
 
-    #[arg(long, default_value = "0.0.0.0:5432", env = "SIMPLE_RDBMS_PG_ADDR")]
+    #[arg(long, default_value = DEFAULT_PG_ADDR, env = "SIMPLE_RDBMS_PG_ADDR")]
     pg_addr: String,
 
     #[arg(
@@ -134,4 +136,36 @@ fn check_ready(metrics_addr: &str) -> bool {
         eprintln!("health check: {target} reported not ready: {status_line}");
     }
     ready
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use super::{DEFAULT_METRICS_ADDR, DEFAULT_PG_ADDR};
+
+    #[test]
+    fn the_default_pg_addr_is_loopback() {
+        let addr: SocketAddr =
+            DEFAULT_PG_ADDR.parse().expect("the default pg address parses as a socket address");
+        assert!(
+            addr.ip().is_loopback(),
+            "the wire listener carries no authentication, so its default bind address must \
+             stay on loopback and widening it must be an explicit operator opt-in: \
+             {DEFAULT_PG_ADDR}"
+        );
+    }
+
+    #[test]
+    fn the_default_metrics_addr_is_loopback() {
+        let addr: SocketAddr = DEFAULT_METRICS_ADDR
+            .parse()
+            .expect("the default metrics address parses as a socket address");
+        assert!(
+            addr.ip().is_loopback(),
+            "/metrics and /health/* are unauthenticated and expose internal state, so the \
+             default bind address stays on loopback; the container image opts out for its \
+             own namespace through SIMPLE_RDBMS_METRICS_ADDR: {DEFAULT_METRICS_ADDR}"
+        );
+    }
 }

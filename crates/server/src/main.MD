@@ -18,7 +18,7 @@ integration test to link against, so this crate now ships both
 
 - `Args` - command-line arguments, parsed by `clap::Parser`: `db_path`
   (positional, defaults to `"simple_rdbms.db"`, same default `cli` uses),
-  `--metrics-addr` (defaults to `"0.0.0.0:9090"` - the port
+  `--metrics-addr` (defaults to `DEFAULT_METRICS_ADDR` - the port
   `docker-compose.yml` publishes, deliberately separate from the SQL port
   so an operator can scrape metrics without going through the database
   protocol at all; also readable from the `SIMPLE_RDBMS_METRICS_ADDR`
@@ -26,10 +26,37 @@ integration test to link against, so this crate now ships both
   of the listener address and the `HEALTHCHECK`'s own `--health-check`
   probe of it move together instead of the healthcheck silently querying
   the default port forever - see `docker-compose.yml`), `--pg-addr`
-  (defaults to `"0.0.0.0:5432"`, also readable from
+  (defaults to `DEFAULT_PG_ADDR`, also readable from
   `SIMPLE_RDBMS_PG_ADDR`, same shape as `--metrics-addr` - the address
   `server::wire::serve` listens on), and `--health-check` (a bare flag;
   see `check_ready` below).
+- `DEFAULT_PG_ADDR` - private. `"127.0.0.1:5432"`: the SQL port carries no
+  authentication of any kind until M22 (`docs/ROADMAP.md`), so anything
+  that can reach it can run arbitrary SQL, and the default therefore keeps
+  it on loopback. `docs/ROADMAP.md`'s M13.2 entry records this as the
+  constraint M22 lifts.
+- `DEFAULT_METRICS_ADDR` - private. `"127.0.0.1:9090"`, for the weaker
+  version of the same reason: `/metrics`, `/health/live` and
+  `/health/ready` (see [http.MD](http.MD)) need no credential either, and
+  while no metric in this workspace carries user data - every one is an
+  engine-internal counter, gauge or histogram, and the only label anywhere
+  is `statement_kind` - they do describe the workload and the durability
+  sizing of a running database, which is not something to serve to every
+  interface a host happens to have.
+- **The binary defaults to loopback; the image overrides it.** Both
+  constants are deliberately unsafe-by-omission rather than
+  unsafe-by-default: binding anything else is an operator decision, made
+  by passing `--metrics-addr`/`--pg-addr` or setting the two environment
+  variables. `Dockerfile` makes exactly that decision, with `ENV
+  SIMPLE_RDBMS_METRICS_ADDR=0.0.0.0:9090` and `ENV
+  SIMPLE_RDBMS_PG_ADDR=0.0.0.0:5432` beside its `EXPOSE` lines, because
+  inside a container binding `0.0.0.0` is not an exposure decision at all
+  - the namespace belongs to that container, Docker forwards a published
+  port to its interface and never to its loopback, and what exposes the
+  port is the operator publishing it. `docker-compose.yml` then publishes
+  both on the host's loopback. Two unit tests in `main.rs` assert each
+  constant parses to a loopback address, so widening either default fails
+  the suite rather than passing quietly.
 - `main() -> anyhow::Result<()>` - parses `Args` first, before
   `init_logging`, because `--health-check` short-circuits everything else:
   if set, `main` calls `check_ready` against this process's own
@@ -102,16 +129,27 @@ integration test to link against, so this crate now ships both
 ## Usage Example
 
 ```sh
-simple_rdbms_server /data/simple_rdbms.db --metrics-addr 0.0.0.0:9090 --pg-addr 0.0.0.0:5432
+simple_rdbms_server /data/simple_rdbms.db
 curl http://localhost:9090/health/ready
 curl http://localhost:9090/metrics
 psql -h 127.0.0.1 -p 5432
+simple_rdbms_server /data/simple_rdbms.db --pg-addr 0.0.0.0:5432
 simple_rdbms_server --health-check; echo "exit code: $?"
 ```
 
+The fifth line is the opt-in: with no `--pg-addr` (and no
+`--metrics-addr`) both ports answer only on loopback, and reaching either
+from another host is something an operator asks for by name, knowing there
+is no authentication behind it. The container image makes that request
+once, in its own `ENV`, for its own namespace.
+
 `Dockerfile`'s `HEALTHCHECK` runs `simple_rdbms_server --health-check`
 against the same container's own `/health/ready`; `docker-compose.yml`
-publishes `--metrics-addr`'s port for a Prometheus scrape target and
-mounts the database file's directory as a `VOLUME` so `docker rm` doesn't
-take the data with it. `--pg-addr`'s port is not yet published there -
-that is `docs/ROADMAP.md`'s M13.2 subtask 6.
+publishes `--metrics-addr`'s and `--pg-addr`'s ports on the host's
+loopback (`127.0.0.1:9090:9090` and `127.0.0.1:5432:5432`) and mounts the
+database file's directory as a `VOLUME` so `docker rm` doesn't take the
+data with it. Both container-side addresses are already `0.0.0.0` from the
+image's own `ENV`, so `docker run -p 5432:5432 simple_rdbms_server` works
+with no `-e` flags at all; `docker-compose.yml`'s `environment:` block
+re-states them as overridable defaults (`${SIMPLE_RDBMS_PG_ADDR:-...}`)
+rather than as the thing that makes the container reachable.

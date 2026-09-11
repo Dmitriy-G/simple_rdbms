@@ -307,6 +307,7 @@ Postgres's protocol was chosen over Arrow Flight SQL or a bespoke driver.
 is the reference to study for M13.4's `pg_catalog` support - another
 `pgwire`-based engine that had to answer the same catalog-introspection
 queries.
+Reviewed: 2026-09-11 — full pass; gating: P-77, P-78, P-79; non-gating: P-80, P-81, P-82, P-83, P-84, P-85
 
 ### M13.1 — Many connections against one engine ✅ Done
 **Problem:** a wire listener serves many connections, each able to submit
@@ -339,10 +340,32 @@ stops talking is an ordinary event here rather than a contrived one.
 waiter fails with `55P03 lock_not_available` after
 `lock_wait_timeout_ms` and releases its worker, and the error is
 retryable — but it does not raise the ceiling: a blocked statement still
-occupies a worker for the whole of its wait, so this milestone must
-either accept a documented concurrency limit of eight simultaneously
-blocked statements or stop a blocked statement from holding a worker.
-Decide which, and say so in this entry, before the listener ships.
+occupies a worker for the whole of its wait, so this milestone had either
+to accept a documented concurrency limit of eight simultaneously blocked
+statements or to stop a blocked statement from holding a worker.
+**Decided: the ceiling was accepted.** Eight concurrent blocked
+statements occupy the whole pool for the duration of their timeout, and
+that stays true until some later milestone stops a blocked statement from
+holding a worker at all; what makes it tolerable is that the worst case
+is bounded by `lock_wait_timeout_ms` and documented rather than open-ended
+(`docs/adr/0012-bounded-lock-waits.md`). Raising the ceiling is a
+throughput problem for a later milestone, not a correctness one for this
+one.
+**Bind address, until M22 lands:** this listener binds `127.0.0.1` by
+default and reaching it from another host takes an explicit opt-in —
+`--pg-addr`/`SIMPLE_RDBMS_PG_ADDR`. There is no authentication of any kind
+yet, so anything that can reach the port is a superuser (M22);
+loopback-by-default is what keeps that fact local to the machine the
+operator is already on. The rule the tree settled on, and the one a later
+listener should follow: **the binary defaults to loopback and the image
+overrides it.** Binding `0.0.0.0` inside a container is not an exposure
+decision — the namespace is that container's own, Docker forwards a
+published port to its interface and never to its loopback — so `Dockerfile`
+sets both addresses wide through `ENV` and the operator decides the
+exposure by publishing the port, which `docker-compose.yml` does on the
+host's loopback. The metrics/health port (M12) follows the same rule for
+the weaker reason that it is unauthenticated too, though it carries no
+user data.
 
 ### M13.3 — Extended query protocol ✅ Done
 **Problem:** simple query (M13.2) inlines literals into full SQL text on
@@ -363,9 +386,13 @@ otherwise, runs introspection queries against `pg_class`, `pg_namespace`,
 need joins this engine does not yet have.
 **Solution:** intercept known introspection queries and answer from the
 real catalog where the data exists, return empty where it does not, and
-never fabricate a result. Track what works in
-`docs/CLIENT-COMPATIBILITY.md`. See datafusion-postgres (linked above) as
-a reference `pg_catalog` implementation.
+never fabricate a result. Track what works in the "Client compatibility"
+section of `crates/server/README.md` — a table of client, what was
+exercised, the result, and how it was verified, with the unverified rows
+named as such. That record belongs with the crate whose behaviour it
+describes rather than under `docs/`, so the Coder can keep it current in
+the same commit as the code it documents. See datafusion-postgres (linked
+above) as a reference `pg_catalog` implementation.
 **Note:** matching known query text is inherently brittle - it works for
 the client versions actually tested and breaks on others that phrase the
 same introspection query differently. M24 replaces this interception with
@@ -568,9 +595,9 @@ addressing it.
 both negotiate it by default; cleartext and md5 as fallbacks), `CREATE
 ROLE`/`ALTER ROLE`/`DROP ROLE`, `GRANT`/`REVOKE` on tables, an owner per
 object in the catalog, and a `host`/`user`/`method` access rules file.
-Until this lands, the M13.2 listener must bind to `127.0.0.1` by default
-and require an explicit opt-in to bind anywhere else — record that as a
-constraint in the M13.2 entry, not as a footnote here.
+Until this lands, the listener binds `127.0.0.1` by default and binding
+anywhere else takes an explicit opt-in; that constraint now lives in the
+M13.2 entry, which is the milestone that has to honour it.
 
 ## M23 — Joins and cost-based planning ⏸️ Hold
 **Problem:** three things the planner cannot do are really one thing it

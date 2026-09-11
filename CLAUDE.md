@@ -13,6 +13,15 @@ against torn page writes, `BEGIN`/`COMMIT`/`ROLLBACK` transactions, a
 B+tree index the optimizer picks over a sequential scan automatically
 (`planner::optimizer::IndexScanRule`), `EXPLAIN` for both logical and
 physical plans, and a Prometheus metrics and liveness/readiness server.
+The engine is reachable over the **PostgreSQL wire protocol**: the
+`server` binary's `pgwire` listener speaks startup negotiation, simple
+query and extended query (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`, with
+`$1` parameters and binary numerics), and answers a client's `pg_catalog`
+introspection by intercepting the known query shapes and reading the real
+catalog (`docs/adr/0007-postgres-wire-protocol.md`). There is no
+authentication of any kind on that port yet — anything that can reach it
+is a superuser — which is why it binds `127.0.0.1` by default until M22
+lands.
 Statements from different sessions **run concurrently** on a fixed
 eight-thread worker pool (`engine::runtime`), isolated by snapshot reads
 over two-phase-locked writes: a reader takes no locks and sees the
@@ -30,8 +39,9 @@ blocked statement cannot hold a worker thread indefinitely
 what that does and does not guarantee, and it is the file to read before
 believing anything about isolation here.
 What does not exist yet: `DELETE`/`UPDATE`, multi-table joins, column
-constraints (`NOT NULL`/`UNIQUE`/`FOREIGN KEY`), a network wire protocol,
-serializable isolation, and any SQL for choosing an isolation level. See
+constraints (`NOT NULL`/`UNIQUE`/`FOREIGN KEY`), authentication and access
+control, serializable isolation, and any SQL for choosing an isolation
+level. See
 `docs/ROADMAP.md` for exactly what closes each of those gaps and in what
 order.
 

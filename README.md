@@ -2,8 +2,11 @@
 
 A relational database engine written from scratch in Rust: its own page
 format, buffer pool, B+tree, write-ahead log, SQL lexer/parser, planner,
-and Volcano-style executor. No `sqlparser`, no embedded storage engine, no
-async runtime — synchronous, single-node, and hand-written end to end.
+and Volcano-style executor. No `sqlparser`, no embedded storage engine —
+single-node and hand-written end to end. The engine and every crate below
+the server binary are synchronous; the one async runtime in the tree is
+the `tokio` one `crates/server` builds for its PostgreSQL wire listener,
+and nothing underneath it is async.
 
 This is a learning project. `CREATE TABLE`/`CREATE INDEX`/`INSERT`/
 `SELECT` work end to end — SQL text in, rows out, durable across a
@@ -13,11 +16,15 @@ fuzzy checkpointing, a double-write buffer against torn pages,
 sequential scan on its own. Several sessions can hold transactions at
 once and their statements run in parallel on a worker pool, isolated by
 snapshot reads over two-phase-locked writes: readers never block, and two
-writers against one table take turns. What is missing is most of SQL and
-the rest of concurrency: no `UPDATE`/`DELETE`, no joins, no constraints,
-no network protocol, no serializable isolation, and no way to ask for an
-isolation level in SQL. See `docs/ROADMAP.md` for the order the rest gets
-built in.
+writers against one table take turns. Ordinary Postgres clients can talk
+to it: the `server` binary speaks the PostgreSQL wire protocol — simple
+and extended query, with enough `pg_catalog` introspection answered from
+the real catalog for `psql` and JDBC/ODBC drivers to connect — so no
+bespoke client library is needed. What is missing is most of SQL and the
+rest of concurrency: no `UPDATE`/`DELETE`, no joins, no constraints, no
+authentication on that port, no serializable isolation, and no way to ask
+for an isolation level in SQL. See `docs/ROADMAP.md` for the order the
+rest gets built in.
 
 ## Build & run
 
