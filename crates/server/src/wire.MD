@@ -31,12 +31,29 @@ the same `Arc<ConnectionState>` so `pgwire` sees one logical handler with
 three faces, per the shape `pgwire`'s own `examples/server.rs` uses for a
 shared handler.
 
-`Database::connect` and `Database::execute` are both blocking calls - they
-wait on the engine's own worker-pool thread over an `mpsc` channel
-(`crates/engine/src/runtime.MD`) - so both must run through
-`tokio::task::block_in_place` rather than block an async worker thread
-directly; the listener is only usable on the multi-thread `tokio` runtime
-`block_in_place` requires, which is what `main` builds it as.
+**Every** call into the session is a blocking call - `connect`, `execute`,
+`execute_with_params`, `describe`, and `pg_catalog::answer`, which does not
+look like one at the call site but reaches `Database::table_names` and
+`Database::table_schema` for `pg_class` and `pg_attribute`
+(`pg_catalog.MD`). Each waits on the engine's own worker-pool thread over
+an `mpsc` channel (`crates/engine/src/runtime.MD`), so each must run
+through `tokio::task::block_in_place` rather than block an async worker
+thread directly; the listener is only usable on the multi-thread `tokio`
+runtime `block_in_place` requires, which is what `main` builds it as.
+
+That rule is not left to each call site to remember, because one of them
+did not: until P-81, `SimpleQueryHandler::do_query` called
+`pg_catalog::answer` bare while the four call sites around it were
+wrapped, and a `psql` connecting - which introspects `pg_class` before it
+shows a prompt - blocked a runtime worker thread and every other
+connection's task scheduled on it. The reason it was missed is the reason
+prose could not prevent it: `answer` takes a `&Database` and reads like a
+string matcher. So the lock and the `block_in_place` are taken together,
+once, in `on_session` (below), and every handler goes through it. `serve`'s
+own `Database::connect` is the only other `block_in_place` in the file, and
+it has no session to lock yet. A new engine call added to this module is
+therefore either routed through `on_session` or is visibly unlike the
+others.
 
 This subtask (M13.2 subtask 1) wired up the startup handshake:
 `AuthenticationOk`, the fixed `ParameterStatus` set `NoopStartupHandler`'s
@@ -109,7 +126,7 @@ reads it off the schema it was built with, not off anything
 
 M13.4 subtask 1 intercepts real clients' introspection queries even
 earlier than that: `do_query` calls `pg_catalog::answer` (`src/pg_catalog.MD`)
-under the same session lock every other query path takes, before
+through the same `on_session` door every other query path takes, before
 `intercept_set_show_reset` ever runs, so a recognized `pg_catalog` query
 (`select version()`, `pg_namespace`, `pg_class`, `pg_attribute`, `pg_type`
 as of M13.4 subtask 3) never reaches `sql::Parser` at all - that grammar
@@ -238,8 +255,8 @@ two variants (M13.4 subtask 5 turned it from a plain struct into one):
 list a `pg_catalog::answer` recognized it as having, with no
 `StatementDescription` at all, since an introspection query never reaches
 `Database::describe`. `StatementParser::parse_sql` tries
-`pg_catalog::answer` first, under the same session lock and
-`block_in_place` call it already needed for `Database::describe`: a
+`pg_catalog::answer` first, inside the same `on_session` call it already
+needed for `Database::describe`: a
 recognized query becomes `Introspection` immediately, and only an
 unrecognized one falls through to `Database::describe` and `Ordinary` -
 exactly mirroring `SimpleQueryHandler::do_query`'s own
@@ -298,8 +315,8 @@ lints promoted to errors by `-D warnings` for exactly this reason. For
 if a client binds a different number of values than the statement
 declares, and the engine's own `common::Error::ParameterCountMismatch`
 check is what should catch that, not a `Vec` index panic here) is decoded
-via `decode_param`, and `Database::execute_with_params` runs under
-`block_in_place` exactly as `SimpleQueryHandler::do_query` calls
+via `decode_param`, and `Database::execute_with_params` runs through
+`on_session` exactly as `SimpleQueryHandler::do_query` calls
 `execute`. The `Response` for `Ordinary` comes from the same `to_response`
 the simple query path uses, now given `&portal.result_column_format`
 instead of the simple query path's fixed `&Format::UnifiedText` - see
@@ -384,8 +401,10 @@ SQL statement raised.
   (`Arc<Mutex<engine::Database>>`) and implements the three `pgwire`
   traits that do the actual protocol work: `NoopStartupHandler` (no
   overrides - the default no-authentication handshake is exactly what
-  subtask 1 wants), `SimpleQueryHandler::do_query`, which runs the query
-  string through the session (via `block_in_place`) and turns its
+  subtask 1 wants), `SimpleQueryHandler::do_query`, which offers the query
+  to `pg_catalog::answer` and then to `intercept_set_show_reset` before
+  running it through the session - the first and third of those through
+  `on_session`, the second touching no engine state at all - and turns its
   `Result<ResultSet>` into a `Vec<Response>` with `to_response`, or a
   `PgWireError` with the statement's real SQLSTATE and severity via
   `to_pg_error`; and `ExtendedQueryHandler` (M13.3, see above) -
@@ -394,6 +413,21 @@ SQL statement raised.
   `do_query` either re-answers an `Introspection` statement fresh from
   `pg_catalog::answer` (M13.4 subtask 5) or decodes an `Ordinary`
   statement's bound parameters and calls `Database::execute_with_params`.
+- `on_session(session, f) -> T` - private. The single door from an async
+  handler onto the engine: locks the `Mutex<Database>` (recovering a
+  poisoned lock rather than propagating the panic, since one statement's
+  panic must not kill the connection's remaining messages) and runs `f`
+  against the guard inside `tokio::task::block_in_place`. Every handler in
+  this file uses it and nothing else takes that lock, so "did this call
+  site remember `block_in_place`?" is a question about one function rather
+  than about five. That is deliberate: the four call sites that had the
+  wrapper and the one that did not (P-81) were textually identical apart
+  from the wrapper, and the missing one was the call that least looked like
+  an engine call. Note that the lock is taken *before* `block_in_place` and
+  held across it, which is correct here and would not be under an `async`
+  lock: this is a `std::sync::Mutex`, the guard never crosses an `.await`,
+  and one connection's session is contended only by that connection's own
+  pipelined messages.
 - `PreparedStatement` - private, `Clone` (required by
   `ExtendedQueryHandler::Statement`). An enum (M13.4 subtask 5) with two
   variants: `Ordinary { sql: String, description: engine::StatementDescription }`
@@ -408,7 +442,7 @@ SQL statement raised.
   `pgwire::api::stmt::QueryParser<Statement = PreparedStatement>`:
   `parse_sql` tries `pg_catalog::answer` first (building `Introspection`
   on a match) and falls back to `Database::describe` (building `Ordinary`)
-  otherwise, both under one `block_in_place` call, mapping a
+  otherwise, both inside one `on_session` call, mapping a
   `common::Error` from `Database::describe` through `to_pg_error` on
   failure; `get_parameter_types` returns an empty `Vec` for
   `Introspection` or maps `Ordinary`'s `description.param_types` through

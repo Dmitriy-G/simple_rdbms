@@ -32,10 +32,13 @@ on a synchronous `std::net::TcpListener` loop instead, exactly as before;
 see below). `main` builds one multi-thread `tokio::runtime::Runtime` after
 `Database::open` succeeds, spawns the `pgwire` listener on it, and shuts
 that runtime down before the final checkpoint and close — see
-`src/main.MD`. `Database::connect`/`Database::execute` are both blocking
-calls, so every handler in `src/wire.rs` that calls into the engine does
-so through `tokio::task::block_in_place`, never by blocking an async
-worker thread directly.
+`src/main.MD`. Every call into the engine is a blocking round-trip to the
+engine's own threads, so no handler in `src/wire.rs` may make one on an
+async worker thread directly. Rather than asking each call site to
+remember `tokio::task::block_in_place`, every handler reaches its session
+through the one `on_session` helper, which takes the lock and the
+`block_in_place` together — the file has exactly two `block_in_place`
+calls, that helper and the `Database::connect` in `serve`.
 
 `metrics-exporter-prometheus`'s own built-in HTTP listener needs an async
 runtime too (its `http-listener` Cargo feature pulls in `tokio`), but

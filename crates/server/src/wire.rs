@@ -73,6 +73,11 @@ struct StatementParser {
     session: Arc<Mutex<Database>>,
 }
 
+fn on_session<T>(session: &Mutex<Database>, f: impl FnOnce(&mut Database) -> T) -> T {
+    let mut session = session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    tokio::task::block_in_place(|| f(&mut session))
+}
+
 #[async_trait]
 impl QueryParser for StatementParser {
     type Statement = PreparedStatement;
@@ -86,21 +91,18 @@ impl QueryParser for StatementParser {
     where
         C: ClientInfo + Unpin + Send + Sync,
     {
-        let outcome = {
-            let session = self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            tokio::task::block_in_place(|| {
-                if let Some(introspection) = pg_catalog::answer(&session, sql) {
-                    return Ok(PreparedStatement::Introspection {
-                        sql: sql.to_string(),
-                        columns: introspection.columns,
-                    });
-                }
-                session.describe(sql).map(|description| PreparedStatement::Ordinary {
+        let outcome = on_session(&self.session, |session| {
+            if let Some(introspection) = pg_catalog::answer(session, sql) {
+                return Ok(PreparedStatement::Introspection {
                     sql: sql.to_string(),
-                    description,
-                })
+                    columns: introspection.columns,
+                });
+            }
+            session.describe(sql).map(|description| PreparedStatement::Ordinary {
+                sql: sql.to_string(),
+                description,
             })
-        };
+        });
         match outcome {
             Ok(stmt) => Ok(Some(stmt)),
             Err(err) => Err(to_pg_error(&err)),
@@ -156,21 +158,14 @@ impl SimpleQueryHandler for ConnectionState {
         C: ClientInfo + ClientPortalStore + Unpin + Send + Sync,
         C::PortalStore: PortalStore,
     {
-        let introspection = {
-            let session = self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            pg_catalog::answer(&session, query)
-        };
+        let introspection = on_session(&self.session, |session| pg_catalog::answer(session, query));
         if let Some(introspection) = introspection {
             return Ok(vec![introspection_response(introspection)]);
         }
         if let Some(response) = intercept_set_show_reset(&*client, query) {
             return Ok(vec![response]);
         }
-        let result = {
-            let mut session =
-                self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            tokio::task::block_in_place(|| session.execute(query))
-        };
+        let result = on_session(&self.session, |session| session.execute(query));
         match result {
             Ok(result_set) => Ok(vec![to_response(query, result_set, &Format::UnifiedText)]),
             Err(err) => Err(to_pg_error(&err)),
@@ -201,11 +196,8 @@ impl ExtendedQueryHandler for ConnectionState {
     {
         match &portal.statement.statement {
             PreparedStatement::Introspection { sql, columns } => {
-                let introspection = {
-                    let session =
-                        self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    tokio::task::block_in_place(|| pg_catalog::answer(&session, sql))
-                };
+                let introspection =
+                    on_session(&self.session, |session| pg_catalog::answer(session, sql));
                 let introspection = introspection.unwrap_or_else(|| Introspection {
                     columns: columns.clone(),
                     rows: Vec::new(),
@@ -226,11 +218,8 @@ impl ExtendedQueryHandler for ConnectionState {
                     params.push(decode_param(portal, idx, &pg_type)?);
                 }
 
-                let result = {
-                    let mut session =
-                        self.session.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    tokio::task::block_in_place(|| session.execute_with_params(&sql, &params))
-                };
+                let result =
+                    on_session(&self.session, |session| session.execute_with_params(&sql, &params));
                 match result {
                     Ok(result_set) => {
                         Ok(to_response(&sql, result_set, &portal.result_column_format))
