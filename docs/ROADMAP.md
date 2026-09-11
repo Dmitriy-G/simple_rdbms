@@ -397,6 +397,17 @@ the client versions actually tested and breaks on others that phrase the
 same introspection query differently. M24 replaces this interception with
 `pg_catalog` tables answered by ordinary queries once joins exist to make
 that possible.
+**Amended after the fact (P-90):** "return empty where the data does not
+exist" held for every relation except the ones a client uses to decide
+anything exists at all. An empty `pg_database` reads as "this server
+serves no databases", so a client stopped there and showed an empty
+object tree above recognizers that could already answer. `pg_database`,
+`pg_roles` and `pg_user` are therefore answered from configuration - one
+database named after the `--db-path` file stem, one implicit superuser -
+and they are the only rows this interception fabricates. The rule that
+replaced the old one, and the test for whether a future relation belongs
+on either side of it, is
+`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`.
 
 ## M14 — Changing and removing rows (DELETE, UPDATE, arithmetic) 🆕 New
 **Problem:** rows can be inserted and read but never modified or removed.
@@ -597,6 +608,15 @@ object in the catalog, and a `host`/`user`/`method` access rules file.
 Until this lands, the listener binds `127.0.0.1` by default and binding
 anywhere else takes an explicit opt-in; that constraint now lives in the
 M13.2 entry, which is the milestone that has to honour it.
+**Also supplies the role M13.4 fabricates:** `pg_roles`/`pg_user` answer
+one fixed row — oid `10`, name `postgres`, every capability true — which
+is deliberately *not* the user name the client sent, since nothing
+authenticates it and `pg_namespace.nspowner` has to name a role the
+server actually lists
+(`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`). This
+milestone is what turns that fabrication into the session's real
+authenticated identity, and what gives `passwd`'s `********` a credential
+to be redacting.
 
 ## M23 — Joins and cost-based planning ⏸️ Hold
 **Problem:** three things the planner cannot do are really one thing it
@@ -689,8 +709,14 @@ does.
 state and answered through ordinary `SELECT` execution rather than string
 matching, including the joins across them real clients issue — which
 needs M23.1's nested-loop joins to exist first. Retire M13.4's interception
-once these are in place. See datafusion-postgres (linked from M13) as a
-reference `pg_catalog` implementation.
+once these are in place — **including the three relations it answers from
+configuration rather than from the catalog**, `pg_database`, `pg_roles`
+and `pg_user`, which are the only fabricated rows in it and the ones a
+client's object tree has its root in
+(`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`). Deleting
+the interception without replacing those three empties every client's
+tree again, which is the failure P-90 reported. See datafusion-postgres
+(linked from M13) as a reference `pg_catalog` implementation.
 
 ## M25 — Referential integrity (foreign keys) 🆕 New
 **Problem:** no way to express that one table's column references

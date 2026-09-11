@@ -89,6 +89,12 @@ module, and they are fabricated from something real and fixed: no value
 in them is invented per query, and the oids are derived the same
 deterministic way `table_oid` derives a table's, so a client that caches
 one gets the same answer after a reconnect.
+`docs/adr/0021-one-database-one-role-until-m22-and-m24.md` records the
+decision and, more usefully for whoever adds the next recognizer, the
+test that bounds it: a relation a client uses to decide whether anything
+exists is answered from configuration, and a relation it uses to describe
+something it already found is answered from the catalog or with zero
+rows.
 
 Everywhere else the principle still holds - where nothing backs an
 answer, the answer is zero rows. The general

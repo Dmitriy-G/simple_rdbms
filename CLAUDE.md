@@ -18,10 +18,18 @@ The engine is reachable over the **PostgreSQL wire protocol**: the
 query and extended query (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`, with
 `$1` parameters and binary numerics), and answers a client's `pg_catalog`
 introspection by intercepting the known query shapes and reading the real
-catalog (`docs/adr/0007-postgres-wire-protocol.md`). There is no
+catalog (`docs/adr/0007-postgres-wire-protocol.md`). A client's **object
+tree resolves**: `pg_database`, `pg_roles` and `pg_user` are answered from
+configuration with one database row, named after the `--db-path` file
+stem (`engine::Database::database_name`), and one implicit-superuser row,
+which is what gives the schema and table listings below them a root to
+hang from (`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`).
+Those three are the only rows this engine fabricates; every other
+`pg_`-named relation still answers zero rows. There is no
 authentication of any kind on that port yet — anything that can reach it
-is a superuser — which is why it binds `127.0.0.1` by default until M22
-lands.
+is a superuser, and that fabricated role is a fixed name rather than the
+one the client sent — which is why it binds `127.0.0.1` by default until
+M22 lands.
 Statements from different sessions **run concurrently** on a fixed
 eight-thread worker pool (`engine::runtime`), isolated by snapshot reads
 over two-phase-locked writes: a reader takes no locks and sees the
@@ -38,10 +46,18 @@ blocked statement cannot hold a worker thread indefinitely
 `docs/adr/0004-acid-scope.md` states exactly
 what that does and does not guarantee, and it is the file to read before
 believing anything about isolation here.
+A `SELECT` of pure expressions with no `FROM` — `SELECT 1`, the shape
+JDBC-family clients send as a keep-alive — is ordinary SQL here, planned
+as a projection over `planner::LogicalPlan::OneRow`.
 What does not exist yet: `DELETE`/`UPDATE`, multi-table joins, column
 constraints (`NOT NULL`/`UNIQUE`/`FOREIGN KEY`), authentication and access
 control, serializable isolation, and any SQL for choosing an isolation
-level. See
+level. Nor is there any **scalar function machinery**: the binder
+resolves every bare name as a column reference, so `current_catalog`,
+`current_schema` and `current_database()` in a select list fail as
+`42703 undefined_column` — `select version()` looks like an exception
+only because the server's `pg_catalog` interception matches its text
+before the engine ever sees it. See
 `docs/ROADMAP.md` for exactly what closes each of those gaps and in what
 order.
 
