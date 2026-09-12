@@ -8,7 +8,7 @@ flowchart TD
     classDef stop fill:#eeeeee,stroke:#777,color:#000
 
     START(["Human asks for the next task"]):::human
-    QUEUE{"Any schedulable entry in<br/>.claude/problems.md? — Thinking: and<br/>Owner: present, Decision: Will do,<br/>at any level and whoever filed it"}
+    QUEUE{"Any open entry in<br/>.claude/problems.md? Investigate waits<br/>for Architect; Implement at 1–7 is<br/>schedulable for Coder"}
     FIRST(["Those come first<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
 
     TW["Task writer"]:::role
@@ -26,7 +26,7 @@ flowchart TD
     READ["Reads the docs/ROADMAP.md entry:<br/>Problem, Solution, Done-when,<br/>plus any ADR it names"]
     SPLIT["Decompose into subtasks:<br/>each independently completable<br/>and independently reviewable"]
     ORDER["Order Plan, 1..N, each line<br/>carrying status, SP and Thinking —<br/>if a subtask cannot finish without a<br/>later one, it is two subtasks misordered"]
-    WRITE["Write .claude/task.md: title, For:,<br/>Model tier: from the highest Thinking,<br/>then Order Plan with 🆕 New, SP and Thinking;<br/>one section per subtask with how to test it<br/>and a Status: line, no SP in the body.<br/>No rationale — a decision worth explaining<br/>is an ADR, not a task"]
+    WRITE["Write .claude/task.md: title, For: Coder,<br/>Light or Standard from highest Thinking,<br/>then Order Plan with 🆕 New, SP and Thinking;<br/>one section per subtask with how to test it<br/>and a Status: line, no SP in the body.<br/>No rationale — missing design goes back<br/>to Architect investigation"]
     TASK[".claude/task.md"]:::channel
     STATUS["Set that sub-milestone 🆕 or ⏸️ → 🚧<br/>In Progress in docs/ROADMAP.md, in the same<br/>edit as the ✅ above, and its parent too.<br/>Exactly one parent carries 🚧: a milestone<br/>left incomplete goes ⏸️ Hold in that edit"]
     ROADMAP["docs/ROADMAP.md"]:::channel

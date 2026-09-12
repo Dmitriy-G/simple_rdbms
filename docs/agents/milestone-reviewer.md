@@ -135,9 +135,9 @@ why and is what this section is checked against.
   `docs/agent-guide.md`'s "The four criteria". You have just read the milestone
   whole, so you are the best-placed role to say how much a gap matters;
   the Architect may correct either number in a triage.
-- Never write a `Thinking:`, `Owner:` or `Decision:` line, on your own entry or
+- Never write a `Thinking:`, `Next:` or `Decision:` line, on your own entry or
   anyone's, and never touch another entry's estimate. Minimum model
-  capability, ownership and whether it gets done are settled in the
+  capability, next action and whether it gets done are settled in the
   Architect's triage, which the human asks for and approves; your entries
   arrive without those three lines. When a finding needs a decision rather
   than a fix, say so in the entry's text and leave the rating to the

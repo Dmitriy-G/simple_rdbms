@@ -108,8 +108,8 @@ name a branch:
 When asked to **"do next task"**, follow this procedure:
 
 1. Read `.claude/task.md` — and nothing else as a work queue. Check its
-   `For:` line first: a task marked `For: Architect` is not the Coder's,
-   so say so and stop. Then check `Model tier:` against the current
+   `For:` line first: new tasks are always `For: Coder`; any other value
+   is a routing error, so say so and stop. Then check `Model tier:` against the current
    session using `docs/agent-setup.md`: a stronger tier is allowed, but a
    weaker or unknown tier stops before any marker changes and reports the
    required tier. Neither mismatch authorizes delegation. If it is
@@ -149,11 +149,14 @@ Coder's), the queue is worked in this order, and everything in it is
 scheduled sooner or later — nothing is left behind for a human to route
 by hand:
 
-1. **Triaged problems marked `Decision: Will do`.** Select the next entry
-   by importance, dependencies and then effort. Its `Owner:` becomes the
-   task's `For:` line and its `Thinking:` band becomes the task's minimum
-   model tier. Batch only entries with the same owner and model tier.
-2. **The roadmap**, once the queue is empty (untriaged entries block this): the sub-milestone carrying
+1. **Problems marked `Next: Investigate`.** They stay in the queue. The
+   Task writer reports them and stops; the human routes one to the
+   Architect using the model tier selected by its current `Thinking:`.
+2. **Problems marked `Next: Implement` and `Decision: Will do`.** Select
+   the next entry by importance, dependencies and then effort. It becomes
+   a `For: Coder` task whose `Thinking:` band is its minimum model tier.
+   Batch only entries in the same tier.
+3. **The roadmap**, once the queue is empty (untriaged entries block this): the sub-milestone carrying
    🚧 in `docs/ROADMAP.md` is finished, so it moves to ✅ Done and the
    next 🆕 New sub-milestone under the same parent starts, becoming a
    `For: Coder` task. If that parent has no 🆕 New sub-milestone left,
@@ -165,12 +168,13 @@ by hand:
    resumed rather than restarted, since the entry says which part of it
    already shipped.
 
-An entry is schedulable when it carries `Thinking:`, `Owner:` and
-`Decision: Will do`. All three lines come from a triage, so **nothing is
+An entry is schedulable when it carries `Thinking:`, `Next: Implement`
+and `Decision: Will do`. All three lines come from a triage, so **nothing is
 schedulable until a triage has run over it** — the point where a human
 sees the whole queue and what each entry will cost before any of it turns
-into work. The `Created by:` signature decides nothing. `Owner:` selects
-the role; `Thinking:` selects only the minimum model tier. The full
+into work. The `Created by:` signature decides nothing. `Next:` selects
+investigation or implementation; `Thinking:` selects only the minimum
+model tier for that next action. The full
 procedure is in `docs/agents/task-writer.md`.
 
 ## LLM roles and channels
@@ -213,13 +217,13 @@ Role: <role name>
    etc.). Records findings in that same file, as entries signed
    `Created by: Architect`, carrying their own evidence — file paths and
    line numbers — and what to do next. It is also the only role that
-   rates an entry's `Thinking:` and assigns its `Owner:`, together with
-   the human. An Architect-owned entry reaches it as a `For: Architect`
-   task from the Task writer, worked one subtask at a time exactly as the
-   Coder works its own. Model difficulty never changes ownership: hard
-   implementation remains Coder work, and simple repository-level prose
-   remains Architect work. The Architect may also *write*
-   `.claude/task.md` for its own entries. A conclusion that must outlive the working tree
+   rates an entry's `Thinking:` and assigns its `Next:`, together with
+   the human. It investigates `Next: Investigate` entries directly in
+   `.claude/problems.md`, never through `.claude/task.md` and never by
+   writing production code. The result is a rewritten, self-contained
+   entry and a new thinking level for what remains; when implementation
+   is fully specified, `Next:` becomes `Implement` and the Task writer
+   hands it to the Coder. A conclusion that must outlive the working tree
    becomes an ADR, a roadmap entry or a paragraph here. Also runs the
    problem triage on request — deciding every entry and correcting the
    estimate its filer gave it, then, once the human has
@@ -231,8 +235,8 @@ Role: <role name>
    cross-cutting prose and its process: `docs/adr/**`, the roadmap's
    entry text (never its status markers), this file, and
    `docs/agents/*.md` plus `.claude/settings*.json` and
-   `.codex/config.toml` / `.codex/agents/*.toml`. Reviewing,
-   investigating and triaging never touch code.
+   `.codex/config.toml` / `.codex/agents/*.toml`. It never writes source,
+   tests or executable configuration.
 3. **Task writer** — asked to turn a user request, the open entries in
    `.claude/problems.md`, or the next milestone into a task. Write
    `.claude/task.md` using the task format below: keep it understandable
@@ -297,7 +301,7 @@ than cosmetic.
 
 | File | Written by | Read by | Carries |
 | --- | --- | --- | --- |
-| `.claude/task.md` | Task writer (Architect for its own `Created by: Architect` entries, or when the human asks; the role a subtask is assigned for its 🚧/👀 status; the human for ✅, and for emptying the file once the task is accepted) | Coder, Architect, Milestone Reviewer, human | The current task's subtasks, their Order Plan and each subtask's owner |
+| `.claude/task.md` | Task writer for prose; Coder for 🚧/👀 status; human for ✅ and for emptying the accepted task | Coder, Task writer, human | The current implementation task, its model tier, Order Plan and subtasks |
 | `.claude/problems.md` | Everyone who finds something: Coder, Milestone Reviewer, Architect, human | Task writer first, Architect, human | A queue of everything found and not fixed on the spot: defects from review, incidental discoveries, and the Architect's findings with their evidence |
 
 Every finding goes to `.claude/problems.md`, whoever found it, signed
@@ -308,10 +312,9 @@ place for the Task writer to look. Whoever files an entry also fills in
 `Importance:` and `Effort:`, on the scales "Problem triage" below defines,
 because the role holding the evidence is the cheapest place to get a
 first number. The three fields nobody but the Architect and the human
-writes are `Thinking:`, `Owner:` and `Decision:` — the minimum model
-capability, the procedure that carries out the work, and whether the
-project spends time on it. `Thinking:` never routes a role; `Owner:`
-becomes the task's `For:` line. An Architect entry carries its own
+writes are `Thinking:`, `Next:` and `Decision:` — the minimum model
+capability for the next action, whether that action is investigation or
+implementation, and whether the project spends time on it. An Architect entry carries its own
 evidence and citations in the entry itself; there is no separate place
 for that reasoning to accumulate.
 
@@ -344,7 +347,7 @@ is finished — it is a request, never something a role starts on its own,
 because it ends with entries leaving the queue. Any request naming
 `.claude/problems.md` as a whole is that request, whatever verb it uses:
 "review", "analyse", "check", "go through". It always includes writing
-the `Thinking:`, `Owner:` and `Decision:` lines every entry is missing,
+the `Thinking:`, `Next:` and `Decision:` lines every entry is missing,
 since an entry without them is scheduled by nobody and a report that leaves them
 blank leaves the queue as stuck as it found it. It runs as two Architect
 passes over entries that already carry their filer's estimate, with the
@@ -355,9 +358,9 @@ human sitting between them:
    Reviewer, Architect, human — at the moment it is filed, not later. The
    filer has the evidence in front of it and is the cheapest place to get
    a first number. Those two fields are all a filer writes.
-2. **The Architect rates, assigns and decides.** Every entry in
+2. **The Architect rates, routes and decides.** Every entry in
    `.claude/problems.md`, including its own, gets the three fields only the
-   Architect may write — `Thinking:`, `Owner:` and `Decision:` — and any
+   Architect may write — `Thinking:`, `Next:` and `Decision:` — and any
    `Importance:` or `Effort:` the filer got wrong is corrected in place.
    Nothing else in
    the file changes: nothing moved, nothing deleted, no entry reworded.
@@ -372,7 +375,7 @@ human sitting between them:
 
    Thinking: 4
 
-   Owner: Coder
+   Next: Implement
 
    Decision: Will do
    ```
@@ -385,23 +388,49 @@ human sitting between them:
 4. **The Architect moves the backlog.** Every entry whose `Decision:`
    reads `Backlog` is summarized into `docs/backlog.md` and deleted
    from `.claude/problems.md` in the same edit. What remains in the queue
-   is the will-do list, each entry keeping its five routing and triage lines so the
+   is the will-do list, each entry keeping its five estimate and routing lines so the
    Task writer can order subtasks by them.
 
    A backlog entry is a `## <short title>`, one or two sentences saying
    what is wrong **and why it is not being done**, then `Created:` with
-   the triage's date, `Importance:`, `Effort:`, `Thinking:` and `Owner:`,
+   the triage's date, `Importance:`, `Effort:`, `Thinking:` and `Next:`,
    one per line, closed by a `---` rule. It carries no `P-` number — those belong
    to the queue, are never reused, and would only send a reader looking
    for an entry that is no longer there.
 
+### Iterative investigation
+
+An approved `Next: Investigate` entry is not a task specification yet.
+When the human asks to investigate that entry, the Architect first checks
+that the current model meets its `Thinking:` tier, then gathers evidence
+without editing production code. It rewrites the entry in place so the
+Reason, Description, options, recommendation and prevention reflect what
+is now known. Durable decisions graduate to an ADR, roadmap prose or this
+guide during the investigation rather than being left only in the queue.
+
+The last step is a fresh estimate of the **next** action. The Architect
+may lower, retain or raise `Thinking:` based on the remaining uncertainty:
+
+- uncertainty remains → keep `Next: Investigate`; the new number chooses
+  the model for the next investigation pass;
+- the fix is completely specified and touches Coder work → set
+  `Next: Implement` and rate the mechanical implementation `1`–`7`;
+- the Architect-owned correction or decision is complete → graduate it,
+  delete the settled entry, and report what consumed it.
+
+Investigation never writes source, tests or executable configuration and
+never creates `.claude/task.md`. This is how an entry can move from
+`Thinking: 9` on Astra, through a detailed recommendation, to
+`Thinking: 4` and `Next: Implement` for Sol without confusing the two
+pieces of work.
+
 ### The four criteria
 
 Every entry in `.claude/problems.md` carries the four criteria plus its
-owner, one field per line with a blank line between, in the order
-`Importance:`, `Effort:`, `Thinking:`, `Owner:`, `Decision:`. An entry
+next action, one field per line with a blank line between, in the order
+`Importance:`, `Effort:`, `Thinking:`, `Next:`, `Decision:`. An entry
 in `docs/backlog.md` carries `Created:` and the first three criteria plus
-`Owner:`; its decision is the file it is in.
+`Next:`; its decision is the file it is in.
 
 **Importance** — how much the problem matters. The icon is written with
 the word, never instead of it, so the line stays greppable:
@@ -428,8 +457,8 @@ owner including tests and documentation updates:
   sign that it is a roadmap milestone rather than a problem entry; say so
   instead of backlogging it.
 
-**Thinking** — the minimum model capability the fix needs, a bare number
-from 1 to 10. It does not measure effort, select a role or affect queue
+**Thinking** — the minimum model capability the entry's next action needs,
+a bare number from 1 to 10. It does not measure effort or affect queue
 priority, and only the Architect and the human write it.
 
 - `1` — one obvious edit. A typo, a stale sentence, a renamed symbol.
@@ -453,31 +482,32 @@ priority, and only the Architect and the human write it.
   the durability contract.
 
 The numbers map to three stable tiers. `1`–`3` is **Light**, `4`–`7` is
-**Standard**, and `8`–`10` is **Advanced**. A task records the tier of
-its highest-rated subtask and may be worked by that tier or a stronger
-one. Model names are host configuration and live in `docs/agent-setup.md`;
-they never appear in the queue contract. If the current session is below
-the task's tier, it stops before changing a status marker and tells the
-human which tier is required. It never delegates or spawns a replacement
-unless the human asked for delegation.
+**Standard**, and `8`–`10` is **Advanced**. Advanced is an investigation
+tier, not an implementation tier: an `8`–`10` entry has
+`Next: Investigate` and stays in `.claude/problems.md`. Investigation may
+reduce the number iteratively while leaving `Next: Investigate`; it changes
+to `Next: Implement` only when the remaining work is specified well enough
+to rate `1`–`7`. A Coder task therefore records Light or Standard and may
+be worked by that tier or a stronger non-Architect executor. Model names
+are host configuration and live in `docs/agent-setup.md`; they never
+appear in the queue contract. A weak or unknown session stops before
+changing a status marker and never delegates unless the human asked.
 
 The level is about the thinking, not the size: a 1 SP entry is a `9` when
 its single line is obvious only once the decision is made, and an 8 SP
 entry is a `3` when it is long but entirely settled. An entry that is a
 decision *followed by* mechanical work takes the number of the decision.
-Thinking is not priority. A `10` is scheduled before a `2` only when its
-importance or dependencies require that order.
+Thinking is not priority. Importance and dependencies decide which entry
+is investigated or implemented first.
 
-**Owner** — `Coder` or `Architect`, chosen from the work rather than from
-model strength. Coder owns source, tests, crate documentation and
-executable configuration. Architect owns investigations, ADRs, roadmap
-prose, repository-level documentation, diagrams, role definitions and
-host agent configuration. A hard code-only fix remains `Owner: Coder`;
-a trivial ADR correction remains `Owner: Architect`. Work that genuinely
-needs one role to make a decision and the other to implement it is split
-into dependent entries when each part can stand alone. When the decision
-and implementation are inseparable, the Architect owns the combined
-entry and its task states both deliverables explicitly.
+**Next** — `Investigate` or `Implement`. `Investigate` is Architect work
+performed on the entry itself: gather evidence, settle choices, record any
+durable decision, and rewrite the entry into executable instructions without
+writing production code. At the end, re-rate `Thinking:` for the next action.
+If uncertainty remains, keep `Next: Investigate`; this permits a sequence
+such as Advanced investigation followed by a narrower Standard investigation.
+When nothing material remains to discover, set `Next: Implement`, rate the
+remaining implementation `1`–`7`, and leave task creation to the Task writer.
 
 **Decision** — `Will do` or `Backlog`, from importance and effort
 together and never from the thinking level; a `9` is done or backlogged
@@ -494,7 +524,7 @@ on the same grounds as a `2`:
   most likely to overturn.
 
 An entry filed after a triage carries an importance and an effort but no
-`Thinking:`, `Owner:` or `Decision:`, and that absence is exactly how the
+`Thinking:`, `Next:` or `Decision:`, and that absence is exactly how the
 next triage finds it.
 
 An entry that reaches `docs/backlog.md` does not come back on any agent's
@@ -519,13 +549,13 @@ This table also decides who *carries out* a problem entry: **the fix is
 made by the owner of the files it touches, whatever role found it.** A
 Milestone Reviewer's finding about a false statement in an ADR is the
 Architect's to fix; a Coder's note about a stale sentence in `docs/agent-guide.md`
-is the same. The triage records that independently as `Owner:`. The
-entry's `Thinking:` may be any level: ownership is write authority, not a
-proxy for model strength.
+is the same. `Next:` records whether the entry needs Architect
+investigation or is ready for Coder implementation; `Thinking:` records
+the model for that next action. Neither changes file ownership.
 
 | Area | Owner | Notes |
 | --- | --- | --- |
-| `crates/**/*.rs` — source and tests | Coder; Architect only when an inseparable Architect-owned decision task explicitly includes implementation | Tests are not a separate area: a subtask's tests ship with its code. Model tier never changes this ownership. |
+| `crates/**/*.rs` — source and tests | Coder | Tests are not a separate area: a subtask's tests ship with its code. The Architect never writes production code. |
 | `crates/**/*.MD` — sibling module docs | Coder | Ships in the same commit as its `.rs`. Whoever edits the code edits the doc. |
 | `crates/*/README.md` | Coder | Same rule: it documents that crate's code, so it goes stale the moment code lands without it. |
 | `README.md`, `AGENTS.md`, `CLAUDE.md`, `docs/agent-guide.md`, `docs/agent-setup.md` | Architect | Repository-level prose. "What works today" claims here are checked by the Milestone Reviewer at the end of each milestone. |
@@ -536,9 +566,9 @@ proxy for model strength.
 | `docs/backlog.md` | Architect | The checked-in list of problems the project has decided not to do. An entry gets there only through an approved triage, and leaves only when the human approves a revive — the Architect then deletes it and files a fresh `P-` entry in the same edit — or when the problem it describes is gone. |
 | `docs/diagrams/**` | Architect | The map, not the contract: if a diagram disagrees with `docs/agent-guide.md` or `docs/agents/`, the diagram is wrong. |
 | `docs/agents/*.md`, `.claude/agents/*.md`, `.claude/settings*.json` and `.codex/config.toml` / `.codex/agents/*.toml` | Architect | Shared roles and both hosts' agent configuration. |
-| `.claude/task.md` — prose | Task writer | The Architect writes it for its own `Created by: Architect` entries, or when the human explicitly asks, following `docs/agents/task-writer.md` exactly either way. Either one writes into an empty file: emptying it is the human's, and content still in it means no new task may be written. |
-| `.claude/task.md` — subtask status | Task writer sets 🆕, the role named on the `For:` line sets 🚧 and 👀, the human sets ✅ | Each role moves the status only to its own rung, and only in a task addressed to it. A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it" and "The `For:` line". |
-| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. Deletion is the only way an entry leaves — the file is an open queue, never a history — and who may delete follows who did the work: the Task writer deletes an entry it scheduled in full, and the Architect deletes its own settled entries plus any entry whose fix it carried out in its own files. The one deletion that follows neither is triage: on an approved triage the Architect moves every entry whose `Decision:` reads `Backlog`, whoever signed it, into `docs/backlog.md` in the same edit. The `Importance:` and `Effort:` lines are written by whoever files the entry and corrected only by the Architect in a triage or by the human; `Thinking:`, `Owner:` and `Decision:` are the Architect's and the human's alone. `Owner:` selects the task role, `Thinking:` selects its minimum model tier, and an entry missing either goes nowhere. |
+| `.claude/task.md` — prose | Task writer | Writes only `For: Coder` tasks into an empty file. Emptying it is the human's, and content still in it means no new task may be written. |
+| `.claude/task.md` — subtask status | Task writer sets 🆕, Coder sets 🚧 and 👀, the human sets ✅ | A status change is the marker and nothing else — no note beside it, no edit to the description. See "Status, and who may set it" and "The `For:` line". |
+| `.claude/problems.md` | Whoever finds the problem | Every role may append a signed entry. The Architect triages and investigates in place; the Task writer deletes an implementation-ready entry when it schedules it. On an approved triage the Architect moves every `Decision: Backlog` entry into `docs/backlog.md`. The filer writes `Importance:` and `Effort:`; `Thinking:`, `Next:` and `Decision:` are the Architect's and the human's alone. `Next: Investigate` stays in the queue, `Next: Implement` may become a Coder task, and an entry missing any routing field goes nowhere. |
 | `.github/workflows/**`, `scripts/**`, `Cargo.toml`, `Dockerfile`, `.gitignore` | Coder | Executable configuration is code: it is changed through a task and reviewed as code. |
 
 Milestone planning is the Task writer's, milestone review is the
@@ -555,10 +585,10 @@ a session forgets it.
 `.claude/task.md`:
 - Title: milestone number + a short description, or `Problems` when the
   task is a batch of `P-` entries.
-- `For:` line, directly under the title: `For: Coder` or
-  `For: Architect`. One role per task file.
-- `Model tier:` line directly after `For:`: `Light`, `Standard` or
-  `Advanced`. One tier per task file, equal to the band containing the
+- `For: Coder` directly under the title. Architect work never enters the
+  task file.
+- `Model tier:` line directly after `For:`: `Light` or `Standard`. One
+  tier per task file, equal to the band containing the
   highest `Thinking:` value in its Order Plan.
 - Order Plan: a numbered list (1 to N) giving the subtask order, each
   line carrying its own status marker, its effort in story points and the
@@ -586,31 +616,22 @@ a session forgets it.
 
 ### The `For:` line
 
-`.claude/task.md` carries `For: Coder` or `For: Architect` directly under
-its title, and every subtask in it belongs to that one role. A task is
-never mixed: the Task writer batches only problems with the same `Owner:`,
-and that owner becomes the `For:` line. `Thinking:` has no effect on it.
-
-This is what stops a problem sitting in the queue because the assigned
-role may not write the file its fix lands in. A fix that is a paragraph
-in an ADR has `Owner: Architect` even if it is `Thinking: 1`, and reaches
-the Architect the same way any other work reaches anyone — as a task.
-
-Whoever the `For:` line names works the whole file, one subtask at a
-time, moving 🚧 and 👀 as usual; the other role reads it and stops. The
-Architect working a task is bound by everything else it is bound by: an
-ADR still has to be an ADR, and a conclusion still has to graduate to a
-durable file before the human empties the task.
+New `.claude/task.md` files always carry `For: Coder`. The Task writer
+turns only `Next: Implement` entries into tasks. Architect work happens
+earlier and remains in `.claude/problems.md` or graduates directly into
+an ADR, roadmap entry or shared policy. `For: Architect` is therefore a
+routing error, not a request for Astra to become an implementation agent.
 
 ### The `Model tier:` line
 
-`Light`, `Standard` and `Advanced` correspond to `Thinking: 1`–`3`,
-`4`–`7` and `8`–`10`. The Task writer batches only one band per task and
-writes that band after `For:`. Before moving a subtask to 🚧, the assigned
-role checks that the current session supplies at least that tier using
+`Light` and `Standard` correspond to implementation-ready `Thinking:
+1`–`3` and `4`–`7`. `8`–`10` is Advanced investigation and never enters
+a task. The Task writer batches only one implementation band per task and
+writes that band after `For:`. Before moving a subtask to 🚧, the Coder
+checks that the current session supplies at least that tier using
 the host mapping in `docs/agent-setup.md`. A stronger model is allowed;
 a weaker or unknown one stops without editing the task and reports the
-required tier. Model tier never changes ownership, queue priority, or
+required tier. Model tier never changes file ownership, queue priority, or
 permission to delegate.
 
 ### Status, and who may set it
@@ -712,15 +733,15 @@ Per entry:
 - Title: `P-<n>` + a short description.
 - `Created by:` who found it — Coder, Milestone Reviewer, Architect, or
   Human. It is not optional: it says whose reply the entry came out of
-  and who to ask about it. It does not route the entry; `Owner:` does.
-- `Importance:`, `Effort:`, `Thinking:`, `Owner:` and `Decision:` — five
+  and who to ask about it. It does not route the entry.
+- `Importance:`, `Effort:`, `Thinking:`, `Next:` and `Decision:` — five
   lines, one field each,
   never joined into one, each separated from its neighbours by a blank
   line like every other paragraph in the entry. `Importance:` carries its
   icon and its word together (`🔴 High`, `🟡 Medium`, `🟢 Low`) and
   `Effort:` its story points; both are written by whoever files the
   entry and corrected only by the Architect in a triage or by the human.
-  `Thinking:` is a bare `1`–`10`, `Owner:` is `Coder` or `Architect`,
+  `Thinking:` is a bare `1`–`10`, `Next:` is `Investigate` or `Implement`,
   and `Decision:` is `Will do` or `Backlog`; **all three are written by
   the Architect or the human**, in a triage, so a newly filed entry has
   none, and their absence is what the next triage looks for. See
@@ -1032,10 +1053,9 @@ citations in three ADRs. So when the Task writer writes the task for a
 milestone's **last** sub-milestone, it adds a final Order Plan line for
 the sweep — "run the `.rs:` citation sweep over `docs` and `docs/agent-guide.md`" —
 so it is a line with a status marker that somebody has to move. Almost
-every hit lands in a file only the Architect may write, which makes the
-sweep normally a `For: Architect` subtask; when it falls inside a Coder
-task instead, the Coder runs the grep and files what it finds, since it
-may not re-point an ADR itself. Every site P-48 repaired — three in
+every hit lands in a file only the Architect may write. The Coder runs
+the sweep and files those hits; the Architect repairs them directly
+rather than receiving an implementation task. Every site P-48 repaired — three in
 `docs/adr/0004-acid-scope.md`, one in `docs/adr/0012-bounded-lock-waits.md`
 and two in `docs/adr/0013-version-identity-and-lifetime.md` — was correct
 when written and stale by the end of M10, and P-68 repaired the same
@@ -1313,12 +1333,9 @@ else.** When a subtask's whole diff is prose — sibling `.MD`s, a crate
 `cargo test --workspace` would read exactly the `.rs` files they read on
 the previous run and can only reproduce the previous answer, at the cost
 of the crash-injection sweeps. This binds the Coder and the Architect
-alike, and for the Architect it is the common case rather than the only
-one: most of what it writes is prose, so `check_docs.sh` is usually its
-whole gate — but a `For: Architect` subtask that changes code runs the
-full gate exactly as a Coder subtask does, with the same three-execution
-budget and the same crash-injection obligation. The gate follows the
-diff, never the role.
+alike. The Architect never writes production code, so `check_docs.sh` is
+its whole gate. Coder tasks run the gate selected by their diff, with the
+same three-execution budget and crash-injection obligation.
 
 The boundary is the file list, not the intent. **One changed `.rs` file
 puts the subtask back on the full gate** — a `// TODO(Mx):` marker

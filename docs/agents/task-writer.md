@@ -13,28 +13,29 @@ step because the later one looks more interesting.
    every schedulable one outranks new milestone work, because each is a
    defect or a known-wrong thing already in the tree.
 
-   An entry is schedulable when it carries **`Thinking:`**, **`Owner:`**
-   and **`Decision: Will do`**. All three come from a triage. An entry
+   An entry is schedulable when it carries **`Thinking: 1`–`7`**,
+   **`Next: Implement`** and **`Decision: Will do`**. All three come from
+   triage or a completed investigation. An entry
    missing any one is left alone and named in your reply: without
    `Thinking:` nobody has selected its minimum model tier; without
-   `Owner:` nobody has assigned its procedure and write authority; without
+   `Next:` nobody has said whether discovery is finished; without
    `Decision:` nobody has decided the project spends time on it.
    The `Created by:` signature decides nothing at all — an Architect
    entry is scheduled exactly like a Coder's.
 
-   **`Owner:` says which task the entry goes into.** `Coder` becomes
-   `For: Coder`; `Architect` becomes `For: Architect`. `Thinking:` says
-   only which model tier the task needs: `1`–`3` Light, `4`–`7` Standard,
-   `8`–`10` Advanced. Never infer one from the other.
+   **Never schedule `Next: Investigate` or `Thinking: 8`–`10`.** Those
+   entries wait in `.claude/problems.md` for an Architect using Advanced
+   tier. Report them and stop before roadmap work. The Architect rewrites
+   and re-rates them; you see them only after they become fully specified
+   `Next: Implement` work at Light (`1`–`3`) or Standard (`4`–`7`).
 
    Select the next entry by importance, required dependency order and
    then effort. Thinking level is not priority. Once selected, batch only
-   other entries with the same `Owner:` and the same model-tier band that
-   do not violate that ordering. A problem-repair task never mixes owners
-   or tier bands.
+   other entries in the same model-tier band that do not violate that
+   ordering. A problem-repair task never mixes tier bands.
 
    Every entry carries `Importance:` and `Effort:` from its filer and
-   `Thinking:`, `Owner:` and `Decision:` from the triage, one field per
+   `Thinking:`, `Next:` and `Decision:` from triage or investigation, one field per
    line under `Created by:`. Use importance, dependencies and effort to
    order the subtasks. Never write or edit any of the five. The one
    thing you carry across is `Effort:`, which becomes the subtask's own —
@@ -91,12 +92,12 @@ step because the later one looks more interesting.
    happened. Asking is the deliverable here; inventing a task to fill the
    gap is the failure.
 
-If entries remain without triage or awaiting an approved backlog move,
-report them and stop before advancing the roadmap.
+If entries remain without triage, carry `Next: Investigate`, or await an
+approved backlog move, report them and stop before advancing the roadmap.
 
-A human request naming specific work overrides the queue order. What it
-does not override is ownership or the model floor: `Owner:` still becomes
-`For:`, and the task still records the entry's model-tier band.
+A human request naming specific work overrides the queue order. It does
+not make investigative or Advanced work schedulable: the entry must first
+be reduced to `Next: Implement` at `Thinking: 1`–`7`.
 
 ## Consuming a problem
 
@@ -110,12 +111,10 @@ problems and nothing more.
 This makes the subtask the only surviving copy, so copy across everything
 the fix needs — the failing behaviour, the paths and line numbers, the
 entry's `Effort:` onto the subtask's Order Plan line, and the entry's
-"How to prevent in future" as part of the work. Whoever works the
-subtask, Coder or Architect, must never need the deleted entry. A subtask
-in an Architect task carries the entry's evidence, options and
-recommendation across too, and names what has to graduate — which ADR,
-which roadmap entry — because `.claude/task.md` is emptied and kept
-nowhere. Keep the `P-<n>`
+"How to prevent in future" as part of the work. The Coder must never need
+the deleted entry or repeat its investigation. Copy the settled
+recommendation and every implementation constraint; durable decisions
+already graduated during investigation. Keep the `P-<n>`
 in the subtask heading as provenance, and take the next free number for a
 new entry from the `Next entry:` line at the head of
 `.claude/problems.md`, incrementing it: numbers are never reused, and the
@@ -128,13 +127,12 @@ Never delete an entry you did not schedule.
 Format:
 - Title: milestone number plus a short description, or `Problems` plus a
   short description when the task is a batch of `P-` entries.
-- `For:` line, directly under the title: `For: Coder` or
-  `For: Architect`, copied from the entries' `Owner:`. A milestone task
-  is always `For: Coder`; Architect-owned follow-up is filed and routed
-  separately. One role per file, never both.
-- `Model tier:` line directly after `For:`: `Light` for `Thinking: 1`–`3`,
-  `Standard` for `4`–`7`, or `Advanced` for `8`–`10`. Every subtask in
-  a problem-repair task is in that same band. A roadmap task may contain
+- `For: Coder` directly under the title. You never write an Architect
+  task: Architect work stays in `.claude/problems.md` or graduates to a
+  durable document.
+- `Model tier:` line directly after `For:`: `Light` for `Thinking: 1`–`3`
+  or `Standard` for `4`–`7`. Advanced never appears in a task. Every
+  subtask in a problem-repair task is in that same band. A roadmap task may contain
   lower-rated subtasks and takes the tier of its highest-rated one.
 - Order Plan: a numbered list, 1 to N, giving subtask order. Every line
   carries a status marker, an effort in story points and the thinking
@@ -150,8 +148,9 @@ Format:
   for a subtask decomposed out of the roadmap. It is there to be checked:
   no level may require a tier above the task's `Model tier:`. In a
   problem-repair task every level is in the stated band; in a roadmap
-  task lower bands are allowed. `For:` is checked independently against
-  `Owner:`.
+  task lower bands are allowed. If any roadmap subtask needs `8`–`10`,
+  write no task and report that the roadmap work needs Architect
+  investigation first.
 - One section per subtask: what to do, how to test it, and a `Status:`
   line starting at 🆕 New. No effort in the body — it is on the Order
   Plan line and nowhere else, because the same number written twice is a
@@ -164,7 +163,7 @@ the Order Plan is the only place its estimate survives, and re-deriving
 it would quietly overrule a number the human approved. A subtask that
 comes from `docs/ROADMAP.md` gets your own estimate on
 `docs/agent-guide.md`'s Fibonacci effort scale, judged as work for the
-assigned owner including tests and documentation: a sub-milestone decomposed into five subtasks
+Coder including tests and documentation: a sub-milestone decomposed into five subtasks
 is five separate estimates, not one divided up. If a copied estimate
 looks plainly wrong, keep it and say so in your reply; changing it is the
 Architect's in a triage, not yours here. If one problem entry becomes two
@@ -211,10 +210,9 @@ re-pointing every hit that no longer resolves to what its sentence
 claims, per `docs/agent-guide.md`'s "Citing code by line number". It is a line with
 a status marker rather than a paragraph somebody is expected to
 remember — which is how it was missed at the end of M10, leaving stale
-citations in three ADRs for P-68 to find. Nearly every hit is in an
-Architect-owned file, so the sweep is usually its own `For: Architect`
-task; if it lands in a Coder task, the subtask says to run the grep and
-file what it finds, since the Coder may not re-point an ADR.
+citations in three ADRs for P-68 to find. The Coder runs the sweep in the
+milestone task and files every Architect-owned hit; the Architect repairs
+those directly from `.claude/problems.md`, never through a task.
 
 **Grep every identifier you write into the file.** A subtask that names a
 function, field or type must name one that exists and does what the

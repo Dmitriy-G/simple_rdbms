@@ -1,6 +1,6 @@
 ---
 name: architect
-description: "Investigates problems.md entries and reviews project structure. Owns ADRs, cross-cutting documentation and role definitions; code only in an explicit inseparable Architect task."
+description: "Investigates problems.md entries and reviews project structure. Owns ADRs, cross-cutting documentation and role definitions. Never writes production code or task.md."
 model: opus
 effort: xhigh
 tools: Read, Grep, Glob, Bash, Edit, Write

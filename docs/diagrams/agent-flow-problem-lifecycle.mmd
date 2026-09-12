@@ -13,29 +13,28 @@ flowchart TD
     SRC3["Milestone Reviewer — what per-subtask<br/>review structurally could not see"]:::role
     SRC4["Architect — a judgement call, a design<br/>question, a finding from a project review,<br/>with its evidence in the entry"]:::role
 
-    PROB[".claude/problems.md — the open queue:<br/>P-n title, Created by: role,<br/>Importance: and Effort: from the filer,<br/>Thinking:, Owner: and Decision: from triage,<br/>Reason, Description,<br/>How to prevent in future.<br/>Number taken from the 'Next entry:' line"]:::channel
+    PROB[".claude/problems.md — the open queue:<br/>P-n title, Created by: role,<br/>Importance: and Effort: from the filer,<br/>Thinking:, Next: and Decision: from triage,<br/>Reason, Description,<br/>How to prevent in future.<br/>Number taken from the 'Next entry:' line"]:::channel
 
     REVIEW(["Human asks for a triage —<br/>a task, a sub-milestone or a<br/>milestone has just finished"]):::human
-    ARCHREV["Architect adds Thinking:, Owner: and<br/>Decision: to every entry, whoever signed it,<br/>and corrects Importance: or Effort:.<br/>Thinking selects only model tier;<br/>Owner selects only the role.<br/>Nothing moved, nothing deleted.<br/>Reports the table and stops"]:::role
+    ARCHREV["Architect adds Thinking:, Next: and<br/>Decision: to every entry, whoever signed it,<br/>and corrects Importance: or Effort:.<br/>8–10 means Investigate; ready 1–7<br/>may mean Implement.<br/>Nothing moved, nothing deleted.<br/>Reports the table and stops"]:::role
     APPROVE{"Human reviews the estimates,<br/>edits any by hand, approves"}:::human
-    ACCEPT["Backlog: moved to docs/backlog.md<br/>— heading, one or two sentences,<br/>Created: date, Importance:, Effort:,<br/>Thinking: and Owner:, each on its own line,<br/>entries split by ---<br/>— and deleted from problems.md in<br/>the same edit. An approved backlog move.<br/>Nobody schedules from that file"]:::stop
+    ACCEPT["Backlog: moved to docs/backlog.md<br/>— heading, one or two sentences,<br/>Created: date, Importance:, Effort:,<br/>Thinking: and Next:, each on its own line,<br/>entries split by ---<br/>— and deleted from problems.md in<br/>the same edit. An approved backlog move.<br/>Nobody schedules from that file"]:::stop
     REVIVE{"Architect proposes a revive:<br/>says which entry and what changed,<br/>then stops. The human decides"}:::human
     REVIVED["Approved: the Architect deletes the<br/>backlog entry and files a fresh P- entry<br/>citing it, in the same edit. A problem<br/>whose code is gone is deleted outright<br/>instead, and nothing re-enters the queue"]:::role
-    WILLDO["Will do: stays in the queue with all<br/>four fields, which the Task writer<br/>orders the subtasks by"]:::channel
+    WILLDO["Will do: stays in the queue.<br/>Investigate waits for Architect;<br/>Implement may reach Task writer"]:::channel
 
     NEXT(["Human asks for the next task"]):::human
     TW["Task writer reads problems.md<br/>before docs/ROADMAP.md"]:::role
-    RATED{"Thinking: and Owner: present<br/>and Decision: Will do?"}
+    RATED{"Thinking: and Next: present<br/>and Decision: Will do?"}
     UNRATED["Not triaged yet: left in the queue<br/>and named in the reply.<br/>The next triage releases it"]:::stop
-    WHICH{"Select by importance, dependencies,<br/>then effort. What are Owner and tier?<br/>Thinking never changes priority"}
+    WHICH{"What is the next action?<br/>Thinking selects its model;<br/>importance and dependencies set order"}
 
-    TASKC["Write .claude/task.md, For: Coder,<br/>with Light / Standard / Advanced tier —<br/>one subtask per compatible problem,<br/>keeping P-n, SP and Thinking"]
-    TASKA["Write .claude/task.md, For: Architect,<br/>with the independently selected tier —<br/>same shape, plus evidence, options,<br/>recommendation and durable destination"]
+    INVEST["Architect investigates without coding,<br/>rewrites the same entry with evidence and<br/>recommendation, then re-rates the next action.<br/>It may remain Investigate or become<br/>Implement at Thinking 1–7"]:::role
+    TASKC["Write .claude/task.md, For: Coder,<br/>with Light or Standard tier —<br/>one subtask per compatible ready problem,<br/>keeping P-n, SP and Thinking"]
     CONSUME["Delete the entry from problems.md<br/>in the same edit. It has moved, not gone:<br/>the subtask is where it lives now.<br/>No roadmap status changes — repair<br/>is not milestone progress"]
     MILESTONE(["Queue empty: next milestone instead<br/>— see agent-flow-milestone-planning.mmd"]):::stop
 
     CODER(["Coder works one subtask<br/>— see agent-flow-task-implementation.mmd"]):::role
-    ARCHW["Architect works one subtask: prose or code<br/>within its For: Architect task;<br/>runs the gate, then 👀 Review and stops"]:::role
     GATE["Finished. The subtask goes to 👀 Review;<br/>the human sets ✅ Done. Nothing to close<br/>in problems.md — the entry is already gone"]:::gate
     CR(["Human checks the fix<br/>and its prevention, then commits"]):::human
     RECORD["The commit is the only lasting record<br/>of what was found. task.md is not archived:<br/>the human empties it once the whole<br/>task has been accepted"]:::stop
@@ -57,8 +56,7 @@ flowchart TD
     EMPTY -- no --> RATED
     RATED -- no --> UNRATED
     RATED -- yes --> WHICH
-    WHICH -- "Owner: Coder" --> TASKC --> CONSUME
-    WHICH -- "Owner: Architect" --> TASKA --> CONSUME
+    WHICH -- "Next: Investigate" --> INVEST --> PROB
+    WHICH -- "Next: Implement, Thinking 1–7" --> TASKC --> CONSUME
     CONSUME --> CODER --> GATE
-    CONSUME --> ARCHW --> GATE
     GATE --> CR --> RECORD

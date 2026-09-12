@@ -36,9 +36,13 @@ human requests it. Never run concurrent writers against the shared queue.
   earlier 👀 Review. Work **one subtask**, update only its status in both
   places, finish at 👀 Review, and stop. Only the human sets task ✅ Done.
 - The Task writer writes only into an empty task file and schedules only
-  triaged `Thinking:` + `Owner:` + `Decision: Will do` problems. `Owner:`
-  selects Coder or Architect; `Thinking:` selects the minimum model tier.
-  Never mix owners in one task or model tiers in one problem batch.
+  triaged `Thinking:` + `Next: Implement` + `Decision: Will do` problems.
+  It writes `For: Coder` tasks only and keeps one model tier per problem
+  batch. `Thinking:` selects the minimum model tier for the next action.
+- `Next: Investigate` stays in `.claude/problems.md`. On request the
+  Architect investigates it without coding, rewrites the entry with the
+  evidence and executable recommendation, then re-rates `Thinking:` for
+  what remains and changes `Next:` to `Implement` only when it is ready.
 - Triage rates entries first; moving Backlog entries requires the human's
   approval. Read `docs/backlog.md` before filing a finding; never duplicate
   or revive its entries without approval.

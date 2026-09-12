@@ -34,7 +34,7 @@ Effort: 8 SP
 
 Thinking: 4
 
-Owner: Coder
+Next: Implement
 
 ---
 
@@ -58,6 +58,6 @@ Effort: 2 SP
 
 Thinking: 8
 
-Owner: Architect
+Next: Implement
 
 ---

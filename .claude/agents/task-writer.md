@@ -1,6 +1,6 @@
 ---
 name: task-writer
-description: "Turns open problems or a roadmap milestone into task.md, routing owner and model tier independently."
+description: "Turns implementation-ready problems or a roadmap milestone into a Coder task at the required model tier."
 model: opus
 effort: xhigh
 tools: Read, Grep, Glob, Bash, Edit, Write

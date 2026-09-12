@@ -14,14 +14,14 @@ next subtask. Resume the first 🚧 In Progress subtask before taking a 🆕 New
 An earlier 👀 Review blocks starting any later subtask; ✅ Done is accepted.
 
 Check the **`For:`** line under the title before anything else. `For:
-Coder` is yours. `For: Architect` is not — that task edits files you may
-not write, so change nothing, touch no marker, and say in your reply that
-the current task is the Architect's. A file with no `For:` line is yours
-by default.
+Coder` is yours. Any other value is a routing error: Architect work never
+enters `.claude/task.md`. Change nothing, touch no marker, and report it.
+A legacy file with no `For:` line is yours by default.
 
-Then check **`Model tier:`**. `Light`, `Standard` and `Advanced` require
-the corresponding host tier documented in `docs/agent-setup.md`; a
-stronger model may work a lower-tier task. If the current session is
+Then check **`Model tier:`**. Coder tasks are `Light` or `Standard` and
+require the corresponding executor documented in `docs/agent-setup.md`;
+a stronger Coder model may work a lower-tier task. `Advanced` is an
+investigation tier and is invalid in a task. If the current session is
 weaker or its tier is unknown, change nothing, touch no marker, and tell
 the human which tier is required. Never delegate or spawn a replacement
 unless the human asked for delegation. A legacy file with no line has no
@@ -107,9 +107,9 @@ own, and you stop.
   decision was made once, and a duplicate entry undoes it without anyone
   approving that. Say it in your reply instead. That file is read-only to
   you, like every other doc outside your own crates.
-- Never write a `Thinking:`, `Owner:` or `Decision:` line, on your own entry or
+- Never write a `Thinking:`, `Next:` or `Decision:` line, on your own entry or
   anyone's, and never touch the `Importance:` or `Effort:` of an entry
-  you did not file. Minimum model capability, ownership and whether the
+  you did not file. Minimum model capability, next action and whether the
   work gets done are settled in the Architect's triage, which the human
   asks for and approves.
 - If the current subtask is wrong, impossible, or contradicts the
