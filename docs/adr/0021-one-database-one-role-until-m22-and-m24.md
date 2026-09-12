@@ -2,11 +2,10 @@
 
 Date: 2026-09-11
 
-Revised: 2026-09-11 — Decision and Consequences: the test this ADR stated
-covered only relations a client *lists*, and a client that reads a single
-value out of one crashed on the empty answer (P-94). `pg_settings` joins
-the relations answered from configuration, and the scalar rule below is
-the generalization.
+Revised: 2026-09-12 — Decision and Consequences: ADR 0024 makes the
+single configured database an explicit server scope and distinguishes
+configuration answers from namespace bootstrap. The 2026-09-11 revision
+added pg_settings and the scalar-answer rule after P-94's driver failure.
 
 Status: Accepted
 
@@ -49,12 +48,20 @@ meantime, which is precisely the gap M13.4 exists to close.
 ## Decision
 
 **`pg_database`, `pg_roles`, `pg_user` and `pg_settings` are answered
-from the server's
-own configuration, and they are the only fabricated rows in
-`crates/server/src/pg_catalog.rs`.** The first three answer one row each;
-`pg_settings` answers one row per parameter in
+from the server's own configuration.** The first three answer one row
+each; `pg_settings` answers one row per parameter in
 `crates/server/src/settings.rs`, which is also the table `SHOW` reads, so
-the two spellings of one question cannot disagree.
+the two spellings of one question cannot disagree. These are the
+configuration-backed exceptions introduced here, not an exhaustive list
+of all constructed rows: the recognizers also report fixed namespaces
+and supported types, alongside metadata from the live user catalog.
+
+**The single configured database is the server's intended scope.**
+`docs/adr/0024-schemas-within-one-database.md` places user schemas within
+that database and excludes SQL CREATE DATABASE/DROP DATABASE from the
+current roadmap. M24 registers namespace state and replaces the query
+recognizers; it does not introduce a database cluster manager. The
+library may still open independent database handles for separate files.
 
 - The database's name is `engine::Database::database_name()` — the file
   stem of `DbConfig::db_path`, computed once when the database is opened
@@ -113,12 +120,8 @@ the role oid matching `pg_namespace.nspowner` — because the zero-row
 catch-all means a query that merely succeeds proves nothing about which
 code answered it.
 
-What was given up is that a client showing object ownership sees
-`postgres`, whoever connected, and a client that asks "which databases
-are on this server" is told one, correctly but incidentally: the answer
-would still be one if this process could serve several. Both are
-consequences of the same missing subsystems rather than of this decision,
-and both have an owner. **M22 supplies the real role**: once
+A client showing object ownership sees `postgres`, whoever connected;
+**M22 supplies the real role**: once
 authentication exists, the fixed name and oid here become the session's
 authenticated identity, and the `passwd` cell — `********` today, never a
 credential — becomes a value that must stay redacted for a real reason.

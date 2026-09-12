@@ -26,8 +26,10 @@ stem (`engine::Database::database_name`), one implicit-superuser row, and
 the parameter table `SHOW` reads too — which is what gives the schema and
 table listings below them a root to
 hang from (`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`).
-Those four are the only rows this engine fabricates; every other
-`pg_`-named relation still answers zero rows. That ADR's two-part test is
+Those configuration answers supplement the fixed namespace/type rows
+and the live table/column metadata; only unrecognized `pg_` relations
+reach the zero-row catch-all. The namespace and database scope is
+`docs/adr/0024-schemas-within-one-database.md`. ADR 0021's two-part test is
 what decides whether the next relation joins them, and both halves came
 from a real client breaking: an empty relation is read as an empty
 *answer*, and an empty *scalar* query is read as a null. There is no

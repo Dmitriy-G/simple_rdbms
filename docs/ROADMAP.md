@@ -4,6 +4,12 @@ Each milestone is named after the database problem it solves, not the
 feature it adds — the feature is just how the problem gets solved this
 time.
 
+The server targets one configured database per instance; SQL `CREATE
+DATABASE` and `DROP DATABASE` are outside this roadmap. User-created
+schemas belong to M24.1, within that database. The scope and catalog
+bootstrap distinction are recorded in
+`docs/adr/0024-schemas-within-one-database.md`.
+
 **The number is the priority**, in natural numeric order. The file reads
 top to bottom and that is the order the work happens in. There is no
 second ordering and no note explaining why an entry sits where it does:
@@ -403,11 +409,12 @@ anything exists at all. An empty `pg_database` reads as "this server
 serves no databases", so a client stopped there and showed an empty
 object tree above recognizers that could already answer. `pg_database`,
 `pg_roles` and `pg_user` are therefore answered from configuration - one
-database named after the `--db-path` file stem, one implicit superuser -
-and they are the only rows this interception fabricates. The rule that
-replaced the old one, and the test for whether a future relation belongs
-on either side of it, is
-`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`.
+database named after the `--db-path` file stem, one implicit superuser.
+`pg_settings` subsequently joined them so a driver's scalar configuration
+query receives a value. These configuration answers supplement the fixed
+namespace/type rows and live user-table/column metadata; unrecognized
+relations reach the catch-all. The rule for adding another configuration
+answer is `docs/adr/0021-one-database-one-role-until-m22-and-m24.md`.
 
 ## M14 — Changing and removing rows (DELETE, UPDATE, arithmetic) 🆕 New
 **Problem:** rows can be inserted and read but never modified or removed.
@@ -714,30 +721,69 @@ what a query actually produced — without that, a cost model cannot be
 debugged.
 
 ## M24 — `pg_catalog` answered by real queries 🆕 New
-**Problem:** M13.4's known-query-text interception works for the client
-versions it was tested against and breaks on any client that phrases the
-same introspection query differently — the moment `pg_class`/
-`pg_namespace`/`pg_attribute`/`pg_type` are joined instead of queried
-standalone, or filtered or aliased differently, interception has nothing
-to match and returns nothing. Real `pg_catalog` compatibility needs those
-tables to exist and answer through the same query path every other table
-does.
-**Solution:** system catalog tables backed by the real `catalog::Catalog`
-state and answered through ordinary `SELECT` execution rather than string
-matching, including the joins across them real clients issue — which
-needs M23.1's nested-loop joins to exist first. Retire M13.4's interception
-once these are in place — **including the four relations it answers from
-configuration rather than from the catalog**, `pg_database`, `pg_roles`,
-`pg_user` and `pg_settings`, which are the only fabricated rows in it:
-the first three are where a client's object tree has its root, and
-`pg_settings` is where it reads the server version number that decides
-what it asks next
-(`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`). Deleting
-the interception without replacing all four empties every client's
-tree again (P-90) or crashes the driver outright on a null (P-94). Note
-that `pg_settings` also has to keep agreeing with `SHOW`, which reads the
-same table today. See datafusion-postgres
-(linked from M13) as a reference `pg_catalog` implementation.
+**Problem:** M13.4's query-text interception cannot answer arbitrary
+catalog joins, aliases and filters, and its fixed namespace rows are not
+backed by registered namespaces. The flat catalog also cannot distinguish
+same-named objects in different schemas.
+**Solution:** the two sub-milestones below, in order: establish namespace
+identity and resolution, then answer catalog queries against that state.
+M22 supplies roles and privileges; M23.1 supplies the required joins.
+The scope is `docs/adr/0024-schemas-within-one-database.md`: schemas
+inside the single configured database, without SQL database creation.
+
+### M24.1 — Schemas with independent object names 🆕 New
+**Problem:** catalog tables and indexes are keyed by bare names.
+`public` qualification alone cannot represent another namespace, and a
+wire-only SET acknowledgment cannot change how the engine resolves it.
+**Solution:** persistent namespace records with stable ids and ownership,
+including bootstrapped public and pg_catalog; namespace-qualified object
+identity and uniqueness; and
+`CREATE SCHEMA [IF NOT EXISTS] name [AUTHORIZATION role]`.
+Use M22's authorization model for namespace ownership and USAGE/CREATE.
+Keep system namespaces protected and indexes in their table's namespace.
+Exact identifier normalization follows
+`docs/adr/0023-sql-identifier-identity.md`.
+Engine-owned session search_path, SET/SHOW/RESET and current_schema must
+drive the same ordered resolution in direct execution, parameter
+inference and prepared-statement description. Use public as the default
+user path and handle implicit/explicit pg_catalog placement consistently.
+**Implementation prerequisite:** an ADR must settle catalog layout,
+bootstrap and recovery, existing-file upgrade/rejection, transaction
+locking/publication and prepared-plan revalidation before code is
+scheduled. Existing objects retain their names in public. Preserve the
+live catalog's short internal locks; namespace rollback must not remove
+another transaction's committed objects or leave acknowledged dependent
+writes stranded. If ADR 0023's front-end representation has not already
+shipped, include it here rather than duplicating it.
+**Done when:** two schemas contain distinct same-named tables; two
+sessions with different paths resolve them independently; ownership and
+privileges are enforced; direct/prepared execution agrees; and creation,
+rollback and reopening preserve namespace/object identity. The current
+wire metadata must reflect new namespaces until M24.2 replaces it.
+
+### M24.2 — Catalog queries over registered objects 🆕 New
+**Problem:** even with registered namespaces, text recognizers answer
+only selected catalog query shapes and duplicate the engine's lookup
+policy.
+**Solution:** answer pg_namespace/pg_class/pg_attribute/pg_type and their
+supported relationships through ordinary SELECT execution, including
+M23.1's joins, using M24.1's registered identities. Retire M13.4's
+interception, including pg_database, pg_roles, pg_user and pg_settings.
+The configured database row, M22's real role records and scalar settings
+answers must remain available; SHOW and pg_settings must read the same
+effective values
+(`docs/adr/0021-one-database-one-role-until-m22-and-m24.md`).
+A missing startup database name selects the configured database, its exact
+name succeeds, and a different requested name is rejected with 3D000;
+a catalog row does not imply multi-database routing.
+**Done when:** real client catalog joins, filters and aliases run through
+the normal planner/executor, report exact namespace/object identities and
+ownership, and retain the client's database node and scalar configuration
+answers after the recognizers are removed. Explicit qualification never
+falls back to another schema. Document the change from the old
+interceptor's user-table precedence to ordinary catalog search-path
+resolution. See datafusion-postgres (linked from M13) as a reference
+catalog implementation.
 
 ## M25 — Referential integrity (foreign keys) 🆕 New
 **Problem:** no way to express that one table's column references
@@ -765,6 +811,11 @@ reclaim a page a dropped table or index frees.
 reclaim every page the table's heap and indexes owned. `IF EXISTS`
 throughout, since every migration tool emits it. This free list is also
 where M14's orphaned, unlinked B+tree leaf pages finally get reclaimed.
+After M24.1 introduces user namespaces, this milestone also owns
+`DROP SCHEMA [IF EXISTS] name RESTRICT`: remove an empty user namespace
+and reject nonempty or system namespaces. Schema CASCADE and ALTER
+SCHEMA are outside the current roadmap
+(`docs/adr/0024-schemas-within-one-database.md`).
 
 ## M27 — ALTER TABLE 🆕 New
 **Problem:** a table's schema is fixed at `CREATE TABLE` time; there is
@@ -779,7 +830,9 @@ migration tool emits them.
 process and copy three files. There is no way to get data out or back in
 as portable SQL.
 **Solution:** a logical dump and restore (`pg_dump`-shaped: schema plus
-`INSERT`s or a copy stream).
+`INSERT`s or a copy stream). Emit M24.1's user namespace definitions and
+ownership before their component-wise qualified objects and data, so
+same-named tables in different schemas restore distinctly.
 
 ## M29 — Physical backup, WAL archiving, PITR 🆕 New
 **Problem:** the only recovery target today is "whatever was in the WAL
