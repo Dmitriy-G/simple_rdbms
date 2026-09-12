@@ -19,6 +19,14 @@ not write, so change nothing, touch no marker, and say in your reply that
 the current task is the Architect's. A file with no `For:` line is yours
 by default.
 
+Then check **`Model tier:`**. `Light`, `Standard` and `Advanced` require
+the corresponding host tier documented in `docs/agent-setup.md`; a
+stronger model may work a lower-tier task. If the current session is
+weaker or its tier is unknown, change nothing, touch no marker, and tell
+the human which tier is required. Never delegate or spawn a replacement
+unless the human asked for delegation. A legacy file with no line has no
+model gate.
+
 If `.claude/task.md` has no Order Plan, treat the whole file as one task.
 
 Do not go looking for work anywhere else. `.claude/problems.md` is
@@ -99,11 +107,11 @@ own, and you stop.
   decision was made once, and a duplicate entry undoes it without anyone
   approving that. Say it in your reply instead. That file is read-only to
   you, like every other doc outside your own crates.
-- Never write a `Thinking:` or `Decision:` line, on your own entry or
+- Never write a `Thinking:`, `Owner:` or `Decision:` line, on your own entry or
   anyone's, and never touch the `Importance:` or `Effort:` of an entry
-  you did not file. How hard a problem is to think about, and whether it
-  gets done, are settled in the Architect's triage, which the human asks
-  for and approves.
+  you did not file. Minimum model capability, ownership and whether the
+  work gets done are settled in the Architect's triage, which the human
+  asks for and approves.
 - If the current subtask is wrong, impossible, or contradicts the
   codebase, append that to `.claude/problems.md` and stop. Do not
   improvise a different task.

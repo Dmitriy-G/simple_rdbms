@@ -36,7 +36,8 @@ no single agent file has.
   — a finding by any role, into `.claude/problems.md`, out of it again as
   a scheduled subtask, to a fix that ships with its prevention. Also
   shows the other two exits: a settled Architect entry whose conclusion becomes durable,
-  and a triaged entry scheduled for its rated role, and the triage — the Architect estimating every entry,
+  and a triaged entry scheduled for its assigned owner and model tier,
+  and the triage — the Architect estimating every entry,
   the human approving, and the backlogged ones moving to
   `docs/backlog.md` — plus the one way back out of that file, which is a
   revive the human has approved.

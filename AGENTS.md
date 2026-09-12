@@ -36,8 +36,9 @@ human requests it. Never run concurrent writers against the shared queue.
   earlier 👀 Review. Work **one subtask**, update only its status in both
   places, finish at 👀 Review, and stop. Only the human sets task ✅ Done.
 - The Task writer writes only into an empty task file and schedules only
-  triaged `Thinking:` + `Decision: Will do` problems: 1–7 for Coder,
-  then 8–10 for Architect. Never mix roles in one task.
+  triaged `Thinking:` + `Owner:` + `Decision: Will do` problems. `Owner:`
+  selects Coder or Architect; `Thinking:` selects the minimum model tier.
+  Never mix owners in one task or model tiers in one problem batch.
 - Triage rates entries first; moving Backlog entries requires the human's
   approval. Read `docs/backlog.md` before filing a finding; never duplicate
   or revive its entries without approval.

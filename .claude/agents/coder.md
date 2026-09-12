@@ -7,5 +7,6 @@ tools: Read, Grep, Glob, Edit, Write, Bash
 ---
 
 Read `AGENTS.md`, then `docs/agents/coder.md`, and follow that procedure.
+This adapter supplies the Standard model tier.
 All paths are relative to the repository root. Keep the assigned role.
 Use the shared `.claude/task.md` and `.claude/problems.md` channels.

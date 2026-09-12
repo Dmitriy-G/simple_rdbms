@@ -13,33 +13,30 @@ step because the later one looks more interesting.
    every schedulable one outranks new milestone work, because each is a
    defect or a known-wrong thing already in the tree.
 
-   An entry is schedulable when it carries **`Thinking:`** and
-   **`Decision: Will do`**. Both come from a triage. An entry missing
-   either one is left alone and named in your reply: without `Thinking:`
-   nobody has judged how hard it is, and you never judge it yourself;
-   without `Decision:` nobody has decided the project spends time on it.
+   An entry is schedulable when it carries **`Thinking:`**, **`Owner:`**
+   and **`Decision: Will do`**. All three come from a triage. An entry
+   missing any one is left alone and named in your reply: without
+   `Thinking:` nobody has selected its minimum model tier; without
+   `Owner:` nobody has assigned its procedure and write authority; without
+   `Decision:` nobody has decided the project spends time on it.
    The `Created by:` signature decides nothing at all — an Architect
    entry is scheduled exactly like a Coder's.
 
-   **`Thinking:` says which task the entry goes into.** `1`–`7` is a
-   Coder problem, `8`–`10` is an Architect problem, and you write tasks
-   for both:
+   **`Owner:` says which task the entry goes into.** `Coder` becomes
+   `For: Coder`; `Architect` becomes `For: Architect`. `Thinking:` says
+   only which model tier the task needs: `1`–`3` Light, `4`–`7` Standard,
+   `8`–`10` Advanced. Never infer one from the other.
 
-   - **Schedule every `1`–`7` entry first**, in one task marked
-     `For: Coder`. While any of them is left, that is the task you write.
-   - **When none is left, schedule the `8`–`10` entries** in a task
-     marked `For: Architect`. These are the ones whose answer is not
-     known yet, or whose fix lands in files only the Architect may write.
-     You still write the task — you do not leave them in the queue for
-     someone to route by hand — but you never mix them into a Coder task.
-
-   Never split one task file between the two: a task is `For: Coder` or
-   `For: Architect`, whole.
+   Select the next entry by importance, required dependency order and
+   then effort. Thinking level is not priority. Once selected, batch only
+   other entries with the same `Owner:` and the same model-tier band that
+   do not violate that ordering. A problem-repair task never mixes owners
+   or tier bands.
 
    Every entry carries `Importance:` and `Effort:` from its filer and
-   `Thinking:` and `Decision:` from the triage, one field per line under
-   `Created by:`. Use them to order the subtasks, most important first
-   and cheap ones early. Never write or edit any of the four. The one
+   `Thinking:`, `Owner:` and `Decision:` from the triage, one field per
+   line under `Created by:`. Use importance, dependencies and effort to
+   order the subtasks. Never write or edit any of the five. The one
    thing you carry across is `Effort:`, which becomes the subtask's own —
    see "Writing task.md".
 
@@ -98,8 +95,8 @@ If entries remain without triage or awaiting an approved backlog move,
 report them and stop before advancing the roadmap.
 
 A human request naming specific work overrides the queue order. What it
-does not override is the `For:` rule: an `8`–`10` entry goes into an
-Architect task, never into a Coder one, however it was asked for.
+does not override is ownership or the model floor: `Owner:` still becomes
+`For:`, and the task still records the entry's model-tier band.
 
 ## Consuming a problem
 
@@ -132,9 +129,13 @@ Format:
 - Title: milestone number plus a short description, or `Problems` plus a
   short description when the task is a batch of `P-` entries.
 - `For:` line, directly under the title: `For: Coder` or
-  `For: Architect`, decided by the `Thinking:` of the entries it
-  schedules — `1`–`7` Coder, `8`–`10` Architect. A milestone task is
-  always `For: Coder`. One role per file, never both.
+  `For: Architect`, copied from the entries' `Owner:`. A milestone task
+  is always `For: Coder`; Architect-owned follow-up is filed and routed
+  separately. One role per file, never both.
+- `Model tier:` line directly after `For:`: `Light` for `Thinking: 1`–`3`,
+  `Standard` for `4`–`7`, or `Advanced` for `8`–`10`. Every subtask in
+  a problem-repair task is in that same band. A roadmap task may contain
+  lower-rated subtasks and takes the tier of its highest-rated one.
 - Order Plan: a numbered list, 1 to N, giving subtask order. Every line
   carries a status marker, an effort in story points and the thinking
   level, in that order, and every marker you write starts at 🆕 New:
@@ -146,10 +147,11 @@ Format:
 
   The thinking level is copied from the problem entry the subtask
   consumes, or estimated by you on `docs/agent-guide.md`'s "The four criteria"
-  for a subtask decomposed out of the roadmap. It is there to be checked: every level on
-  a `For: Coder` task must be `1`–`7` and every level on a `For:
-  Architect` task `8`–`10`, so a line that disagrees with the `For:` line
-  is a routing mistake visible at a glance.
+  for a subtask decomposed out of the roadmap. It is there to be checked:
+  no level may require a tier above the task's `Model tier:`. In a
+  problem-repair task every level is in the stated band; in a roadmap
+  task lower bands are allowed. `For:` is checked independently against
+  `Owner:`.
 - One section per subtask: what to do, how to test it, and a `Status:`
   line starting at 🆕 New. No effort in the body — it is on the Order
   Plan line and nowhere else, because the same number written twice is a
@@ -161,8 +163,8 @@ that entry's `Effort:` verbatim — the entry is about to be deleted, so
 the Order Plan is the only place its estimate survives, and re-deriving
 it would quietly overrule a number the human approved. A subtask that
 comes from `docs/ROADMAP.md` gets your own estimate on
-`docs/agent-guide.md`'s Fibonacci effort scale, judged as work for the Coder
-including tests and `.MD`s: a sub-milestone decomposed into five subtasks
+`docs/agent-guide.md`'s Fibonacci effort scale, judged as work for the
+assigned owner including tests and documentation: a sub-milestone decomposed into five subtasks
 is five separate estimates, not one divided up. If a copied estimate
 looks plainly wrong, keep it and say so in your reply; changing it is the
 Architect's in a triage, not yours here. If one problem entry becomes two

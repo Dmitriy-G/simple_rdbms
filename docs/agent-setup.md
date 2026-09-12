@@ -62,7 +62,9 @@ definitions in project `.codex/config.toml`, so the versioned files under
 `.codex/profile-templates/` must be copied to `$CODEX_HOME` on each machine.
 
 Profile names describe their model and reasoning configuration, not a project
-role. The available templates are:
+role. That separation is deliberate: `.claude/task.md` assigns a role with
+`For:` and independently states the minimum `Model tier:`. The available
+templates are:
 
 | CLI profile | Model | Reasoning |
 | --- | --- | --- |
@@ -71,13 +73,29 @@ role. The available templates are:
 | `sol-medium` | `gpt-5.6-sol` | `medium` |
 | `sol-xhigh` | `gpt-5.6-sol` | `xhigh` |
 
+The shared tier mapping is:
+
+| Model tier | Thinking | Codex minimum | Claude minimum |
+| --- | --- | --- | --- |
+| Light | 1–3 | Luna with medium reasoning | Sonnet |
+| Standard | 4–7 | Sol with medium reasoning | Sonnet |
+| Advanced | 8–10 | Astra with xhigh reasoning | Opus |
+
+These are minimums. A stronger model may work a lower-tier task. Light and
+Standard currently share the same Claude minimum because this repository
+does not version a lighter Claude adapter; keeping the tiers distinct still
+preserves the estimate and permits a cheaper mapping later without changing
+the queue format. Model names belong only in this setup document. Queue and
+task policy use the stable tier names.
+
 For example, `.codex/profile-templates/sol-medium.config.toml` installs as
 `$CODEX_HOME/sol-medium.config.toml`; then `codex --profile sol-medium` starts
-the main session on Sol with medium reasoning. The profile selects
-configuration, not a role prompt: the request is still routed through
-`AGENTS.md`. Spawn a custom agent only when delegation is wanted. New sessions
-are needed to load profile or agent changes; project configuration also depends
-on the host trusting the checkout.
+the main session at Standard tier. The profile selects configuration, not a
+role prompt: the request is still routed through `AGENTS.md`. An Advanced
+Coder task therefore runs in an Astra session while retaining `Role: Coder`;
+it does not become Architect work. Spawn a custom agent only when delegation
+is wanted. New sessions are needed to load profile or agent changes; project
+configuration also depends on the host trusting the checkout.
 
 | Codex agent | Pinned model | Reasoning |
 | --- | --- | --- |
@@ -86,6 +104,14 @@ on the host trusting the checkout.
 | `helper` | `gpt-5.6-luna` | `medium` |
 | `milestone-reviewer` | `gpt-6-astra` | `xhigh` |
 | `task-writer` | `gpt-5.6-sol` | `xhigh` |
+
+The role agents are convenience defaults, not the routing rule. The `coder`
+adapter supplies Standard tier and the `architect` adapter supplies Advanced.
+When a task requires another combination, start the main session with the
+required model/profile and let `AGENTS.md` select the role. A task worker checks
+both `For:` and `Model tier:` before changing a status marker; if its session is
+below the stated tier or cannot identify its tier, it stops and reports the
+required tier. It never changes roles or delegates merely to satisfy that gate.
 
 Claude permissions and Codex sandbox/approval settings are independent.
 The Codex project file does not lower approval requirements, grant network
@@ -105,14 +131,15 @@ that `bash` on PATH is Git Bash. The migration was checked with Git Bash.
   paths. Small entry points now route to shared procedures and policy.
 - Four Codex adapters duplicated Claude procedures and omitted Task writer.
   Both hosts now have five adapters referring to the same role files.
-- Architect's description prohibited all code, while its procedure allowed
-  code within `For: Architect` tasks. The description now states the exception.
+- Architect's description permits code only for an explicit inseparable
+  decision-and-implementation task. High thinking alone never grants it.
 - Descriptions containing `For: Coder` or `For: Architect` used unquoted
   YAML colons. Adapter descriptions are now quoted to remain scalar strings.
 - Helper referred to five other roles even though there are four, and the
   forced Helper default prevented request-based role switching.
 - Architect's self-scheduling exception bypassed triage. Scheduling now
-  requires `Thinking:` and `Decision: Will do` regardless of authorship.
+  requires `Thinking:`, `Owner:` and `Decision: Will do` regardless of
+  authorship.
 - Task resumption could skip an in-progress subtask or an earlier review.
   Resume in-progress work first and wait at the review gate.
 - The Task writer could advance the roadmap with untriaged entries still

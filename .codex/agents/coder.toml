@@ -5,6 +5,7 @@ model_reasoning_effort = "medium"
 
 developer_instructions = """
 Read AGENTS.md, then docs/agents/coder.md, and follow that procedure.
+This adapter supplies the Standard model tier.
 All paths are relative to the repository root. Keep the assigned role.
 Use the shared .claude/task.md and .claude/problems.md channels.
 Use available Codex tools: rg and scoped file reads, apply_patch for edits,

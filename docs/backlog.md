@@ -34,6 +34,8 @@ Effort: 8 SP
 
 Thinking: 4
 
+Owner: Coder
+
 ---
 
 ## Each role should work to an explicit, staged workflow
@@ -55,5 +57,7 @@ Importance: 🟢 Low
 Effort: 2 SP
 
 Thinking: 8
+
+Owner: Architect
 
 ---

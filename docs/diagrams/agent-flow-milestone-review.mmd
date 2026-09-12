@@ -28,7 +28,7 @@ flowchart TD
     FWD["Write a forward dependency into the<br/>later milestone's docs/ROADMAP.md entry"]
 
     REVLINE["Append one Reviewed: line to the milestone<br/>entry — date, which pass, gating and<br/>non-gating P- numbers. The only fact that<br/>survives to the next pass"]:::channel
-    LOOP(["Task writer schedules the fixes,<br/>Coder works them as subtasks<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
+    LOOP(["Task writer routes fixes by Owner:<br/>the assigned role works each subtask<br/>— see agent-flow-problem-lifecycle.mmd"]):::stop
 
     VERDICT{"Anything gating open?"}
     DONE["Set the parent milestone to ✅ Done in<br/>docs/ROADMAP.md and delete its Reviewed:<br/>lines in the same edit. Only this role sets a<br/>parent: the functionality was reviewed whole<br/>and works and nothing gating stands — not<br/>that the queue is empty"]

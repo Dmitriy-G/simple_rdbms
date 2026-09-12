@@ -1,6 +1,6 @@
 ---
 name: task-writer
-description: "Turns open problems or a roadmap milestone into task.md, marked For: Coder or For: Architect."
+description: "Turns open problems or a roadmap milestone into task.md, routing owner and model tier independently."
 model: opus
 effort: xhigh
 tools: Read, Grep, Glob, Bash, Edit, Write
